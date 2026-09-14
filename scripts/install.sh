@@ -40,6 +40,15 @@ warn()  { printf '%s\n' "${C_YELLOW}[!]${C_RESET} $*"; }
 die()   { printf '%s\n' "${C_RED}[error]${C_RESET} $*" >&2; exit 1; }
 trap 'die "installation failed at line $LINENO"' ERR
 
+# The version the application reports. Read from package.json rather than
+# hardcoded, so the banner, the resolved configuration and the closing summary
+# can never disagree with what the server logs at start-up.
+read_project_version() {
+  local dir="$1" found
+  found="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$dir/package.json" 2>/dev/null | head -n 1)"
+  printf '%s' "${found:-unknown}"
+}
+
 # --------------------------------------------------------------------------- #
 # Defaults / arguments                                                        #
 # --------------------------------------------------------------------------- #
@@ -190,6 +199,7 @@ done
 # Preconditions                                                               #
 # --------------------------------------------------------------------------- #
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_VERSION="$(read_project_version "$SRC_DIR")"
 [ -f "$SRC_DIR/package.json" ] || die "package.json not found in $SRC_DIR - run this script from the project"
 [ -f "$SRC_DIR/server/package.json" ] || die "server/ not found in $SRC_DIR"
 
@@ -268,6 +278,7 @@ esac
 # show_resolved_config - what "install.sh --check-config" prints
 show_resolved_config() {
   printf '\n%s\n\n' "${C_BOLD}resolved configuration${C_RESET}"
+  printf '  %-16s %s\n' 'version' "$PROJECT_VERSION"
   printf '  %-16s %s\n' 'source .env' "${SOURCE_ENV}$([ -f "$SOURCE_ENV" ] && echo ' (found)' || echo ' (not found - defaults are used)')"
   printf '  %-16s %s\n' 'runtime .env' "$RUNTIME_ENV"
   printf '  %-16s %s\n' 'install dir' "$INSTALL_DIR"
@@ -336,7 +347,7 @@ if ! command -v systemctl >/dev/null 2>&1; then
   die "systemd is required (systemctl not found)"
 fi
 
-printf '\n%s\n' "${C_BOLD}notes-manager-web - installer${C_RESET}"
+printf '\n%s\n' "${C_BOLD}notes-manager-web $PROJECT_VERSION - installer${C_RESET}"
 printf '%s\n\n' "${C_DIM}source: $SRC_DIR${C_RESET}"
 
 # --------------------------------------------------------------------------- #
@@ -840,6 +851,7 @@ SHOWN_URL="${PUBLIC_URL:-http://$IP_ADDR:$PORT$BASE_PATH}"
 printf '\n%s\n' "${C_GREEN}${C_BOLD}安装完成 / Installation complete${C_RESET}"
 cat <<SUMMARY_EOF
 
+  版本 (version)      : $PROJECT_VERSION
   访问地址 (URL)      : ${C_BOLD}$SHOWN_URL${C_RESET}
   本地管理员          : $ADMIN_USERNAME
   管理员密码          : $ADMIN_PASSWORD

@@ -637,5 +637,46 @@ console.log('\nappearance dialog (jsdom)');
   void entry;
 }
 
+/* --- the running version is visible in the page ---------------------------- */
+const { NotesPanel } = await import('./src/components/NoteList');
+const { SettingsDialog } = await import('./src/components/SettingsDialog');
+
+console.log('\nversion display (jsdom)');
+{
+  const renderOnce = async (node: React.ReactElement) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(node);
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const hold = appStore.getState();
+
+  // Nothing reported yet: no version is invented.
+  appStore.setState({ status: null });
+  check('no version is shown before the server reports one', (await renderOnce(React.createElement(NotesPanel))).includes('v1.0.0'), false);
+
+  appStore.setState({
+    status: { version: '1.0.0', basePath: '', publicUrl: '', uptimeSeconds: 5 } as never,
+  });
+  check('the panel header shows the version', (await renderOnce(React.createElement(NotesPanel))).includes('v1.0.0'), true);
+
+  appStore.setState({ settingsOpen: true });
+  const settings = await renderOnce(React.createElement(SettingsDialog));
+  check('the settings dialog shows it too', settings.includes('v1.0.0'), true);
+  check('labelled as 版本', settings.includes('版本'), true);
+
+  appStore.setState(hold);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

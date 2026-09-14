@@ -35,6 +35,7 @@ const SORTS: { value: SortKey; label: string }[] = [
  * horizontal space on narrow screens.
  */
 export function NotesPanel() {
+  const version = useAppStore((s) => s.status?.version);
   const notes = useAppStore((s) => s.notes);
   const loadingNotes = useAppStore((s) => s.loadingNotes);
   const notesError = useAppStore((s) => s.notesError);
@@ -120,7 +121,14 @@ export function NotesPanel() {
           <FileText className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold tracking-tight">笔记管理面板</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[13px] font-semibold tracking-tight">笔记管理面板</span>
+            {version ? (
+              <span className="shrink-0 rounded-md bg-[var(--accent-soft)] px-1 py-0.5 font-mono text-[9px] leading-none text-[var(--accent)]">
+                {'v' + version}
+              </span>
+            ) : null}
+          </div>
           <div className="truncate text-[10px] text-[var(--faint)]">
             {capabilities?.driver === 'openlist' ? capabilities.root : '本地磁盘'}
             {capabilities && !capabilities.writable ? ' · 只读' : ''}

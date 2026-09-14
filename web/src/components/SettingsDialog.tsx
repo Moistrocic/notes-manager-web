@@ -50,6 +50,8 @@ export function SettingsDialog() {
 
   const fonts = useAppStore((s) => s.fonts);
   const fontSelection = useAppStore((s) => s.fontSelection);
+  // Reported by /api/system/status, so it is the running server's own version.
+  const version = useAppStore((s) => s.status?.version);
   // bundled fonts first, then uploads; the dropdowns only offer what fits the role
   const fontList: AvailableFont[] = availableFonts(fonts);
   const fontOptions = (role: 'sans' | 'mono') => fontList.filter((font) => font.kind === role || font.kind === 'both');
@@ -362,6 +364,7 @@ export function SettingsDialog() {
 
           <div className="mt-3 space-y-1.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3 font-mono text-[11px] text-[var(--muted)]">
             {[
+              ['版本', version ? 'v' + version : undefined],
               ['项目根目录', payload?.paths.projectRoot],
               ['数据目录', payload?.paths.dataDir],
               ['本地笔记目录', payload?.paths.localNotesRoot],

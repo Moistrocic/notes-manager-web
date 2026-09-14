@@ -53,7 +53,8 @@ extract_function() {
 }
 
 for fn in verify_tree copy_application read_env_value set_env_value \
-  fingerprint_lock write_deps_stamp dependencies_are_current find_missing_dependencies; do
+  fingerprint_lock write_deps_stamp dependencies_are_current find_missing_dependencies \
+  read_project_version; do
   body="$(extract_function "$fn")"
   [ -n "$body" ] || { echo "could not extract $fn() from install.sh" >&2; exit 1; }
   eval "$body"
@@ -287,7 +288,7 @@ echo "resolved configuration (install.sh --check-config)"
 PROJ="$WORK/ckproj"
 mkdir -p "$PROJ/scripts" "$PROJ/server" "$PROJ/web"
 cp "$INSTALLER" "$PROJ/scripts/install.sh"
-echo '{}' > "$PROJ/package.json"
+echo '{ "name": "notes-manager-web", "version": "1.0.0" }' > "$PROJ/package.json"
 echo '{}' > "$PROJ/server/package.json"
 for rel in $CRITICAL_SOURCES; do
   mkdir -p "$PROJ/$(dirname "$rel")"
@@ -309,6 +310,7 @@ cfg() {
 # -- defaults, no .env ------------------------------------------------------- #
 run_installer --check-config
 check "runs without root and without a .env"  "$LAST_STATUS" "0"
+check "the version is reported"                "$(cfg version)" "1.0.0"
 check "port defaults to 8080"                 "$(cfg listen)" "0.0.0.0:8080"
 check "storage driver defaults to auto"       "$(cfg 'storage driver')" "auto"
 check "openlist root default"                 "$(cfg 'openlist root')" "/notes"
@@ -434,6 +436,24 @@ mkdir -p "$DEPS/web/node_modules/@codemirror/language-data"
 echo '{"name":"language-data"}' > "$DEPS/web/node_modules/@codemirror/language-data/package.json"
 check "a nested package counts as installed"  "$(missing)" ""
 check "a complete tree passes the gate again" "$(dependencies_are_current "$DEPS" && echo current)" ""
+
+echo ""
+echo "version reporting"
+
+VPROJ="$WORK/version"
+mkdir -p "$VPROJ"
+printf '{ "name": "x",\n  "version": "2.3.4",\n  "engines": { "node": ">=20" }\n}\n' > "$VPROJ/package.json"
+check "reads the version from package.json"   "$(read_project_version "$VPROJ")" "2.3.4"
+
+echo '{ "name": "x" }' > "$VPROJ/package.json"
+check "a package.json without one is unknown" "$(read_project_version "$VPROJ")" "unknown"
+
+rm -f "$VPROJ/package.json"
+check "a missing package.json is unknown"     "$(read_project_version "$VPROJ")" "unknown"
+
+# The banner and the closing summary have to show it, not just the function.
+check "the installer banner shows the version"  "$(grep -c 'notes-manager-web \$PROJECT_VERSION - installer' "$INSTALLER")" "1"
+check "the closing summary shows the version"   "$(grep -c '版本 (version)' "$INSTALLER")" "1"
 
 # =========================================================================== #
 if [ "$FAILED" -eq 0 ]; then
