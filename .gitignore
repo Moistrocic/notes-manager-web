@@ -10,9 +10,9 @@ build/
 *.tsbuildinfo
 
 # Runtime data (notes, sessions, settings)
-data/
-server/data/
-tmp/
+/data/
+/server/data/
+/tmp/
 
 # Environment
 .env
@@ -20,8 +20,10 @@ tmp/
 .env.*.local
 .npmrc
 
-# Reference clone of OpenList (read-only, never modified, never committed)
-openlist/
+# Reference clone of OpenList (read-only, never modified, never committed).
+# NOTE: anchored with a leading slash - an unanchored "openlist/" would also
+# match server/src/openlist/ and silently drop application source from the repo.
+/openlist/
 
 # Logs
 *.log
