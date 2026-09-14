@@ -10,20 +10,81 @@
 
 ## 目录
 
-- [功能特性](#功能特性)
-- [与 OpenList 的联动](#与-openlist-的联动)
-- [快速开始（本地开发）](#快速开始本地开发)
-- [一键安装 / 卸载（Linux 服务器）](#一键安装--卸载linux-服务器)
+- [AI 开发提示](#ai-开发提示)
+- [项目描述](#项目描述)
+- [功能介绍](#功能介绍)
+- [安装 / 卸载](#安装--卸载)
 - [配置项参考](#配置项参考)
 - [HTTP API](#http-api)
 - [目录结构](#目录结构)
 - [常见问题](#常见问题)
+- [许可声明](#许可声明)
 
 ---
 
-## 功能特性
+## AI 开发提示
 
-**界面**
+> **这个项目由 AI 结对开发。** 从界面组件到安装脚本，绝大部分代码是在与 AI 助手的对话中写成的，
+> 人类负责提需求、验收与决策。所以仓库里的注释、测试和提交信息都写得比较"自解释"——
+> 目的是让下一个接手的人（或 AI）不必先把全部代码读一遍。
+
+**给 AI 助手 / 贡献者的约定**
+
+| 约定 | 说明 |
+| --- | --- |
+| 改完必须跑 | `npm run check:repo && npm run typecheck && npm run check:web && npm run test:server`；动过 `scripts/*.sh` 还要 `npm run test:installer` 和 `shellcheck --severity=warning` |
+| 提交信息 | [Conventional Commits](https://www.conventionalcommits.org/)：`feat:` / `fix:` / `docs:` / `chore:` … |
+| 运行时状态一律不入库 | `.env`、`data/`、`sessions.json`、`settings.json` 都不提交。`npm run check:repo` 会按路径**和文件内容**拦截（含 `sessionSecret`、`adminPasswordHash`、`openlistToken` 的文件直接失败） |
+| `openlist/` 是只读参考 | OpenList 官方仓库的 clone，只用来阅读其 API 实现，**不修改、不提交**（已在 `.gitignore` 中锚定） |
+| 用户可见的行为要有断言 | 新增或修改交互时，请补 `web/dom-check.tsx`（jsdom）或 `scripts/test-server.mjs` 的断言，不要只靠手点验证 |
+| 共享取值只留一处 | 代码配色 → `web/src/lib/code-theme.ts`；内置字体 → `web/src/lib/builtin-fonts.ts`；设计令牌 → `web/src/styles.css` 顶部。不要在多处各写一份 |
+| 安装脚本的两个坑 | ① 必须过 ShellCheck；② `scripts/test-install.sh` 用 `awk` 从 `install.sh` 里按函数名抽取真实函数体执行，**函数里第 0 列的 `}` 会被当成函数结束**，内嵌的 shell/JS 片段必须缩进 |
+| 别动 `LICENSE` | 本项目是 MIT，见[许可声明](#许可声明) |
+
+> 判断"修好了没有"的标准是**证据**，不是复述代码：能复现的先复现，能截图/断言的先做出来。
+> 仓库里几个真实 bug（模糊壁纸边缘淡出、两栏代码配色漂移、`--skip-deps` 保留旧依赖）都是
+> 先用无头浏览器或失败断言抓到，再动手改的。
+
+---
+
+## 项目描述
+
+这是一个**自托管的 Markdown 笔记管理面板**，形态是一个 Node.js 单进程 Web 应用：
+同一个进程既提供 REST API，也把构建好的前端当作静态资源托管，因此**没有数据库、
+没有外部依赖**，一个 `systemd` 服务就能跑起来。
+
+它要解决的问题是：已经有 OpenList 在管理网盘/对象存储，笔记想直接躺在那个目录里，
+而不是被锁进某个笔记软件的私有数据库。所以**笔记就是普通的 `.md` 文件**，
+带一段 YAML front matter 记录标题、标签、置顶等元信息；在 OpenList 的文件管理器里
+可以直接看到、编辑、同步它们，反过来手动丢进去的 `.md` 文件也会被面板自动识别。
+
+| 层 | 技术 |
+| --- | --- |
+| 前端 | React 19 · Vite 7 · Tailwind CSS v4 · Framer Motion 12 · CodeMirror 6 · Zustand |
+| 后端 | Node.js ≥ 20.19 · Express 5 · TypeScript（ESM） |
+| 存储 | OpenList REST API ／ 本地磁盘（同一套抽象，可自动降级） |
+| 持久化 | JSON 文件（`settings.json` / `sessions.json` / `state.json`），零数据库 |
+| 部署 | Linux + systemd，一键安装/卸载脚本 |
+
+### OpenList 联动简介
+
+[OpenList](https://github.com/OpenListTeam/OpenList) 是一个 Go 编写的多存储文件列表程序。
+本项目**不包含也不修改它的任何代码**，只通过它的 HTTP REST API 交互：
+
+- **登录**：登录页可用 OpenList 账户登录，后端调用 `POST /api/auth/login` 取令牌，
+  再 `GET /api/me` 读账户信息；该会话之后所有的文件操作都用**你自己的那个令牌**。
+- **存储**：笔记读写走 `/api/fs/*`（`list` / `get` / `put` / `mkdir` / `remove` / `rename` / `move`），
+  读取失败时自动回退到 `/p/<path>` 代理端点。
+- **降级**：OpenList 连不上时自动改用本地磁盘，界面会显示"本地存储（降级）"，
+  所以**全新服务器上不装 OpenList 也能先跑起来**，之后再填地址即可无缝切换。
+
+细节见[功能介绍 → 与 OpenList 的具体联动](#与-openlist-的具体联动)。
+
+---
+
+## 功能介绍
+
+### 界面
 
 - 两栏工作台：**左侧导航与笔记列表合并为一栏**（可整体隐藏），右侧为编辑器 + 可折叠大纲面板
 - 列表三种视图：卡片列表 / 网格 / **紧凑（仅标题）**；嵌套文件夹以树形展示，支持创建 `a/b/c` 多级目录
@@ -36,16 +97,14 @@
 - **字体**：内置 **Cascadia Code**（随安装包一起部署，代码字体默认就是它，开箱即用，无需联网下载）；
   管理员还可以上传 woff2 / woff / ttf / otf，分别指定界面字体与代码字体，
   上传的文件存放在服务器数据目录，**重启后依然生效**
-- **壁纸**：支持**本地壁纸库**（直接读取你电脑上已有的壁纸文件夹，比如 Wallpaper Engine 的
-  `steamapps/workshop/content/431960`，缩略图网格挑选）、图片链接、单个本地图片或本地视频（静音循环），
-  可调模糊 / 暗度 / 缩放。纯前端实现——文件存在浏览器 IndexedDB，不上传服务器，人人可用
-  （列表布局动画、卡片入场错峰、模态弹簧过渡、Toast 堆叠）
+- **壁纸**：图片链接 / 单个本地图片或视频 / **本地壁纸库**三种来源，可调模糊 / 暗度 / 缩放。
+  壁纸库会自动定位 Wallpaper Engine 的壁纸总文件夹并给出预览图网格，纯前端实现，
+  文件存在浏览器 IndexedDB，不上传服务器，人人可用
 - CodeMirror 6 编辑器：Markdown 语法高亮、行号、括号匹配、搜索、自动换行
 - 代码块**按语言高亮**：```ts```、```python``` 等 140+ 种语言，语法包按需加载，
   只有笔记里真正用到的才下载
 - 编辑分栏与预览分栏**共用同一套代码配色**（VS Code Dark+ / Light+）：字体、字号、行高与
-  每一个 token 的颜色都从 `web/src/lib/code-theme.ts` 一处派生，两栏不会各自漂移；
-  想换配色只改那一个文件
+  每一个 token 的颜色都从 `web/src/lib/code-theme.ts` 一处派生，两栏不会各自漂移
 - 编辑 / 分栏 / 预览三种模式，Markdown 实时预览（GFM、表格、任务列表、代码高亮）
 - 命令面板（`Ctrl/⌘ + K`）、全文检索（`/` 聚焦）、快捷键、Toast 撤销
 - 自动保存：**先比对再保存**——内容没有实际变化时不会写入（打开笔记、编辑器回显、
@@ -53,28 +112,27 @@
 - 置顶 / 收藏 / 颜色标记 / 标签 / 嵌套文件夹
 - 回收站：删除 → 撤销 → 恢复 → 彻底删除
 
-**数据**
+### 数据
 
 - 笔记就是普通 Markdown 文件，带 YAML front matter，可直接在 OpenList 里查看、编辑、同步
 - 双向兼容：手动放进目录的 `.md` 文件会被自动识别（无 front matter 也能解析）
 - 存储层抽象：OpenList 驱动 / 本地磁盘驱动，一次请求内按用户解析（每个用户用自己的 OpenList 令牌）
 - 内存缓存按「大小 + 修改时间」失效，列表刷新只做一次目录请求
 
-**安全**
+### 安全
 
 - 会话保存在服务端，Cookie `HttpOnly` + `SameSite=Lax`，支持反向代理下的 `Secure`
 - 本地管理员密码使用 scrypt 加盐哈希；无公开注册接口
 - 状态变更请求校验 `Origin`，路径规范化防止目录穿越
 - 存储层支持「每个用户独立子目录」
+- 仓库层面：运行时状态与凭据永不入库，`npm run check:repo` 按路径和内容双重拦截
 
----
-
-## 与 OpenList 的联动
+### 与 OpenList 的具体联动
 
 本项目基于 [OpenList](https://github.com/OpenListTeam/OpenList) 的 HTTP API 实现，
 兼容 OpenList v4 及其上游 AList 的接口（`/api/auth/login`、`/api/fs/*`、`/p/*` 等）。
 
-### 1. 使用 OpenList 账户登录
+**1. 使用 OpenList 账户登录**
 
 - 登录页可选择「OpenList 账户 / 本地管理员 / 自动」
 - 后端调用 `POST /api/auth/login` 拿到令牌，再 `GET /api/me` 读取账户信息
@@ -83,7 +141,17 @@
   因此 OpenList 的权限、`base_path` 限制完全生效
 - 未实现注册功能：账号只能在 OpenList 中创建
 
-### 2. 笔记存放到 OpenList 目录
+**2. 笔记存放到 OpenList 目录**
+
+- 默认根目录 `OPENLIST_ROOT=/notes`，可通过 `--openlist-root` 或界面「设置」修改
+- 写入走 `PUT /api/fs/put`（`File-Path` 头 + 原始字节），读取走 `POST /api/fs/get` → `raw_url`，
+  失败时自动回退到 `/p/<path>` 代理端点
+- 目录、重命名、删除分别使用 `/api/fs/mkdir`、`/api/fs/rename`、`/api/fs/remove`
+- 回收站是 OpenList 目录下的 `_trash` 文件夹，删除即移动，恢复即写回原目录
+- 本地管理员（没有 OpenList 账号）访问 OpenList 存储时使用 `OPENLIST_TOKEN`
+  （OpenList →「设置」→「API」中创建）
+- 权限按 OpenList 返回的位掩码判断（bit3 写入 / bit4 重命名 / bit5 移动 / bit7 删除），
+  没有写权限时界面进入只读模式并说明原因
 
 **关于 `OPENLIST_ROOT` 与账号「基础路径」**
 
@@ -109,22 +177,13 @@
 
 要解决：把 `OPENLIST_ROOT` 改成该账号基础路径**之内**的目录，或改用基础路径覆盖该目录的账号。
 
-
-- 默认根目录 `OPENLIST_ROOT=/notes`，可通过 `--openlist-root` 或界面「设置」修改
-- 写入走 `PUT /api/fs/put`（`File-Path` 头 + 原始字节），读取走 `POST /api/fs/get` → `raw_url`，
-  失败时自动回退到 `/p/<path>` 代理端点
-- 目录、重命名、删除分别使用 `/api/fs/mkdir`、`/api/fs/rename`、`/api/fs/remove`
-- 回收站是 OpenList 目录下的 `_trash` 文件夹，删除即移动，恢复即写回原目录
-- 本地管理员（没有 OpenList 账号）访问 OpenList 存储时使用 `OPENLIST_TOKEN`
-  （OpenList →「设置」→「API」中创建）
-
-### 3. 没有安装 OpenList 也能运行
+**3. 没有安装 OpenList 也能运行**
 
 存储驱动有三种模式（界面「设置」或 `STORAGE_DRIVER`）：
 
 | 模式 | 行为 |
 | --- | --- |
-| `auto`（默认） | 启动和每次请求都探测 OpenList（`/api/public/init_status`，结果缓存 8 秒）。可达则用 OpenList，不可达自动回落本地磁盘，界面显示「本地存储（降级）」 |
+| `auto`（默认） | 启动和每次请求都探测 OpenList（先请求 `/api/public/settings`，它在所有已发布版本中都存在；成功后再用 `/api/public/init_status` 判断是否已初始化。结果缓存 8 秒）。可达则用 OpenList，不可达自动回落本地磁盘，界面显示「本地存储（降级）」 |
 | `openlist` | 强制使用 OpenList，不可达时接口返回 `503` 与明确错误信息 |
 | `local` | 始终使用本地磁盘（`DATA_DIR/notes`） |
 
@@ -132,12 +191,14 @@
 
 ---
 
-## 快速开始（本地开发）
+## 安装 / 卸载
+
+### 本地开发
 
 需要 **Node.js ≥ 20.19**（推荐 22 LTS）。
 
 ```bash
-git clone <this-repo> notes-manager-web
+git clone https://github.com/Moistrocic/notes-manager-web.git
 cd notes-manager-web
 npm install
 
@@ -151,16 +212,15 @@ npm run dev:web
 首次启动若未设置 `ADMIN_PASSWORD`，会自动生成随机密码并打印在日志里，
 同时写入 `data/initial-admin.txt`。
 
-### 生产模式（单进程同时提供 API 和前端）
+**生产模式**（单进程同时提供 API 和前端）：
 
 ```bash
 npm run build     # 构建 web/dist 与 server/dist
 npm start         # http://127.0.0.1:8080
 ```
 
-### 没有 OpenList 也想体验 OpenList 模式？
-
-仓库自带一个 OpenList 兼容的模拟服务（仅实现本项目用到的接口），用于开发与自动化测试：
+**没有 OpenList 也想体验 OpenList 模式？** 仓库自带一个 OpenList 兼容的模拟服务
+（仅实现本项目用到的接口），用于开发与自动化测试：
 
 ```bash
 node scripts/mock-openlist.mjs --port 5244 --root ./tmp/mock-openlist
@@ -169,25 +229,25 @@ node scripts/mock-openlist.mjs --port 5244 --root ./tmp/mock-openlist
 
 随后在面板「设置」里把 OpenList 地址填成 `http://127.0.0.1:5244` 即可。
 
-### 测试
+**测试**：
 
 ```bash
-# 1) 接口冒烟测试：登录 → 增删改查 → 标签 / 文件夹 / 回收站 → 退出（22 项断言）
+# 1) 接口冒烟测试：登录 → 增删改查 → 标签 / 文件夹 / 回收站 → 退出
 node scripts/smoke-test.mjs http://127.0.0.1:8080 admin <password>          # 本地磁盘模式
 SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
   node scripts/smoke-test.mjs http://127.0.0.1:8080                        # OpenList 模式
 
-# 2) 前端检查，三组：
+# 2) 前端检查（四组，共 76 项断言）：
 #    render-check  渲染整个组件树（启动页/登录页/工作台/弹窗/只读/专注模式）
 #    store-check   驱动 store 验证「什么时候才会触发保存」
 #    outline-check 大纲/锚点 slug 与渲染器逐项对齐（跳转不会错位）
-#    dom-check     jsdom 中真实点击大纲与锚点链接，断言地址栏/编辑器/预览三者一致
+#    dom-check     jsdom 中真实点击大纲与锚点链接；壁纸库探测、两栏代码配色一致性
 npm run check:web
 
 # 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行）
 npm run test:installer
 
-# 4) 服务端单元测试（基础路径换算、字体仓库、内置字体 id 等）
+# 4) 服务端单元测试（基础路径换算、字体仓库、内置字体 id 等，49 项断言）
 npm run test:server
 
 # 5) 仓库完整性检查：磁盘上的源文件是否都在 git 里；
@@ -204,14 +264,10 @@ npm run icons
 
 以上各项都会在 GitHub Actions 中自动执行（`.github/workflows/ci.yml`），另外还会跑 `shellcheck`。
 
----
-
-## 一键安装 / 卸载（Linux 服务器）
+### 一键安装（Linux 服务器）
 
 要求：systemd 的 Linux 发行版（Debian/Ubuntu、RHEL/CentOS/Rocky、Fedora、Arch、Alpine 等），
 root 权限，能访问 npm 源（首次安装 Node.js 时会联网）。
-
-### 安装（推荐流程）
 
 配置写在**项目目录的 `.env`** 里，安装脚本会读取它：
 
@@ -264,12 +320,13 @@ sudo ./scripts/install.sh --port 8080 --openlist-url http://127.0.0.1:5244 --ope
 4. 通过 `find -prune` + `tar` 精确拷贝源码（不使用 rsync 的 glob 排除规则，避免误伤
    `server/src/integrations/openlist/` 这类同名嵌套目录；保留已有的 `.env`、`node_modules`），
    随后再次校验关键文件确实落地
-5. `npm ci` + `npm run build`
-6. 把最终配置写入 `/opt/notes-manager/.env`（项目 `.env` 的副本 + 解析结果，权限 600；
+5. 校验依赖：比对 `package-lock.json` 的指纹，逐个检查声明的依赖是否真的装上
+6. `npm ci` + `npm run build`
+7. 把最终配置写入 `/opt/notes-manager/.env`（项目 `.env` 的副本 + 解析结果，权限 600；
    未配置管理员密码时生成随机密码并写入）
-7. 写入并启用 systemd 服务 `notes-manager.service`，通过 `Environment=ENV_FILE=...` 告诉应用
+8. 写入并启用 systemd 服务 `notes-manager.service`，通过 `Environment=ENV_FILE=...` 告诉应用
    读哪个配置文件（**不使用 `EnvironmentFile=`**，避免第二份配置源静默覆盖 `.env`）
-8. 启动服务并做健康检查，最后打印访问地址、账号密码、
+9. 启动服务并做健康检查，最后打印访问地址、账号密码、
    **运行时配置文件路径**与常用命令
 
 常用参数（`sudo ./scripts/install.sh --help` 查看全部）：
@@ -297,22 +354,21 @@ sudo ./scripts/uninstall.sh           # 停服务、禁用开机自启、删除�
 sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次确认）与系统用户
 ```
 
-### 升级到新版本
+卸载时运行时 `.env` 会备份到 `/etc/notes-manager/notes-manager.env.saved`，
+即使误删也能找回。执行 `--purge` 则会连同数据目录一起删除。
+
+### 升级与服务管理
 
 ```bash
 cd ~/notes-manager-web && git pull
 sudo ./scripts/install.sh          # 不要加 --skip-deps
 ```
 
-> `git pull` 可能带来新的依赖，只有 npm 会把它们装上。安装脚本会比对 `package-lock.json` 的
-> 指纹，不一致时拒绝使用 `--skip-deps` 并在构建前逐个列出缺失的依赖包。
-
-### 服务管理
-
 ```bash
 systemctl status notes-manager
 systemctl restart notes-manager
 journalctl -u notes-manager -f
+sudo ./scripts/doctor.sh           # 诊断：服务 / 配置 / 从服务器发起的连通性测试
 ```
 
 ---
@@ -331,7 +387,7 @@ journalctl -u notes-manager -f
 | `STORAGE_DRIVER` | `auto` | `auto` / `openlist` / `local` |
 | `OPENLIST_URL` | 空 | OpenList 地址，如 `http://127.0.0.1:5244` |
 | `OPENLIST_TOKEN` | 空 | OpenList API 令牌（本地账户读写用） |
-| `OPENLIST_ROOT` | `/notes` | OpenList 中的笔记根目录（**绝对路径**，见下） |
+| `OPENLIST_ROOT` | `/notes` | OpenList 中的笔记根目录（**绝对路径**，见上） |
 | `OPENLIST_PER_USER` | `false` | 每个用户存到 `<root>/<用户名>` |
 | `NOTES_ROOT` | `<DATA_DIR>/notes` | 本地驱动的笔记目录 |
 | `ADMIN_USERNAME` | `admin` | 本地管理员用户名 |
@@ -388,25 +444,31 @@ notes-manager-web/
 │       │   └── openlist/client.ts  # 【本项目原创】OpenList REST API 客户端
 │       ├── storage/             # 存储抽象：local / openlist / manager
 │       ├── notes/               # front matter 解析、笔记仓库（缓存 + 检索）
+│       ├── fonts/               # 上传字体仓库（索引 + 文件）
 │       └── http/                # 中间件与路由
 ├── web/                         # React 19 + Vite 7 + Tailwind v4
-│   ├── public/                  # 应用图标（favicon.svg / .ico / PNG / manifest）
+│   ├── public/                  # 应用图标；fonts/ 内置字体（Cascadia Code）
 │   └── src/
 │       ├── App.tsx              # 布局与路由（登录 / 工作台）
 │       ├── components/          # 编辑器、列表、侧栏、命令面板、弹窗…
 │       ├── store/useAppStore.ts # Zustand 状态与自动保存
-│       ├── lib/                 # API 客户端、Markdown 渲染、格式化
+│       ├── lib/
+│       │   ├── code-theme.ts    # 编辑/预览共用的代码配色（唯一来源）
+│       │   ├── builtin-fonts.ts # 内置字体注册表
+│       │   ├── local-wallpapers.ts # 本地壁纸库：Steam 探测 + Wallpaper Engine
+│       │   ├── markdown.ts      # Markdown 渲染与高亮
+│       │   └── …                # API 客户端、深链、大纲、格式化
 │       └── styles.css           # 设计令牌、动画、Markdown/编辑器样式
 ├── scripts/
 │   ├── generate-icons.mjs       # 由矢量定义生成 favicon / PNG / manifest（npm run icons）
 │   ├── install.sh               # 一键安装（Linux + systemd）
 │   ├── uninstall.sh             # 一键卸载
 │   ├── doctor.sh                # 诊断脚本（服务/配置/网络连通性）
-│   ├── test-install.sh          # 安装脚本测试（74 项断言）
-│   ├── check-repo-files.mjs     # 仓库完整性检查
+│   ├── test-install.sh          # 安装脚本测试
+│   ├── check-repo-files.mjs     # 仓库完整性 + 凭据守卫
 │   ├── mock-openlist.mjs        # OpenList 兼容模拟服务（开发/测试）
 │   └── smoke-test.mjs           # 端到端接口冒烟测试
-├── web/render-check.tsx         # 组件树渲染检查（npm run check:render）
+├── web/render-check.tsx         # 组件树渲染检查
 ├── openlist/                    # OpenList 源码（仅用于阅读参考，已在 .gitignore 中忽略）
 ├── .env.example
 └── package.json                 # npm workspaces（server + web）
@@ -418,6 +480,26 @@ notes-manager-web/
 ---
 
 ## 常见问题
+
+**Q：壁纸库怎么找到 Wallpaper Engine 的壁纸？**
+
+浏览器不允许网页按路径读取磁盘（没有这样的 API，文件夹选择框也必须由点击触发），
+所以**无法自动扫描 Steam 安装路径**。做法是：你授权一次任意上层目录——Steam 目录、
+某个盘符，或者 `431960` 总文件夹本身——应用会在其中依次查找
+
+```
+steamapps/workshop/content/431960
+SteamApps/workshop/content/431960
+workshop/content/431960
+content/431960
+```
+
+找到就自动把它作为壁纸库，并在对话框顶部显示实际用到的路径。之后这个授权会被记住，
+下次打开只是浏览器再确认一次（选择"始终允许"则完全无感）。文件不会上传。
+
+壁纸列表按**每个壁纸一个格子**展示预览图（`preview.jpg` / `preview.gif`）。
+场景壁纸（`scene.pkg`）浏览器无法播放，会标注「仅预览」并说明原因；
+视频壁纸用 `wallpaper.mp4`，图片壁纸用 `wallpaper.jpg`。
 
 **Q：字体/壁纸会随重装丢失吗？**
 
@@ -453,8 +535,6 @@ cd ~/notes-manager-web && git pull
 sudo ./scripts/doctor.sh
 ```
 
-最常见的两种原因：
-
 | 现象 | 原因 | 解决 |
 | --- | --- | --- |
 | `OPENLIST_URL is empty` | 没填地址（`.env.example` 里该项默认为空） | 「设置 → OpenList 连接」填写，或改 `/opt/notes-manager/.env` |
@@ -464,7 +544,7 @@ sudo ./scripts/doctor.sh
 > 浏览器里的 `127.0.0.1` 是**你正在用的那台电脑**；面板里的 `127.0.0.1` 是**服务器**。
 > 两者只有在面板和 OpenList 跑在同一台机器上时才是同一个地址。
 
-> **OpenList 版本兼容性**：健康探测使用 `/api/public/settings`，该接口在所有已发布版本中都存在。
+> **OpenList 版本兼容性**：健康探测先请求 `/api/public/settings`，该接口在所有已发布版本中都存在。
 > `/api/public/init_status` 是 **v4.2.6 之后**才加入的路由，在旧版本上会落到 SPA 回退、返回
 > `index.html`（HTTP 200、`text/html`）——早期版本的面板正是因此误判为"无法连接"。
 > 现在它只作为可选的版本探测，缺失时按"可用"处理。
@@ -483,7 +563,7 @@ A：OpenList 的存储驱动需要可写。挂载对象存储、WebDAV 或本地
 
 **Q：界面里改了设置但没生效？**
 A：环境变量优先级更高，设置页会显示「env 锁定」。请修改 `.env` 或
-`/etc/notes-manager/notes-manager.env` 后重启服务。
+`/opt/notes-manager/.env` 后重启服务。
 
 **Q：前端资源 404（子路径部署）？**
 A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重新构建，
@@ -491,9 +571,10 @@ A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重�
 
 ---
 
-## 许可
+## 许可声明
 
-本项目基于 [MIT 许可](./LICENSE) 发布，完整条款见仓库根目录的 `LICENSE` 文件。
+本项目基于 **[MIT 许可](./LICENSE)** 发布，完整条款见仓库根目录的 `LICENSE` 文件。
+Copyright (c) 2026 Moistrocic。
 
 ### 第三方资源
 
@@ -503,6 +584,8 @@ A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重�
 
 字体随前端一起构建到 `web/dist/fonts/`，因此部署后无需联网即可使用。想换成别的内置字体，
 把字体文件放进 `web/public/fonts/` 并在 `web/src/lib/builtin-fonts.ts` 里加一条即可。
+
+其余依赖均为 MIT / ISC / Apache-2.0 等宽松许可，完整列表见 `package-lock.json`。
 
 ### 与 OpenList 的关系（重要）
 
