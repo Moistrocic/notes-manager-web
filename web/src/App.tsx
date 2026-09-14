@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { FilePlus2, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
 import { useEffect } from 'react';
+import { AppearanceDialog } from './components/AppearanceDialog';
 import { Aurora } from './components/Aurora';
+import { Wallpaper } from './components/Wallpaper';
 import { CommandPalette } from './components/CommandPalette';
 import { Editor } from './components/Editor';
 import { LoginScreen } from './components/LoginScreen';
@@ -19,7 +21,13 @@ export default function App() {
   const booted = useAppStore((s) => s.booted);
   const user = useAppStore((s) => s.user);
   const boot = useAppStore((s) => s.boot);
+  const wallpaperActive = useAppStore((s) => s.wallpaper.kind !== 'none' && Boolean(s.wallpaperUrl));
   useHotkeys();
+
+  // Fades the aurora down while a wallpaper is showing.
+  useEffect(() => {
+    document.documentElement.classList.toggle('wallpaper-on', wallpaperActive);
+  }, [wallpaperActive]);
 
   useEffect(() => {
     void boot();
@@ -37,6 +45,7 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
+      <Wallpaper />
       <Aurora />
       <AnimatePresence mode="wait">
         {!booted ? (
@@ -58,6 +67,7 @@ export default function App() {
       <Toasts />
       <CommandPalette />
       <SettingsDialog />
+      <AppearanceDialog />
       <TrashDialog />
     </div>
   );

@@ -3,10 +3,23 @@ import { createStore } from 'zustand/vanilla';
 import { api } from '../lib/api';
 import { stripMarkdown } from '../lib/markdown';
 import { pushLocation, readLocation, replaceLocation } from '../lib/url';
+import { applyFonts } from '../lib/fonts';
+import {
+  DEFAULT_WALLPAPER,
+  clearWallpaperFile,
+  loadWallpaperFile,
+  loadWallpaperSettings,
+  saveWallpaperFile,
+  saveWallpaperSettings,
+  type WallpaperKind,
+  type WallpaperSettings,
+} from '../lib/wallpaper';
 import { ApiError } from '../lib/types';
 import type {
   AuthProviders,
   FolderCount,
+  FontRecord,
+  FontSelection,
   Note,
   NoteCapabilities,
   NoteStats,
@@ -109,6 +122,23 @@ interface AppState {
   /** Anchor the editor should scroll to once the note has rendered. */
   pendingAnchor: string | null;
   setPendingAnchor: (anchor: string | null) => void;
+
+  /* ------------------------------- appearance ------------------------------ */
+  fonts: FontRecord[];
+  fontSelection: FontSelection;
+  loadFonts: () => Promise<void>;
+  uploadFont: (file: File, name: string) => Promise<void>;
+  deleteFont: (id: string) => Promise<void>;
+  selectFonts: (selection: Partial<FontSelection>) => Promise<void>;
+
+  wallpaper: WallpaperSettings;
+  /** The URL the background layer should load (remote URL or blob URL). */
+  wallpaperUrl: string | null;
+  setWallpaper: (patch: Partial<WallpaperSettings>) => void;
+  setWallpaperFile: (file: File) => Promise<void>;
+  clearWallpaper: () => Promise<void>;
+  appearanceOpen: boolean;
+  setAppearanceOpen: (value: boolean) => void;
   closeNote: () => void;
   createNote: (input?: { title?: string; folder?: string; content?: string }) => Promise<void>;
   patchActive: (patch: NotePatch, options?: { save?: boolean }) => void;
@@ -121,6 +151,7 @@ interface AppState {
   toggleFavorite: (id: string) => Promise<void>;
   setColor: (id: string, color: string | null) => Promise<void>;
   refreshMeta: () => Promise<void>;
+  refreshWallpaperUrl: () => Promise<void>;
   createFolder: (path: string) => Promise<void>;
   deleteFolder: (path: string) => Promise<void>;
 
@@ -270,6 +301,12 @@ export const appStore = createStore<AppState>((set, get) => ({
   splitRatio: Number(readLocal(SPLIT_KEY, '0.5')) || 0.5,
   focusMode: false,
   focusRestore: null,
+
+  fonts: [],
+  fontSelection: { sans: '', mono: '' },
+  wallpaper: DEFAULT_WALLPAPER,
+  wallpaperUrl: null,
+  appearanceOpen: false,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
   trashOpen: false,
@@ -280,11 +317,14 @@ export const appStore = createStore<AppState>((set, get) => ({
   /* ------------------------------- boot -------------------------------- */
   boot: async () => {
     applyTheme(get().theme);
+    // the wallpaper is a client side preference: restore it before anything else
+    set({ wallpaper: loadWallpaperSettings() });
+    void get().refreshWallpaperUrl();
     try {
       const [providers, me, status] = await Promise.all([api.providers(), api.me(), api.status()]);
       set({ providers, user: me.user, status, booted: true, bootError: null });
       if (me.user) {
-        await get().refreshNotes();
+        await Promise.all([get().refreshNotes(), get().loadFonts()]);
         // a shared link opens straight into its note
         await get().openFromLocation();
       }
@@ -298,7 +338,8 @@ export const appStore = createStore<AppState>((set, get) => ({
     try {
       const result = await api.login(input);
       set({ user: result.user });
-      await Promise.all([get().refreshNotes(), get().refreshStatus()]);
+      await Promise.all([get().refreshNotes(), get().refreshStatus(), get().loadFonts()]);
+      await get().openFromLocation();
     } finally {
       set({ authBusy: false });
     }
@@ -309,7 +350,8 @@ export const appStore = createStore<AppState>((set, get) => ({
     try {
       const result = await api.login({ username: '', password: '', provider: 'guest' });
       set({ user: result.user });
-      await Promise.all([get().refreshNotes(), get().refreshStatus()]);
+      await Promise.all([get().refreshNotes(), get().refreshStatus(), get().loadFonts()]);
+      await get().openFromLocation();
     } finally {
       set({ authBusy: false });
     }
@@ -331,10 +373,13 @@ export const appStore = createStore<AppState>((set, get) => ({
       activeNote: null,
       lastSaved: null,
       dirty: false,
+      fonts: [],
+      fontSelection: { sans: '', mono: '' },
       trash: [],
       trashOpen: false,
       settingsOpen: false,
     });
+    applyFonts([], { sans: '', mono: '' });
   },
 
   refreshStatus: async () => {
@@ -693,6 +738,23 @@ export const appStore = createStore<AppState>((set, get) => ({
     }
   },
 
+  /** Resolves the background layer's URL: a remote one, or a blob for a local file. */
+  refreshWallpaperUrl: async () => {
+    const settings = get().wallpaper;
+    const previous = get().wallpaperUrl;
+    if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+    if (settings.kind === 'none') {
+      set({ wallpaperUrl: null });
+      return;
+    }
+    if (settings.source === 'url') {
+      set({ wallpaperUrl: settings.url.trim() || null });
+      return;
+    }
+    const blob = await loadWallpaperFile();
+    set({ wallpaperUrl: blob ? URL.createObjectURL(blob) : null });
+  },
+
   refreshMeta: async () => {
     try {
       const payload = await api.listNotes();
@@ -726,6 +788,63 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   /* -------------------------------- ui --------------------------------- */
   setPendingAnchor: (anchor) => set({ pendingAnchor: anchor }),
+
+  /* ------------------------------ appearance ------------------------------- */
+  loadFonts: async () => {
+    try {
+      const { fonts, selection } = await api.fonts();
+      applyFonts(fonts, selection);
+      set({ fonts, fontSelection: selection });
+    } catch {
+      /* not signed in yet, or the endpoint is unavailable */
+    }
+  },
+
+  uploadFont: async (file, name) => {
+    const result = await api.uploadFont(file, name);
+    applyFonts(result.fonts, result.selection);
+    set({ fonts: result.fonts, fontSelection: result.selection });
+    get().pushToast({ title: '字体已导入', message: result.font.name, tone: 'success' });
+  },
+
+  deleteFont: async (id) => {
+    const result = await api.deleteFont(id);
+    applyFonts(result.fonts, result.selection);
+    set({ fonts: result.fonts, fontSelection: result.selection });
+    get().pushToast({ title: '字体已删除', tone: 'info' });
+  },
+
+  selectFonts: async (selection) => {
+    const result = await api.selectFonts(selection);
+    applyFonts(result.fonts, result.selection);
+    set({ fonts: result.fonts, fontSelection: result.selection });
+  },
+
+  setWallpaper: (patch) => {
+    const next = { ...get().wallpaper, ...patch };
+    saveWallpaperSettings(next);
+    set({ wallpaper: next });
+    void get().refreshWallpaperUrl();
+  },
+
+  setWallpaperFile: async (file) => {
+    await saveWallpaperFile(file);
+    const kind: WallpaperKind = file.type.startsWith('video/') ? 'video' : 'image';
+    const next: WallpaperSettings = { ...get().wallpaper, kind, source: 'file' };
+    saveWallpaperSettings(next);
+    set({ wallpaper: next });
+    await get().refreshWallpaperUrl();
+    get().pushToast({ title: '壁纸已更新', message: file.name, tone: 'success' });
+  },
+
+  clearWallpaper: async () => {
+    await clearWallpaperFile();
+    const next: WallpaperSettings = { ...DEFAULT_WALLPAPER };
+    saveWallpaperSettings(next);
+    set({ wallpaper: next, wallpaperUrl: null });
+  },
+
+  setAppearanceOpen: (value) => set({ appearanceOpen: value }),
   setQuery: (value) => set({ query: value }),
   setActiveTag: (tag) => set({ activeTag: tag }),
   setActiveFolder: (folder) => set({ activeFolder: folder }),

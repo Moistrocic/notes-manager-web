@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { AuthService } from './auth/service.js';
 import { SessionStore } from './auth/sessions.js';
 import { SettingsStore, StateStore, serverConfig, type ServerConfig } from './config.js';
+import { FontStore } from './fonts/store.js';
 import { createLogger } from './logger.js';
 import { NotesRepository } from './notes/repository.js';
 import { StorageManager } from './storage/manager.js';
@@ -16,6 +17,7 @@ export interface Services {
   storage: StorageManager;
   notes: NotesRepository;
   auth: AuthService;
+  fonts: FontStore;
 }
 
 export function createServices(): Services {
@@ -29,8 +31,9 @@ export function createServices(): Services {
   const notes = new NotesRepository(storage);
   const auth = new AuthService(config, state, settings, storage);
   auth.bootstrap();
+  const fonts = new FontStore(config.dataDir);
 
-  return { config, settings, state, sessions, storage, notes, auth };
+  return { config, settings, state, sessions, storage, notes, auth, fonts };
 }
 
 let cached: Services | null = null;

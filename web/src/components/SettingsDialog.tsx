@@ -9,11 +9,15 @@ import {
   KeyRound,
   RefreshCw,
   Save,
+  Trash2,
+  Type,
+  Upload,
   Wand2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
+import { formatBytes } from '../lib/format';
 import type { AppSettingsPayload } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
@@ -39,6 +43,37 @@ export function SettingsDialog() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [fontName, setFontName] = useState('');
+  const [fontBusy, setFontBusy] = useState(false);
+  const fontInputRef = useRef<HTMLInputElement | null>(null);
+
+  const fonts = useAppStore((s) => s.fonts);
+  const fontSelection = useAppStore((s) => s.fontSelection);
+  const uploadFont = useAppStore((s) => s.uploadFont);
+  const deleteFont = useAppStore((s) => s.deleteFont);
+  const selectFonts = useAppStore((s) => s.selectFonts);
+
+  const onUploadFont = async (file: File | undefined) => {
+    if (!file) return;
+    setFontBusy(true);
+    try {
+      await uploadFont(file, fontName.trim());
+      setFontName('');
+    } catch (err) {
+      pushToast({ title: '导入失败', message: (err as Error).message, tone: 'error' });
+    } finally {
+      setFontBusy(false);
+      if (fontInputRef.current) fontInputRef.current.value = '';
+    }
+  };
+
+  const onDeleteFont = async (id: string) => {
+    try {
+      await deleteFont(id);
+    } catch (err) {
+      pushToast({ title: '删除失败', message: (err as Error).message, tone: 'error' });
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -204,6 +239,94 @@ export function SettingsDialog() {
               </motion.span>
             ) : null}
             {providers?.openlist ? <Badge tone="success">当前在线</Badge> : <Badge tone="warn">当前离线</Badge>}
+          </div>
+        </section>
+
+        {/* Fonts */}
+        <section>
+          <SectionTitle icon={Type} title="界面字体" hint="上传字体文件，重启后依然生效" />
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="界面字体">
+                <select
+                  value={fonts.find((f) => f.id === fontSelection.sans) ? fontSelection.sans : ''}
+                  onChange={(e) => void selectFonts({ sans: e.target.value })}
+                  className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
+                >
+                  <option value="">系统默认</option>
+                  {fonts.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="代码 / 编辑器字体">
+                <select
+                  value={fonts.find((f) => f.id === fontSelection.mono) ? fontSelection.mono : ''}
+                  onChange={(e) => void selectFonts({ mono: e.target.value })}
+                  className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
+                >
+                  <option value="">系统默认</option>
+                  {fonts.map((font) => (
+                    <option key={font.id} value={font.id}>
+                      {font.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={fontInputRef}
+                type="file"
+                accept=".woff2,.woff,.ttf,.otf"
+                className="hidden"
+                onChange={(e) => void onUploadFont(e.target.files?.[0])}
+              />
+              <Input
+                value={fontName}
+                onChange={(e) => setFontName(e.target.value)}
+                placeholder="字体名称（留空则用文件名）"
+                className="h-9 max-w-[240px] text-[12.5px]"
+              />
+              <Button variant="outline" size="sm" loading={fontBusy} onClick={() => fontInputRef.current?.click()}>
+                <Upload className="h-3.5 w-3.5" />
+                导入字体
+              </Button>
+              <span className="text-[11px] text-[var(--faint)]">woff2 / woff / ttf / otf，最大 32 MB</span>
+            </div>
+
+            {fonts.length > 0 ? (
+              <ul className="space-y-1.5">
+                {fonts.map((font) => (
+                  <li
+                    key={font.id}
+                    className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] px-3 py-2"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ fontFamily: `"${font.name}", var(--font-sans)` }}>
+                      {font.name}
+                    </span>
+                    <Badge tone="neutral">{font.format}</Badge>
+                    <span className="text-[11px] text-[var(--faint)]">{formatBytes(font.size)}</span>
+                    {fontSelection.sans === font.id || fontSelection.mono === font.id ? (
+                      <Badge tone="accent">使用中</Badge>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void onDeleteFont(font.id)}
+                      className="focus-ring rounded-lg p-1 text-[var(--faint)] transition-colors hover:text-[var(--danger)]"
+                      aria-label={`删除字体 ${font.name}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[11px] text-[var(--faint)]">还没有导入字体，当前使用系统默认字体。</p>
+            )}
           </div>
         </section>
 

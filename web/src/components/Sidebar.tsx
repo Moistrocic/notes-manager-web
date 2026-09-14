@@ -4,6 +4,7 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  ImagePlus,
   Layers,
   LogOut,
   Moon,
@@ -394,6 +395,7 @@ export function SessionFooter() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const setAppearanceOpen = useAppStore((s) => s.setAppearanceOpen);
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const logout = useAppStore((s) => s.logout);
 
@@ -414,6 +416,15 @@ export function SessionFooter() {
             {user?.openlistBasePath && user.openlistBasePath !== '/' ? ` · ${user.openlistBasePath}` : ''}
           </div>
         </div>
+        <Tooltip label="外观（壁纸）">
+          <button
+            type="button"
+            onClick={() => setAppearanceOpen(true)}
+            className="focus-ring flex h-7 w-7 items-center justify-center rounded-xl text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+          >
+            <ImagePlus className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
         <Tooltip label={theme === 'dark' ? '切换到亮色' : '切换到暗色'}>
           <button
             type="button"

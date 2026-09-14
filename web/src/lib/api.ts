@@ -1,6 +1,8 @@
 import { ApiError } from './types';
 import type {
   AuthProviders,
+  FontRecord,
+  FontSelection,
   AppSettingsPayload,
   Note,
   NoteSummary,
@@ -77,6 +79,43 @@ export const api = {
       body: JSON.stringify({ url, token }),
     }),
   clearCache: () => request<{ ok: boolean }>('/system/cache/clear', { method: 'POST' }),
+
+  /* ------------------------------- fonts ------------------------------- */
+  fonts: () => request<{ fonts: FontRecord[]; selection: FontSelection }>('/fonts'),
+  uploadFont: async (file: File, name: string) => {
+    const response = await fetch(`${API_ROOT}/fonts`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      // raw body: the browser sends exactly the bytes the server stores, and the
+      // server needs no multipart parser for a single file field
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Font-Filename': encodeURIComponent(file.name),
+        'X-Font-Name': encodeURIComponent(name || file.name.replace(/\.[^.]+$/, '')),
+      },
+      body: file,
+    });
+    const text = await response.text();
+    let payload: { error?: { message?: string } } & Record<string, unknown> = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      payload = {};
+    }
+    if (!response.ok) {
+      throw new ApiError(payload.error?.message ?? `字体上传失败 (${response.status})`, response.status, 'font_upload');
+    }
+    return payload as unknown as { font: FontRecord; fonts: FontRecord[]; selection: FontSelection };
+  },
+  deleteFont: (id: string) =>
+    request<{ ok: boolean; fonts: FontRecord[]; selection: FontSelection }>(`/fonts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  selectFonts: (selection: Partial<FontSelection>) =>
+    request<{ fonts: FontRecord[]; selection: FontSelection }>('/fonts/selection', {
+      method: 'PUT',
+      body: JSON.stringify(selection),
+    }),
 
   /* ------------------------------- notes ------------------------------- */
   listNotes: (params: { q?: string; tag?: string; folder?: string; favorite?: boolean; sort?: string } = {}) => {

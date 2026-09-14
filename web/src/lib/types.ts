@@ -125,6 +125,23 @@ export interface AuthProviders {
   guest: boolean;
 }
 
+export interface FontRecord {
+  id: string;
+  /** Display name, also used as the CSS family. */
+  name: string;
+  fileName: string;
+  format: 'woff2' | 'woff' | 'truetype' | 'opentype';
+  size: number;
+  uploadedAt: string;
+}
+
+export interface FontSelection {
+  /** Font id used for the interface, empty for the built-in stack. */
+  sans: string;
+  /** Font id used for the editor and code, empty for the built-in stack. */
+  mono: string;
+}
+
 export interface NoteCapabilities {
   driver: 'openlist' | 'local';
   root: string;

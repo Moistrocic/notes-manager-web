@@ -33,8 +33,14 @@
   `https://example.com/public/Notes/Readme.md#11-分层`；可直接分享，浏览器前进/后退可逐篇回退，
   笔记内的 `[文字](#锚点)` 与 `[文字](./另一篇.md)` 均可点击跳转
 - 深色 / 浅色主题，动态极光背景，玻璃拟态面板，全流程 Framer Motion 动画
+- **自定义字体**：管理员可上传 woff2 / woff / ttf / otf，分别指定界面字体与代码字体；
+  文件存放在服务器数据目录，**重启后依然生效**
+- **壁纸**：支持图片链接、本地图片或本地视频（静音循环），可调模糊 / 暗度 / 缩放。
+  纯前端实现——文件存在浏览器 IndexedDB，不上传服务器，人人可用
   （列表布局动画、卡片入场错峰、模态弹簧过渡、Toast 堆叠）
 - CodeMirror 6 编辑器：Markdown 语法高亮、行号、括号匹配、搜索、自动换行
+- 代码块**按语言高亮**（VS Code Dark+ / Light+ 配色）：```ts```、```python``` 等 140+ 种语言，
+  语法包按需加载，只有笔记里真正用到的才下载
 - 编辑 / 分栏 / 预览三种模式，Markdown 实时预览（GFM、表格、任务列表、代码高亮）
 - 命令面板（`Ctrl/⌘ + K`）、全文检索（`/` 聚焦）、快捷键、Toast 撤销
 - 自动保存：**先比对再保存**——内容没有实际变化时不会写入（打开笔记、编辑器回显、
@@ -300,7 +306,7 @@ journalctl -u notes-manager -f
 | `HOST` / `PORT` | `0.0.0.0` / `8080` | 监听地址与端口 |
 | `BASE_PATH` | 空 | 子路径部署，例如 `/notes` |
 | `PUBLIC_URL` | 空 | 反向代理后的对外地址，用于判定 Cookie `Secure` |
-| `DATA_DIR` | `./data` | 会话、设置、本地笔记等运行时数据 |
+| `DATA_DIR` | `./data` | 会话、设置、字体、本地笔记等运行时数据 |
 | `STORAGE_DRIVER` | `auto` | `auto` / `openlist` / `local` |
 | `OPENLIST_URL` | 空 | OpenList 地址，如 `http://127.0.0.1:5244` |
 | `OPENLIST_TOKEN` | 空 | OpenList API 令牌（本地账户读写用） |
@@ -338,6 +344,11 @@ journalctl -u notes-manager -f
 | `GET` | `/api/notes/trash` · `POST /api/notes/trash/empty` | 回收站 |
 | `GET/POST` | `/api/notes/folders` · `DELETE /api/notes/folders?path=` | 文件夹 |
 | `GET` | `/api/notes/tags` | 标签及计数 |
+| `GET` | `/api/fonts` | 已导入字体列表与当前选择 |
+| `POST` | `/api/fonts` | 上传字体（原始字节 + `X-Font-Filename` / `X-Font-Name` 头，管理员） |
+| `DELETE` | `/api/fonts/:id` | 删除字体（管理员） |
+| `PUT` | `/api/fonts/selection` | 指定界面 / 代码字体（管理员） |
+| `GET` | `/api/fonts/:id/file` | 字体文件本体（供 `@font-face` 加载） |
 
 ---
 
@@ -386,6 +397,17 @@ notes-manager-web/
 ---
 
 ## 常见问题
+
+**Q：字体/壁纸会随重装丢失吗？**
+
+| 内容 | 存放位置 | 重装/重启 |
+| --- | --- | --- |
+| 上传的字体文件 | 服务器 `DATA_DIR/fonts/`（默认 `/var/lib/notes-manager/fonts`） | **保留**（重装不会删除数据目录） |
+| 字体选择 | 同目录的 `index.json` | **保留** |
+| 壁纸 | 浏览器本地（localStorage + IndexedDB） | 保留，但**换设备需重设** |
+
+> 字体是整站设置（所有用户共享）；壁纸是**每台浏览器各自的偏好**，因为需求是"仅前端支持、
+> 不需要服务器"。卸载脚本执行 `--purge` 时会连同数据目录一起删除。
 
 **Q：面板显示「OpenList 无法连接」，但我用浏览器打开 OpenList 是好的？**
 

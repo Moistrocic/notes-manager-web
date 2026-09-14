@@ -6,6 +6,7 @@ import { createContextMiddleware } from './http/middleware.js';
 import { authRoutes } from './http/routes/auth.js';
 import { notesRoutes } from './http/routes/notes.js';
 import { systemRoutes } from './http/routes/system.js';
+import { fontRoutes } from './http/routes/fonts.js';
 import type { Services } from './services.js';
 
 const log = createLogger('http');
@@ -41,6 +42,8 @@ export function createApp(services: Services): Express {
   router.use('/api/auth', authRoutes(services));
   router.use('/api/notes', notesRoutes(services));
   router.use('/api/system', systemRoutes(services));
+  // raw bodies (font uploads) must not be parsed as JSON
+  router.use('/api/fonts', fontRoutes(services));
   router.use('/api', (_req, res) => {
     res.status(404).json({ error: { message: 'Unknown API endpoint', code: 'not_found' } });
   });
