@@ -642,6 +642,23 @@ set_env_value "$RUNTIME_ENV" AUTH_LOCAL_ENABLED "$AUTH_LOCAL_ENABLED"
 chown "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_ENV"
 chmod 600 "$RUNTIME_ENV"
 
+# Best effort probe: reporting a wrong address now beats discovering it later
+# as "OpenList unreachable" in the panel.
+if [ -n "$OPENLIST_URL" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 8 "${OPENLIST_URL%/}/api/public/init_status" >/dev/null 2>&1; then
+      ok "OpenList at $OPENLIST_URL responded"
+    else
+      warn "OpenList at $OPENLIST_URL did not respond"
+      warn "  check the address/port and that OpenList is running;"
+      warn "  the panel falls back to local storage until it becomes reachable"
+    fi
+  fi
+else
+  warn "OPENLIST_URL is empty - notes will be stored on the local disk"
+  warn "  set OPENLIST_URL=<openlist address> in $RUNTIME_ENV and restart to connect OpenList"
+fi
+
 if [ "$configured_data_dir" != "$DATA_DIR" ]; then
   info "DATA_DIR '$configured_data_dir' is relative - the service uses $DATA_DIR"
 fi

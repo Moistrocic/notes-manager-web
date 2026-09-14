@@ -186,7 +186,7 @@ export class OpenListClient {
 
   /* ----------------------------- system ---------------------------------- */
 
-  async ping(): Promise<{ ok: boolean; initialized: boolean; siteTitle?: string; version?: string }> {
+  async ping(): Promise<{ ok: boolean; initialized: boolean; siteTitle?: string; version?: string; error?: string }> {
     try {
       const init = await this.request<{ initialized: boolean }>('/api/public/init_status', { timeoutMs: Math.min(this.timeoutMs, 6000) });
       let siteTitle: string | undefined;
@@ -200,8 +200,10 @@ export class OpenListClient {
       }
       return { ok: true, initialized: Boolean(init?.initialized), siteTitle, version };
     } catch (err) {
-      if (err instanceof OpenListError) return { ok: false, initialized: false };
-      throw err;
+      if (err instanceof OpenListError) {
+        return { ok: false, initialized: false, error: err.message };
+      }
+      return { ok: false, initialized: false, error: (err as Error).message };
     }
   }
 

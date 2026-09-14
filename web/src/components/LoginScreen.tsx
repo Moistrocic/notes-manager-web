@@ -23,6 +23,30 @@ export function LoginScreen() {
 
   const openlistReady = providers?.openlist ?? false;
 
+  // "not configured" and "configured but unreachable" need different advice, so
+  // they must not both read as "offline".
+  const openlist =
+    providers && !providers.openlistConfigured
+      ? {
+          state: 'unconfigured' as const,
+          tone: 'warn' as const,
+          label: 'OpenList 未配置',
+          hint: '还没有填写 OpenList 地址，笔记会保存在本机磁盘。用本地管理员登录后，在「设置 → OpenList 连接」中填写地址即可切换。',
+        }
+      : providers?.openlist
+        ? {
+            state: 'online' as const,
+            tone: 'success' as const,
+            label: 'OpenList 在线',
+            hint: '',
+          }
+        : {
+            state: 'unreachable' as const,
+            tone: 'danger' as const,
+            label: 'OpenList 无法连接',
+            hint: `已配置 ${providers?.openlistUrl ?? 'OpenList 地址'}，但服务器无法访问它。请检查 OpenList 是否正在运行、端口是否正确、以及防火墙设置。`,
+          };
+
   useEffect(() => {
     if (!providers) return;
     if (!openlistReady && providers.local) setProvider('local');
@@ -42,7 +66,6 @@ export function LoginScreen() {
     return list;
   }, [providers]);
 
-  const activeTab = tabs.find((t) => t.value === provider) ?? tabs[0];
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -216,16 +239,37 @@ export function LoginScreen() {
             </Button>
           </form>
 
-          <div className="mt-5 flex flex-wrap items-center justify-center gap-2 text-[11.5px] text-[var(--faint)]">
-            <Badge tone={openlistReady ? 'success' : 'warn'}>
-              <Cloud className="h-3 w-3" />
-              {openlistReady ? 'OpenList 在线' : 'OpenList 离线'}
-            </Badge>
-            <Badge tone={providers?.local ? 'accent' : 'neutral'}>
-              <HardDrive className="h-3 w-3" />
-              {providers?.local ? '本地账户已启用' : '本地账户已禁用'}
-            </Badge>
-            <span className="whitespace-nowrap">{activeTab?.hint}</span>
+          <div className="mt-5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-center gap-2 text-[11.5px] text-[var(--faint)]">
+              <Badge tone={openlist.tone}>
+                <Cloud className="h-3 w-3" />
+                {openlist.label}
+              </Badge>
+              <Badge tone={providers?.local ? 'accent' : 'neutral'}>
+                <HardDrive className="h-3 w-3" />
+                {providers?.local ? '本地账户已启用' : '本地账户已禁用'}
+              </Badge>
+              {tabs.length ? (
+                <span className="whitespace-nowrap">
+                  {tabs.find((tab) => tab.value === provider)?.hint ?? tabs[0]?.hint}
+                </span>
+              ) : null}
+            </div>
+
+            {openlist.state !== 'online' ? (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={cn(
+                  'rounded-xl border px-3 py-2 text-[11.5px] leading-relaxed',
+                  openlist.state === 'unconfigured'
+                    ? 'border-[color-mix(in_srgb,var(--warn)_35%,transparent)] bg-[color-mix(in_srgb,var(--warn)_10%,transparent)] text-[var(--warn)]'
+                    : 'border-[color-mix(in_srgb,var(--danger)_35%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] text-[var(--danger)]',
+                )}
+              >
+                {openlist.hint}
+              </motion.div>
+            ) : null}
           </div>
         </motion.div>
       </div>

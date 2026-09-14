@@ -77,7 +77,7 @@ export class StorageManager {
         initialized: ping.initialized,
         siteTitle: ping.siteTitle,
         version: ping.version,
-        error: ping.ok ? undefined : 'OpenList did not respond to the health check',
+        error: ping.ok ? undefined : ping.error ?? 'OpenList did not respond to the health check',
         checkedAt: now,
       };
     }
@@ -123,7 +123,9 @@ export class StorageManager {
           'openlist_unreachable',
         );
       }
-      return useLocal('OpenList not reachable - using local disk', true);
+      return probe.configured
+        ? useLocal(`Cannot reach OpenList at ${probe.url} - using the local disk`, true)
+        : useLocal('OpenList is not configured yet - using the local disk', false);
     }
 
     const token = user?.provider === 'openlist' && user.openlistToken ? user.openlistToken : openlist.token || undefined;
@@ -170,11 +172,16 @@ export class StorageManager {
       if (!probe.initialized) detail += ' (not initialised yet)';
     } else if (mode === 'openlist') {
       kind = 'openlist';
-      detail = probe.error ?? 'OpenList unreachable';
+      detail = probe.configured ? probe.error ?? `Cannot reach ${probe.url}` : 'OpenList is not configured yet';
+    } else if (!probe.configured) {
+      // Nothing to fall back *from*: the driver is simply not set up yet.
+      kind = 'local';
+      degraded = false;
+      detail = 'OpenList is not configured yet - notes are stored on the local disk';
     } else {
       kind = 'local';
       degraded = true;
-      detail = 'OpenList unreachable - notes are stored on the local disk';
+      detail = `Cannot reach OpenList at ${probe.url} - notes are stored on the local disk`;
     }
 
     const root = kind === 'openlist' ? effective.storage.openlist.root : effective.storage.local.root;
