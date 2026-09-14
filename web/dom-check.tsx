@@ -159,8 +159,6 @@ const outlineButtons = () =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel button')).filter((b) =>
     b.textContent?.includes('1.2'),
   );
-const findButton = (text: string) =>
-  Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) => b.textContent?.trim() === text);
 
 // 1. the outline is rendered with the document's headings
 check('outline lists the headings', host.querySelectorAll('.outline-panel li').length, 3);
@@ -210,6 +208,99 @@ check('outline lists the headings', host.querySelectorAll('.outline-panel li').l
 await act(async () => {
   root.unmount();
 });
+
+/* --- bundled fonts and the local wallpaper listing ------------------------ */
+const { applyFonts, availableFonts, fontExists } = await import('./src/lib/fonts');
+const { libraryFromFiles } = await import('./src/lib/local-wallpapers');
+const { wallpaperKindOf } = await import('./src/lib/wallpaper');
+
+console.log('\nfonts and wallpapers (jsdom)');
+{
+  const html = document.documentElement;
+  const styleText = () => document.getElementById('user-fonts')?.textContent ?? '';
+  const uploaded = [
+    { id: 'abc', name: 'My Font', fileName: 'a.woff2', format: 'woff2' as const, size: 1024, uploadedAt: '2024-01-01T00:00:00.000Z' },
+  ];
+
+  // What a fresh installation resolves to.
+  applyFonts([], { sans: '', mono: 'builtin:cascadia-code' });
+  check(
+    'the bundled font gets a @font-face rule',
+    /@font-face\{font-family:"Cascadia Code";src:url\("[^"]*\/fonts\/CascadiaCode\.woff2"\) format\("woff2"\)/.test(styleText()),
+    true,
+  );
+  check(
+    'choosing it rewrites the code font variable',
+    html.style.getPropertyValue('--font-mono'),
+    '"Cascadia Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  );
+  check('and leaves the interface font on the system stack', html.style.getPropertyValue('--font-sans'), '');
+
+  // "System default" has to stay reachable.
+  applyFonts([], { sans: '', mono: '' });
+  check('an empty choice clears the override', html.style.getPropertyValue('--font-mono'), '');
+  check('the bundled rule is still declared', styleText().includes('CascadiaCode.woff2'), true);
+
+  applyFonts(uploaded, { sans: 'abc', mono: 'abc' });
+  check('an uploaded font is declared', styleText().includes('/api/fonts/abc/file'), true);
+  check('the interface stack uses its family', html.style.getPropertyValue('--font-sans'), '"My Font"');
+  check(
+    'the code stack keeps its fallbacks',
+    html.style.getPropertyValue('--font-mono'),
+    '"My Font", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+  );
+
+  check('a bundled id counts as existing', fontExists(uploaded, 'builtin:cascadia-code'), true);
+  check('an uploaded id counts as existing', fontExists(uploaded, 'abc'), true);
+  check('an empty id is always fine', fontExists(uploaded, ''), true);
+  check('a deleted id does not', fontExists(uploaded, 'gone'), false);
+  check('an unknown bundled id does not', fontExists(uploaded, 'builtin:nope'), false);
+
+  const list = availableFonts(uploaded);
+  check('bundled fonts are listed first', list[0].id, 'builtin:cascadia-code');
+  check('and flagged as bundled', list[0].builtin, true);
+  check('a bundled font only fits its own role', list[0].kind, 'mono');
+  check('an upload is offered for both roles', list[1].kind, 'both');
+
+  // Which files in a folder are worth showing.
+  check('a jpg is an image', wallpaperKindOf('a.JPG'), 'image');
+  check('a webp is an image', wallpaperKindOf('b.webp'), 'image');
+  check('an mp4 is a video', wallpaperKindOf('loop.mp4'), 'video');
+  check('a text file is neither', wallpaperKindOf('notes.txt'), null);
+  check('a name without extension is neither', wallpaperKindOf('README'), null);
+
+  // The folder input hands us every file in the tree; only media survives.
+  const fake = (relative: string) =>
+    ({ name: relative.split('/').pop() ?? '', webkitRelativePath: relative }) as unknown as File;
+  const library = libraryFromFiles(
+    [
+      fake('431960/12345/preview.jpg'),
+      fake('431960/12345/scene.mp4'),
+      fake('431960/12345/scene.pkg'),
+      fake('431960/12345/project.json'),
+      fake('431960/.cache/hidden.jpg'),
+    ],
+    '431960',
+  );
+  check('the folder name is kept for the header', library.label, '431960');
+  check('a directory input is marked as such', library.via, 'input');
+  // the sort inside uses localeCompare, so compare without it
+  check(
+    'only media files are listed, dot folders skipped',
+    library.entries.map((e) => e.path).sort(),
+    ['12345/preview.jpg', '12345/scene.mp4'].sort(),
+  );
+  check(
+    'videos are marked as videos',
+    library.entries.find((e) => e.path.endsWith('.mp4'))?.kind,
+    'video',
+  );
+  check(
+    'images are marked as images',
+    library.entries.find((e) => e.path.endsWith('.jpg'))?.kind,
+    'image',
+  );
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

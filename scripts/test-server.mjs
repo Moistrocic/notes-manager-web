@@ -7,7 +7,7 @@
  * Covers `resolveRootForAccount`, the rule that keeps an OpenList account from
  * being sent to `/base/base/notes`.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -106,7 +106,11 @@ try {
   // points at the font added first.
   check('the unknown id did not clear the other role', store.list().selection.mono, added.id);
   const reopened = new FontStore(dataDir);
-  check('fonts survive a restart', reopened.list().fonts.map((f) => f.name), ['演示字体', 'Fallback']);
+  // The store sorts with localeCompare, whose result depends on the server's
+  // locale (zh-CN puts Han first, en-US puts Latin first). Compare as a set
+  // using a fixed ordering so the test does not depend on the runner's locale.
+  const names = reopened.list().fonts.map((f) => f.name).sort();
+  check('fonts survive a restart', names, ['Fallback', '演示字体'].sort());
   check('the selection survives a restart', reopened.list().selection, { sans: '', mono: added.id });
   check('the font is still downloadable after a restart', existsSync(reopened.filePath(reopened.list().fonts.find((f) => f.id === added.id))), true);
 
@@ -138,6 +142,44 @@ try {
   );
 } finally {
   rmSync(dataDir, { recursive: true, force: true });
+}
+
+// The bundled fonts (Cascadia Code and friends) live in the front end, so the
+// server only ever stores the id. It must accept one it cannot look up, and it
+// must not lose an explicit "system default" on the next start.
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-builtin-'));
+  try {
+    check('a new installation starts on the bundled font', new FontStore(dir).list().selection, {
+      sans: '',
+      mono: 'builtin:cascadia-code',
+    });
+
+    const store = new FontStore(dir);
+    check('a bundled id is accepted', store.select({ mono: 'builtin:anything' }).mono, 'builtin:anything');
+    check('an unknown id is still rejected', store.select({ mono: 'nope' }).mono, '');
+
+    // An explicit "system default" is a choice, not a missing value.
+    const chosen = new FontStore(dir);
+    chosen.select({ mono: '' });
+    check('clearing the choice is remembered', new FontStore(dir).list().selection.mono, '');
+
+    // Deleting an uploaded font must not disturb a bundled selection.
+    const store2 = new FontStore(dir);
+    store2.select({ mono: 'builtin:cascadia-code' });
+    const uploaded = store2.add({ name: 'Mine', fileName: 'mine.woff2', data: Buffer.alloc(16) });
+    store2.select({ sans: uploaded.id });
+    store2.remove(uploaded.id);
+    const after = new FontStore(dir).list().selection;
+    check('removing an upload leaves the bundled choice alone', after.mono, 'builtin:cascadia-code');
+    check('and clears only the upload', after.sans, '');
+
+    // A file written by an older version has no mono field at all.
+    writeFileSync(path.join(dir, 'fonts', 'index.json'), JSON.stringify({ fonts: [], selection: { sans: '' } }), 'utf8');
+    check('an old index file without mono gets the default', new FontStore(dir).list().selection.mono, 'builtin:cascadia-code');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
