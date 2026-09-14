@@ -61,6 +61,8 @@ interface AppState {
   saving: boolean;
   dirty: boolean;
   lastSavedAt: number | null;
+  /** Exactly what the server is known to hold for the open note. */
+  lastSaved: NotePayload | null;
 
   query: string;
   activeTag: string | null;
@@ -182,6 +184,31 @@ function toSummary(note: Note): NoteSummary {
   return { ...rest, excerpt: stripMarkdown(note.content, 200) };
 }
 
+/** The fields a save sends to the server, in a stable order for comparison. */
+function notePayload(note: Note) {
+  return {
+    title: note.title,
+    content: note.content,
+    tags: note.tags,
+    pinned: note.pinned,
+    favorite: note.favorite,
+    color: note.color,
+    folder: note.folder,
+  };
+}
+
+type NotePayload = ReturnType<typeof notePayload>;
+
+/**
+ * True when the two payloads would produce the same file. JSON.stringify is
+ * enough because both sides are built by `notePayload`, so the key order is
+ * identical.
+ */
+function samePayload(a: NotePayload | null, b: NotePayload | null): boolean {
+  if (!a || !b) return a === b;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 /**
  * The store is created as a vanilla store so the API object is reachable from
  * outside React (tests, hotkeys, non-component code) while `useAppStore`
@@ -209,6 +236,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   saving: false,
   dirty: false,
   lastSavedAt: null,
+  lastSaved: null,
 
   query: '',
   activeTag: null,
@@ -278,6 +306,8 @@ export const appStore = createStore<AppState>((set, get) => ({
       stats: null,
       activeId: null,
       activeNote: null,
+      lastSaved: null,
+      dirty: false,
       trash: [],
       trashOpen: false,
       settingsOpen: false,
@@ -333,7 +363,14 @@ export const appStore = createStore<AppState>((set, get) => ({
     set({ activeId: id, loadingNote: true });
     try {
       const { note } = await api.getNote(id);
-      set({ activeNote: note, loadingNote: false, dirty: false, lastSavedAt: Date.parse(note.updated) });
+      set({
+        activeNote: note,
+        loadingNote: false,
+        dirty: false,
+        lastSavedAt: Date.parse(note.updated),
+        // the baseline every later comparison is made against
+        lastSaved: notePayload(note),
+      });
     } catch (err) {
       set({ loadingNote: false });
       get().pushToast({ title: '打开笔记失败', message: errorMessage(err), tone: 'error' });
@@ -375,7 +412,7 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   closeNote: () => {
     void get().saveActive(true);
-    set({ activeId: null, activeNote: null, dirty: false });
+    set({ activeId: null, activeNote: null, dirty: false, lastSaved: null });
   },
 
   createNote: async (input) => {
@@ -392,6 +429,7 @@ export const appStore = createStore<AppState>((set, get) => ({
         activeNote: note,
         dirty: false,
         lastSavedAt: Date.now(),
+        lastSaved: notePayload(note),
         editorMode: state.editorMode === 'preview' ? 'split' : state.editorMode,
       }));
       void get().refreshMeta();
@@ -404,10 +442,24 @@ export const appStore = createStore<AppState>((set, get) => ({
   patchActive: (patch, options) => {
     const current = get().activeNote;
     if (!current) return;
+
     const next: Note = { ...current, ...patch } as Note;
+
+    // Compare what would actually change. Editors echo their own state (mount,
+    // external sync, a caret move that re-renders) and the metadata bar fires on
+    // blur, so without this check an untouched note is marked dirty and saved
+    // the moment it is opened.
+    const before = notePayload(current);
+    const after = notePayload(next);
+    if (samePayload(before, after)) return;
+
+    // Dirty is derived, not assumed: undoing an edit back to the saved text
+    // clears it again and cancels the pending save.
+    const dirty = !samePayload(after, get().lastSaved);
+
     set((state) => ({
       activeNote: next,
-      dirty: true,
+      dirty,
       notes: state.notes.map((n) =>
         n.id === next.id
           ? {
@@ -425,23 +477,35 @@ export const appStore = createStore<AppState>((set, get) => ({
           : n,
       ),
     }));
-    if (options?.save !== false) {
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
-        void get().saveActive(true);
-      }, 900);
-    }
+
+    if (options?.save === false) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    if (!dirty) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void get().saveActive(true);
+    }, 900);
   },
 
   saveActive: async (immediate = false) => {
-    const { activeNote, dirty, saving } = get();
-    if (!activeNote || !dirty || saving) return;
+    const { activeNote, dirty, saving, lastSaved } = get();
+    if (!activeNote || saving) return;
     if (saveTimer && immediate) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
     const snapshot = activeNote;
+    const payload = notePayload(snapshot);
+
+    // Nothing to do when the server already holds exactly this. Cheap to check,
+    // and it keeps a stale timer (or an explicit save on blur) from writing the
+    // same file again.
+    if (samePayload(payload, lastSaved)) {
+      if (dirty) set({ dirty: false });
+      return;
+    }
+    if (!dirty) return;
+
     set({ saving: true });
     try {
       const { note } = await api.updateNote(snapshot.id, {
@@ -455,11 +519,16 @@ export const appStore = createStore<AppState>((set, get) => ({
       });
       const stillSame = get().activeNote?.id === note.id;
       const sameContent = get().activeNote?.content === snapshot.content;
+      // The server normalises the file (front matter layout, trailing newline),
+      // so its body can differ from what was typed. Keeping the local text and
+      // recording what was sent avoids an immediate echo-edit - and a second
+      // save - through the editor's value sync.
       set((state) => ({
         saving: false,
         dirty: stillSame ? !sameContent : state.dirty,
         lastSavedAt: Date.now(),
-        activeNote: stillSame && sameContent ? { ...note } : state.activeNote,
+        lastSaved: payload,
+        activeNote: stillSame && sameContent ? { ...note, content: snapshot.content } : state.activeNote,
         notes: state.notes.map((n) => (n.id === note.id ? { ...n, ...toSummary(note) } : n)),
       }));
     } catch (err) {

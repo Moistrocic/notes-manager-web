@@ -31,10 +31,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Renders the whole component tree in Node (splash, login, workspace,
-      # dialogs) so a broken UI fails the build instead of the user.
-      - name: Render check
-        run: npm run check:render
+      # Renders the component tree in Node (splash, login, workspace, dialogs)
+      # and drives the store to assert when a save is issued.
+      - name: Web checks
+        run: npm run check:web
 
       # Unit tests for the server helpers (base path resolution, ...).
       - name: Server tests

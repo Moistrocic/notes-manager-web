@@ -34,7 +34,9 @@
 - CodeMirror 6 编辑器：Markdown 语法高亮、行号、括号匹配、搜索、自动换行
 - 编辑 / 分栏 / 预览三种模式，Markdown 实时预览（GFM、表格、任务列表、代码高亮）
 - 命令面板（`Ctrl/⌘ + K`）、全文检索（`/` 聚焦）、快捷键、Toast 撤销
-- 自动保存（防抖 + 状态指示），置顶 / 收藏 / 颜色标记 / 标签 / 文件夹
+- 自动保存：**先比对再保存**——内容没有实际变化时不会写入（打开笔记、编辑器回显、
+  失焦都不会触发），把改动改回原样还会取消待保存；防抖 900ms + 状态指示
+- 置顶 / 收藏 / 颜色标记 / 标签 / 嵌套文件夹
 - 回收站：删除 → 撤销 → 恢复 → 彻底删除
 
 **数据**
@@ -161,8 +163,9 @@ node scripts/smoke-test.mjs http://127.0.0.1:8080 admin <password>          # �
 SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
   node scripts/smoke-test.mjs http://127.0.0.1:8080                        # OpenList 模式
 
-# 2) 渲染检查：在 Node 中渲染整个组件树，覆盖启动页 / 登录页 / 工作台 / 弹窗
-npm run check:render
+# 2) 前端检查：渲染整个组件树（启动页/登录页/工作台/弹窗/只读/专注模式），
+#    并驱动 store 验证「什么时候才会触发保存」
+npm run check:web
 
 # 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行，48 项断言）
 npm run test:installer
