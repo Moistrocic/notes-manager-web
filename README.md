@@ -264,7 +264,8 @@ notes-manager-web/
 │       ├── config.ts            # 配置解析（env > settings.json > 默认值）
 │       ├── services.ts          # 依赖容器
 │       ├── auth/                # scrypt 密码、会话存储、登录服务
-│       ├── openlist/client.ts   # OpenList HTTP API 客户端
+│       ├── integrations/
+│       │   └── openlist/client.ts  # 【本项目原创】OpenList REST API 客户端
 │       ├── storage/             # 存储抽象：local / openlist / manager
 │       ├── notes/               # front matter 解析、笔记仓库（缓存 + 检索）
 │       └── http/                # 中间件与路由
@@ -319,8 +320,27 @@ A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重�
 
 本项目基于 [MIT 许可](./LICENSE) 发布，完整条款见仓库根目录的 `LICENSE` 文件。
 
-**与 OpenList 的关系**：OpenList 是由 OpenList Team 独立维护的开源项目，遵循
-[AGPL-3.0](https://github.com/OpenListTeam/OpenList/blob/main/LICENSE)。本项目
-**不包含、不修改也不分发 OpenList 的任何代码**，仅通过其公开的 HTTP API 进行通信，
-因此两者相互独立、各自适用自己的许可。若你修改并对外提供 OpenList 服务，
-请自行遵守 AGPL-3.0 的要求。
+### 与 OpenList 的关系（重要）
+
+OpenList 是由 OpenList Team 独立维护的 Go 项目，遵循
+[AGPL-3.0](https://github.com/OpenListTeam/OpenList/blob/main/LICENSE)。
+**本项目与它在代码层面完全无关**，具体而言：
+
+| 项目 | 说明 |
+| --- | --- |
+| 是否包含 OpenList 源码 | **否**。仓库中 `*.go` 文件数量为 **0**；本项目是 TypeScript/React 项目 |
+| 是否修改 OpenList | **否**。开发期 clone 的 `openlist/` 仅作只读参考，已被 `.gitignore` 忽略，**不随本仓库分发**（`git ls-files openlist` 为空） |
+| 是否链接/内嵌 OpenList | **否**。两者是各自独立运行、各自独立部署的进程 |
+| 交互方式 | 仅通过 **HTTP 网络接口**调用 OpenList 的公开 REST API |
+
+因此本项目不构成 OpenList 的衍生作品，适用自身的 MIT 许可。
+
+**关于 API 与代码的区分**：HTTP 端点路径、JSON 字段名、请求参数属于**功能性接口**，
+而非受版权保护的表达。`server/src/integrations/openlist/client.ts` 是本项目**自行编写的
+TypeScript 客户端**（文件名与目录名均已明确标注为 `integrations`，即"集成适配层"），
+它只负责按 OpenList 的接口约定收发 JSON。这与"浏览器实现 HTTP 协议""数据库驱动实现
+某数据库的线协议"属于同一性质。
+
+> 说明：以上是工程层面的判断，不构成法律意见。若你的使用场景对合规有更高要求，
+> 请咨询专业律师。此外，**你自己**若修改 OpenList 源码并对外提供服务，
+> 需要遵守 AGPL-3.0 的相应义务。

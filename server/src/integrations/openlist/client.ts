@@ -1,4 +1,18 @@
-import { createLogger } from '../logger.js';
+/**
+ * HTTP client for the public OpenList REST API.
+ *
+ * This file is original TypeScript written for this project. It is an
+ * independent *client* of OpenList: it speaks the documented HTTP endpoints
+ * (`/api/fs/list`, `/api/fs/put`, `/api/auth/login`, ...) and contains no
+ * OpenList source code. OpenList itself is a separate Go project under the
+ * AGPL-3.0 and is neither bundled nor redistributed here - it is only ever
+ * reached over the network. Implementing a client for a public network
+ * interface does not create a derivative work, so this project stays MIT
+ * licensed.
+ *
+ * See the licence section of the README for the full explanation.
+ */
+import { createLogger } from '../../logger.js';
 
 const log = createLogger('openlist');
 

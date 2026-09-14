@@ -1,4 +1,4 @@
-import { OpenListClient, OpenListError } from '../openlist/client.js';
+import { OpenListClient, OpenListError } from '../integrations/openlist/client.js';
 import type { StorageDriver, StorageEntry, WriteOptions } from './types.js';
 import { StorageError, baseName, joinPath, normalisePath, parentPath } from './types.js';
 

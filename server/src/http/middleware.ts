@@ -1,7 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import type { SessionRecord } from '../auth/sessions.js';
 import { AuthError } from '../auth/service.js';
-import { OpenListError } from '../openlist/client.js';
+import { OpenListError } from '../integrations/openlist/client.js';
 import { createLogger } from '../logger.js';
 import { StorageError } from '../storage/types.js';
 import type { Services } from '../services.js';

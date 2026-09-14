@@ -1,4 +1,4 @@
-import { OpenListClient, OpenListError } from '../openlist/client.js';
+import { OpenListClient, OpenListError } from '../integrations/openlist/client.js';
 import type { SettingsStore, StateStore, ServerConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import type { StorageManager } from '../storage/manager.js';

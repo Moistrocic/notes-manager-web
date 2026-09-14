@@ -144,7 +144,7 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 missing=""
 for required in \
   server/src/index.ts \
-  server/src/openlist/client.ts \
+  server/src/integrations/openlist/client.ts \
   server/src/storage/manager.ts \
   server/src/notes/repository.ts \
   web/src/main.tsx \

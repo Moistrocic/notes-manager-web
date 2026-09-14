@@ -1,4 +1,4 @@
-import { OpenListClient } from '../openlist/client.js';
+import { OpenListClient } from '../integrations/openlist/client.js';
 import type { SessionUser } from '../auth/sessions.js';
 import type { SettingsStore } from '../config.js';
 import { createLogger } from '../logger.js';
