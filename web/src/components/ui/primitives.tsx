@@ -289,11 +289,32 @@ export function Badge({
   );
 }
 
-export function Tooltip({ label, children }: { label: string; children: ReactNode }) {
+/**
+ * A hover label.
+ *
+ * `side` matters more than it looks: the left panel animates its width, so it
+ * carries overflow-hidden, and a label opening downward from the last row is
+ * clipped by that panel (and by the bottom of the window). Rows that sit
+ * against such an edge ask for "top" instead.
+ */
+export function Tooltip({
+  label,
+  children,
+  side = 'bottom',
+}: {
+  label: string;
+  children: ReactNode;
+  side?: 'top' | 'bottom';
+}) {
   return (
     <span className="group/tip relative inline-flex">
       {children}
-      <span className="pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-40 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg border border-[var(--line)] bg-[var(--elevated)] px-2 py-1 text-[11.5px] text-[var(--muted)] opacity-0 shadow-soft transition-all duration-150 group-hover/tip:translate-y-0 group-hover/tip:opacity-100">
+      <span
+        className={cn(
+          'pointer-events-none absolute left-1/2 z-40 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg border border-[var(--line)] bg-[var(--elevated)] px-2 py-1 text-[11.5px] text-[var(--muted)] opacity-0 shadow-soft transition-all duration-150 group-hover/tip:translate-y-0 group-hover/tip:opacity-100',
+          side === 'top' ? 'bottom-[calc(100%+6px)]' : 'top-[calc(100%+6px)]',
+        )}
+      >
         {label}
       </span>
     </span>

@@ -416,7 +416,7 @@ export function SessionFooter() {
             {user?.openlistBasePath && user.openlistBasePath !== '/' ? ` · ${user.openlistBasePath}` : ''}
           </div>
         </div>
-        <Tooltip label="外观（壁纸）">
+        <Tooltip label="外观（壁纸）" side="top">
           <button
             type="button"
             onClick={() => setAppearanceOpen(true)}
@@ -425,7 +425,7 @@ export function SessionFooter() {
             <ImagePlus className="h-3.5 w-3.5" />
           </button>
         </Tooltip>
-        <Tooltip label={theme === 'dark' ? '切换到亮色' : '切换到暗色'}>
+        <Tooltip label={theme === 'dark' ? '切换到亮色' : '切换到暗色'} side="top">
           <button
             type="button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -435,7 +435,7 @@ export function SessionFooter() {
           </button>
         </Tooltip>
         {user?.role === 'admin' ? (
-          <Tooltip label="设置">
+          <Tooltip label="设置" side="top">
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
@@ -445,7 +445,7 @@ export function SessionFooter() {
             </button>
           </Tooltip>
         ) : null}
-        <Tooltip label="退出登录">
+        <Tooltip label="退出登录" side="top">
           <button
             type="button"
             onClick={() => void logout()}

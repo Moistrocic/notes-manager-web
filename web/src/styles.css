@@ -204,9 +204,19 @@ body {
   pointer-events: none;
 }
 .wallpaper-media {
+  /* Pinned to the layer rather than relying on the parent's box, so the picture
+     can never end up anchored top-left with its bottom and right edges cut off.
+     The box keeps the layer's aspect ratio exactly - growing only one side would
+     change what object-fit: cover crops away. Compensating for the blur is done
+     with a centred scale instead, which zooms without reshaping. */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center;
+  /* zooming stays centred, so it eats into every edge equally */
+  transform-origin: center;
   display: block;
   transition: filter 0.25s ease, transform 0.25s ease;
 }

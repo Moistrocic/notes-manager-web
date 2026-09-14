@@ -302,5 +302,74 @@ console.log('\nfonts and wallpapers (jsdom)');
   );
 }
 
+/* --- wallpaper blur compensation and tooltip placement -------------------- */
+const { Wallpaper } = await import('./src/components/Wallpaper');
+const { SessionFooter } = await import('./src/components/Sidebar');
+
+console.log('\nwallpaper framing and hover labels (jsdom)');
+{
+  const hold = appStore.getState();
+  const render = async (node: React.ReactElement) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(node);
+    });
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const show = (blur: number, scale: number) =>
+    appStore.setState({
+      wallpaper: { kind: 'image', source: 'url', url: 'https://cdn.example.com/a.png', blur, dim: 0.35, scale },
+      wallpaperUrl: 'https://cdn.example.com/a.png',
+    });
+
+  // No blur: the picture fills the frame exactly, so no filter and no zoom.
+  show(0, 1);
+  let markup = await render(React.createElement(Wallpaper));
+  check('a sharp wallpaper is neither filtered nor zoomed', /filter:|transform:/.test(markup), false);
+  check('and it is drawn with object-fit cover', markup.includes('wallpaper-media'), true);
+
+  // Blur: a blur samples past the edge, so without compensation the picture
+  // fades away from the frame. The element has to grow to push that off screen.
+  show(24, 1);
+  markup = await render(React.createElement(Wallpaper));
+  check('a blurred wallpaper is blurred', /filter:\s*blur\(24px\)/.test(markup), true);
+  const zoom = Number((markup.match(/scale\(([\d.]+)\)/) ?? [])[1] ?? '1');
+  check('and zoomed enough to hide the faded edge', zoom > 1.1 && zoom < 1.3, true);
+
+  // The user's own zoom multiplies on top of it rather than replacing it.
+  show(24, 1.5);
+  markup = await render(React.createElement(Wallpaper));
+  const both = Number((markup.match(/scale\(([\d.]+)\)/) ?? [])[1] ?? '1');
+  check('the user zoom stacks on the compensation', both > 1.5, true);
+
+  // The four footer buttons sit on an edge the panel clips, so their labels
+  // have to open upward or they are cut in half.
+  appStore.setState({
+    user: {
+      id: 'u1',
+      username: 'admin',
+      displayName: 'admin',
+      role: 'admin',
+      provider: 'local',
+      permissions: { write: true, rename: true, move: true, remove: true },
+    } as never,
+  });
+  const footer = await render(React.createElement(SessionFooter));
+  const upward = (footer.match(/bottom-\[calc\(100%\+6px\)\]/g) ?? []).length;
+  const downward = (footer.match(/top-\[calc\(100%\+6px\)\]/g) ?? []).length;
+  check('every footer label opens upward', upward, 4);
+  check('none of them opens downward into the clipped edge', downward, 0);
+
+  appStore.setState(hold);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
