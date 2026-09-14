@@ -371,5 +371,82 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- the editor and the preview draw code with the same palette ----------- */
+const { CODE_COLOURS, CODE_TAG_RULES, HLJS_CLASSES, codeColour, codeHighlight, codeThemeCss, installCodeTheme } =
+  await import('./src/lib/code-theme');
+
+console.log('\ncode palette shared by both panes (jsdom)');
+{
+  const css = codeThemeCss();
+  const tokens = Object.keys(CODE_COLOURS) as (keyof typeof CODE_COLOURS)[];
+
+  // HighlightStyle.style() hands back the class names it generated, and the
+  // colours live in the stylesheet CodeMirror builds from them, so read that.
+  const editorClassColours = (dark: boolean) => {
+    const style = codeHighlight(dark);
+    const rules = style.module?.getRules() ?? '';
+    const byClass = new Map<string, string>();
+    for (const rule of rules.matchAll(/\.([^\s{,]+)\s*\{([^}]*)\}/g)) {
+      const colour = /color:\s*([^;}]+)/.exec(rule[2])?.[1];
+      if (colour) byClass.set(rule[1], colour.trim().toLowerCase());
+    }
+    return (tags: unknown[]) => {
+      const classes = style.style(tags as never) ?? '';
+      return byClass.get(classes.split(' ')[0]) ?? `(no rule for ${classes})`;
+    };
+  };
+
+  const mismatched: string[] = [];
+  for (const token of tokens) {
+    const rule = CODE_TAG_RULES.find(([, name]) => name === token);
+    const tags = rule ? (Array.isArray(rule[0]) ? rule[0] : [rule[0]]) : [];
+    for (const dark of [true, false]) {
+      const wanted = codeColour(token, dark).toLowerCase();
+      const theme = dark ? 'dark' : 'light';
+      // preview: the custom property the generated CSS declares for this theme
+      const scope = dark ? /\.dark\{([^}]*)\}/.exec(css)?.[1] ?? '' : /:root\{([^}]*)\}/.exec(css)?.[1] ?? '';
+      const declared = new RegExp(`--code-${token}:([^;]+)`).exec(scope)?.[1]?.toLowerCase();
+      if (declared !== wanted) mismatched.push(`${token}/${theme} preview=${declared} want=${wanted}`);
+      // editor: what CodeMirror's own stylesheet resolves for this token's tags
+      const fromEditor = editorClassColours(dark)(tags);
+      if (fromEditor !== wanted) mismatched.push(`${token}/${theme} editor=${fromEditor} want=${wanted}`);
+    }
+  }
+  check('every token resolves to one colour in both panes', mismatched, []);
+
+  // The two panes must not be able to disagree: the same tag has to come out
+  // the same whichever side renders it.
+  const keywords = editorClassColours(true)((CODE_TAG_RULES[0][0] as never[]).slice());
+  check('the editor really is on the shared palette', keywords, CODE_COLOURS.keyword.dark.toLowerCase());
+
+  // Every highlight.js class has to point at a token that exists, or it would
+  // silently fall back to the surrounding text colour.
+  const unknown = Object.entries(HLJS_CLASSES)
+    .filter(([, token]) => !(token in CODE_COLOURS))
+    .map(([cls]) => cls);
+  check('every highlight.js class maps onto a real token', unknown, []);
+  // A class is usually grouped with its siblings, so find the rule it sits in
+  // rather than expecting it to be alone.
+  const ruleFor = (selector: string) =>
+    css.split('\n').find((line) => line.includes(selector) && line.includes('color:var('));
+  check('a highlight.js rule is emitted per class', /^\.hljs-keyword,.+\{color:var\(--code-keyword\)\}$/m.test(css), true);
+  check('attributes ride the variable token', ruleFor('.hljs-attr')?.includes('var(--code-variable)'), true);
+  check('function titles beat plain titles', css.includes('.hljs-title.function_,.hljs-function .hljs-title'), true);
+
+  // Typography, so a block does not change shape across the splitter.
+  check('both panes use the same code size', css.includes('--code-font-size:14.5px'), true);
+  check('and the same leading', css.includes('--code-line-height:1.75'), true);
+  check('the preview block takes them from the variable', css.includes('font-size:var(--code-font-size)'), true);
+
+  // And the editor really installs those colours: mount it and look at the
+  // stylesheet CodeMirror generates for the highlight style.
+  document.getElementById('code-theme')?.remove();
+  installCodeTheme();
+  const installed = document.getElementById('code-theme')?.textContent ?? '';
+  check('the palette is installed as a style element', installed.length > 0, true);
+  check('the dark scope carries the dark values', installed.includes(`--code-keyword:${CODE_COLOURS.keyword.dark}`), true);
+  check('the light scope carries the light values', installed.includes(`--code-keyword:${CODE_COLOURS.keyword.light}`), true);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

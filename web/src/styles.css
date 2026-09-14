@@ -381,10 +381,9 @@ body {
 }
 .dark .markdown-body pre { background: rgba(0, 0, 0, 0.42); }
 .markdown-body pre code {
+  /* size and leading come from the generated theme, matching the editor */
   background: none;
   padding: 0;
-  font-size: 13.5px;
-  line-height: 1.65;
 }
 .markdown-body table {
   width: 100%;
@@ -426,7 +425,7 @@ body {
   font-size: 14.5px;
 }
 .cm-editor.cm-focused { outline: none !important; }
-.cm-scroller { font-family: var(--font-mono) !important; line-height: 1.75; padding-bottom: 40vh; }
+.cm-scroller { padding-bottom: 40vh; }
 .cm-gutters {
   background: transparent !important;
   border-right: 1px solid var(--line) !important;
@@ -439,14 +438,6 @@ body {
 .cm-tooltip { background: var(--elevated) !important; border: 1px solid var(--line) !important; border-radius: 10px; }
 .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: white !important; }
 
-/* highlight.js - minimal, theme aware */
-.hljs-comment, .hljs-quote { color: var(--faint); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-name, .hljs-tag { color: #c792ea; }
-.hljs-string, .hljs-title, .hljs-section, .hljs-attribute, .hljs-literal, .hljs-template-tag, .hljs-template-variable,
-.hljs-type, .hljs-addition { color: #7ee787; }
-.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-variable, .hljs-meta, .hljs-link { color: #79c0ff; }
-.hljs-function .hljs-title, .hljs-title.function_ { color: #d2a8ff; }
-.hljs-attr, .hljs-property { color: #ffa657; }
-.hljs-deletion { color: #ff7b72; }
-.hljs-emphasis { font-style: italic; }
-.hljs-strong { font-weight: 700; }
+/* Syntax colours for the rendered preview are generated at start-up from
+   lib/code-theme.ts, which is also what the editor's HighlightStyle is built
+   from - the two panes cannot disagree. See <style id="code-theme">. */

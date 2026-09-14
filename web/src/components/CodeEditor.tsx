@@ -1,21 +1,22 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, syntaxHighlighting, type TagStyle } from '@codemirror/language';
 import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
 import { useEffect, useRef } from 'react';
+import { CODE_FONT_SIZE, codeTagStyles } from '../lib/code-theme';
 
 /**
  * Token colours.
  *
- * The prose part follows the app's palette; the code part follows VS Code's
- * Dark+ theme, so a fenced block looks like the editor people already read code
- * in. Both are one list because CodeMirror picks the first matching rule.
+ * The prose part follows the app's palette. The code part is not defined here:
+ * it comes from lib/code-theme.ts, which the preview pane renders from as well,
+ * so a fenced block cannot look different depending on which pane you read it
+ * in. CodeMirror picks the first matching rule, so prose is listed first.
  */
-const darkHighlight = HighlightStyle.define([
-  // markdown prose
+const darkProse: TagStyle[] = [
   { tag: t.heading1, color: '#c4b5fd', fontWeight: '700', fontSize: '1.25em' },
   { tag: t.heading2, color: '#a5b4fc', fontWeight: '700', fontSize: '1.12em' },
   { tag: t.heading3, color: '#93c5fd', fontWeight: '650' },
@@ -30,33 +31,10 @@ const darkHighlight = HighlightStyle.define([
   { tag: t.list, color: '#c4b5fd' },
   { tag: t.contentSeparator, color: '#64748b' },
   { tag: t.processingInstruction, color: '#7c8aa8' },
+  { tag: t.heading, color: '#569cd6', fontWeight: '700' },
+];
 
-  // code, VS Code Dark+
-  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword, t.operatorKeyword], color: '#c586c0' },
-  { tag: [t.definitionKeyword, t.modifier, t.self], color: '#569cd6' },
-  { tag: [t.string, t.special(t.string), t.character], color: '#ce9178' },
-  { tag: [t.number, t.bool, t.null, t.atom], color: '#b5cea8' },
-  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: '#6a9955', fontStyle: 'italic' },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: '#dcdcaa' },
-  { tag: [t.className, t.typeName, t.namespace], color: '#4ec9b0' },
-  { tag: [t.definition(t.variableName), t.definition(t.propertyName)], color: '#9cdcfe' },
-  { tag: [t.variableName, t.propertyName, t.attributeName], color: '#9cdcfe' },
-  { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: '#d4d4d4' },
-  { tag: [t.tagName], color: '#569cd6' },
-  { tag: [t.attributeValue], color: '#ce9178' },
-  { tag: [t.regexp], color: '#d16969' },
-  { tag: [t.escape], color: '#d7ba7d' },
-  { tag: [t.meta], color: '#c586c0' },
-  { tag: [t.invalid], color: '#f44747' },
-  { tag: [t.constant(t.variableName), t.standard(t.variableName)], color: '#4fc1ff' },
-  { tag: [t.heading], color: '#569cd6', fontWeight: '700' },
-  { tag: [t.strikethrough, t.deleted], color: '#f44747' },
-  { tag: [t.inserted], color: '#b5cea8' },
-]);
-
-/** The same, following VS Code's Light+ theme. */
-const lightHighlight = HighlightStyle.define([
-  // markdown prose
+const lightProse: TagStyle[] = [
   { tag: t.heading1, color: '#5b21b6', fontWeight: '700', fontSize: '1.25em' },
   { tag: t.heading2, color: '#4338ca', fontWeight: '700', fontSize: '1.12em' },
   { tag: t.heading3, color: '#1d4ed8', fontWeight: '650' },
@@ -71,32 +49,14 @@ const lightHighlight = HighlightStyle.define([
   { tag: t.list, color: '#5b21b6' },
   { tag: t.contentSeparator, color: '#94a3b8' },
   { tag: t.processingInstruction, color: '#94a3b8' },
+  { tag: t.heading, color: '#0000ff', fontWeight: '700' },
+];
 
-  // code, VS Code Light+
-  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword, t.operatorKeyword], color: '#af00db' },
-  { tag: [t.definitionKeyword, t.modifier, t.self], color: '#0000ff' },
-  { tag: [t.string, t.special(t.string), t.character], color: '#a31515' },
-  { tag: [t.number, t.bool, t.null, t.atom], color: '#098658' },
-  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: '#008000', fontStyle: 'italic' },
-  { tag: [t.function(t.variableName), t.function(t.propertyName), t.labelName], color: '#795e26' },
-  { tag: [t.className, t.typeName, t.namespace], color: '#267f99' },
-  { tag: [t.definition(t.variableName), t.definition(t.propertyName)], color: '#001080' },
-  { tag: [t.variableName, t.propertyName, t.attributeName], color: '#001080' },
-  { tag: [t.operator, t.punctuation, t.separator, t.bracket], color: '#3b3b3b' },
-  { tag: [t.tagName], color: '#800000' },
-  { tag: [t.attributeValue], color: '#a31515' },
-  { tag: [t.regexp], color: '#811f3f' },
-  { tag: [t.escape], color: '#ee0000' },
-  { tag: [t.meta], color: '#af00db' },
-  { tag: [t.invalid], color: '#cd3131' },
-  { tag: [t.constant(t.variableName), t.standard(t.variableName)], color: '#0070c1' },
-  { tag: [t.heading], color: '#0000ff', fontWeight: '700' },
-  { tag: [t.deleted], color: '#cd3131' },
-  { tag: [t.inserted], color: '#098658' },
-]);
+const darkHighlight = HighlightStyle.define([...darkProse, ...codeTagStyles(true)]);
+const lightHighlight = HighlightStyle.define([...lightProse, ...codeTagStyles(false)]);
 
 const transparentTheme = EditorView.theme({
-  '&': { backgroundColor: 'transparent', height: '100%', fontSize: '14.5px' },
+  '&': { backgroundColor: 'transparent', height: '100%', fontSize: CODE_FONT_SIZE },
   '.cm-content': { caretColor: 'var(--accent)', padding: '20px 8px 45vh 4px' },
   '.cm-line': { padding: '0 4px' },
   '.cm-gutters': { backgroundColor: 'transparent', border: 'none', paddingRight: '6px', paddingLeft: '10px' },
