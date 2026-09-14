@@ -41,8 +41,13 @@ jobs:
       - name: Installer copy test
         run: npm run test:installer
 
-      - name: Shellcheck installer scripts
+      # Pinned so CI runs exactly the version the scripts were verified with
+      # (the distro package lags several releases behind).
+      - name: ShellCheck installer scripts
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/test-install-copy.sh
+          curl -fsSL -o /tmp/shellcheck.tar.xz \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+          /tmp/shellcheck-v0.11.0/shellcheck --version
+          /tmp/shellcheck-v0.11.0/shellcheck --severity=warning \
+            scripts/install.sh scripts/uninstall.sh scripts/test-install-copy.sh

@@ -562,7 +562,7 @@ cat <<SUMMARY_EOF
 SUMMARY_EOF
 
 if [ -z "$OPENLIST_URL" ]; then
-  printf '%s\n\n' "${C_YELLOW}[!] 尚未配置 OpenList 地址：面板会先使用本地目录，登录后在“设置”中填写 OpenList 地址与 API 令牌即可切换。${C_RESET}"
+  printf '%s\n\n' "${C_YELLOW}[!] 尚未配置 OpenList 地址：面板会先使用本地目录，登录后在「设置」中填写 OpenList 地址与 API 令牌即可切换。${C_RESET}"
 fi
 
 if [ "$STORAGE_DRIVER" != "local" ] && [ -z "$OPENLIST_TOKEN" ]; then

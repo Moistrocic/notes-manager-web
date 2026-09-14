@@ -19,7 +19,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 # --- stubs for the parts of install.sh we do not want to run --------------- #
-C_RED=""; C_RESET=""
+# C_RED/C_RESET are read by the verify_tree() body that is extracted from
+# install.sh and evaluated below; shellcheck cannot see those references.
+# shellcheck disable=SC2034
+C_RED=""
+# shellcheck disable=SC2034
+C_RESET=""
 die() { printf '[test] die: %s\n' "$*" >&2; return 1; }
 
 # extract_function <name> - prints the body of a top level shell function
