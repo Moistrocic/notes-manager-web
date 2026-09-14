@@ -272,7 +272,7 @@ console.log('\nfonts and wallpapers (jsdom)');
 }
 
 /* --- finding Wallpaper Engine inside a folder the user granted ------------ */
-const { pickLibrary, canPickDirectory } = await import('./src/lib/local-wallpapers');
+const { pickLibrary, canPickDirectory, readEntry } = await import('./src/lib/local-wallpapers');
 
 console.log('\nSteam wallpaper detection (jsdom)');
 {
@@ -318,6 +318,9 @@ console.log('\nSteam wallpaper detection (jsdom)');
   ]);
   const steam = fakeDir('Steam', [fakeDir('steamapps', [fakeDir('workshop', [fakeDir('content', [engine])])])]);
   const loose = fakeDir('Pictures', [fakeFile('a.jpg'), fakeFile('b.mp4'), fakeFile('notes.txt')]);
+  const barren = fakeDir('431960', [
+    fakeDir('hollow', [project({ title: '空场景', type: 'scene', file: 'scene.pkg' }), fakeFile('scene.pkg')]),
+  ]);
 
   check('the picker is reported as available', canPickDirectory(), false);
   (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => steam;
@@ -343,10 +346,13 @@ console.log('\nSteam wallpaper detection (jsdom)');
     ['Plain', '极光', '雨夜东京'].sort(),
   );
 
+  // A scene is a packed scene.pkg with compiled shaders: no browser can draw
+  // it, so the wallpaper falls back to its own preview still.
   const scene = byTitle.get('极光');
-  check('a scene wallpaper has no playable file', scene?.file, undefined);
-  check('but still offers its preview', scene?.preview, 'aurora/preview.jpg');
-  check('and says why it cannot be played', Boolean(scene?.unsupported), true);
+  check('a scene wallpaper falls back to its preview', scene?.file, 'aurora/preview.jpg');
+  check('and is marked as a still', scene?.still, true);
+  check('and explains why', Boolean(scene?.note), true);
+  check('the still is drawn as an image', scene?.kind, 'image');
 
   const video = byTitle.get('雨夜东京');
   check('a video wallpaper plays its own file', video?.file, 'rain/wallpaper.mp4');
@@ -357,11 +363,23 @@ console.log('\nSteam wallpaper detection (jsdom)');
   check('a folder without project.json still works', plain?.file, 'plain/wallpaper.jpg');
   check('and is an image', plain?.kind, 'image');
 
+  // The point of the fallback: clicking a scene has to hand back a real file.
+  check('clicking a scene loads its preview image', (await readEntry(scene!)).name, 'preview.jpg');
+  check('clicking a video loads the video itself', (await readEntry(video!)).name, 'wallpaper.mp4');
+
   // Pointing straight at the library is the same thing without the walk.
   (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => engine;
   const direct = await pickLibrary();
   check('picking 431960 directly works too', direct.status === 'ok' ? direct.library.entries.length : -1, 3);
   check('and is not reported as a detection', direct.status === 'ok' ? direct.library.detected : null, false);
+
+  // A scene with no preview has nothing to fall back to.
+  (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => barren;
+  const hollow = await pickLibrary();
+  const only = hollow.status === 'ok' ? hollow.library.entries[0] : null;
+  check('a scene without a preview has no file', only?.file, undefined);
+  check('and is not marked as a still', Boolean(only?.still), false);
+  check('and says there is nothing to use', Boolean(only?.note), true);
 
   // An ordinary folder of pictures keeps the flat listing.
   (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => loose;
@@ -401,11 +419,9 @@ console.log('\nSteam wallpaper detection (jsdom)');
     fromInput.entries.find((e) => e.title === 'Rain')?.file,
     'rain/wallpaper.mp4',
   );
-  check(
-    'the scene is preview only',
-    fromInput.entries.find((e) => e.title === 'Aurora')?.file,
-    undefined,
-  );
+  const sceneFromInput = fromInput.entries.find((e) => e.title === 'Aurora');
+  check('the scene falls back to its preview there too', sceneFromInput?.file, 'aurora/preview.jpg');
+  check('and is marked as a still', sceneFromInput?.still, true);
 }
 
 /* --- wallpaper blur compensation and tooltip placement -------------------- */
@@ -611,8 +627,10 @@ console.log('\nappearance dialog (jsdom)');
   check('the detected library is announced', markup.includes('已自动定位壁纸库'), true);
   check('the path that was walked is shown', markup.includes('431960'), true);
   check('both wallpapers are listed', markup.includes('Rain') && markup.includes('Aurora'), true);
-  check('the playable one counts as usable', markup.includes('1 个可用'), true);
-  check('the scene one is marked preview only', markup.includes('仅预览'), true);
+  check('the video is settable', markup.includes('2 个可设置'), true);
+  check('the scene is offered as a still', markup.includes('1 个为静态预览'), true);
+  check('and carries the 静态 badge', markup.includes('静态'), true);
+  check('nothing is reported unusable', markup.includes('个不可用'), false);
 
   appStore.setState(hold);
   closeLibrary();

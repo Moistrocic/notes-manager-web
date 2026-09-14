@@ -94,8 +94,14 @@ export interface WallpaperEntry {
   kind?: 'image' | 'video';
   /** Path of the preview image, relative to the root. */
   preview?: string;
-  /** Set when the wallpaper cannot be shown in a browser. */
-  unsupported?: string;
+  /**
+   * True when `file` is only the wallpaper's preview still, because the real
+   * thing cannot be drawn by a browser - a Wallpaper Engine scene is a packed
+   * scene.pkg with compiled shaders, and there is no way to run it here.
+   */
+  still?: boolean;
+  /** Why it is a still, or why there is nothing to use at all. */
+  note?: string;
 }
 
 export interface WallpaperLibrary {
@@ -220,11 +226,11 @@ function tidyName(raw: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-/** Why a wallpaper that has no playable file cannot be used. */
-function unsupportedReason(type: string | undefined): string {
-  if (type === 'web') return '网页壁纸，浏览器无法作为背景播放';
+/** Why the wallpaper itself cannot be drawn in a browser. */
+function unplayableReason(type: string | undefined): string {
+  if (type === 'web') return '网页壁纸，浏览器无法作为背景运行';
   if (type === 'application') return '应用程序壁纸，浏览器无法播放';
-  return '场景壁纸（scene.pkg），浏览器无法播放，只能用它的预览图';
+  return '场景壁纸（scene.pkg），浏览器无法播放';
 }
 
 /**
@@ -274,16 +280,25 @@ async function readEngineWallpaper(
     [...byName.keys()].find((name) => wallpaperKindOf(name) && !PREVIEW_NAMES.includes(name));
 
   const kind = playable ? wallpaperKindOf(playable) : null;
-  const file = playable ? register(playable) : undefined;
+  // Nothing playable: fall back to the preview still rather than leaving the
+  // wallpaper unusable. A `preview.gif` is an ordinary image to the browser,
+  // so a fair number of scenes end up animated anyway.
+  const fallback = playable ? undefined : preview;
+  const file = playable ? register(playable) : fallback;
 
   return {
-    path: file ?? preview ?? prefix ?? dir.name,
+    path: file ?? prefix ?? dir.name,
     title: project.title?.trim() || tidyName(dir.name),
     type: project.type,
     file,
-    kind: kind ?? undefined,
+    kind: playable ? (kind ?? undefined) : fallback ? 'image' : undefined,
     preview,
-    unsupported: file ? undefined : unsupportedReason(project.type),
+    still: Boolean(fallback),
+    note: playable
+      ? undefined
+      : fallback
+        ? `${unplayableReason(project.type)}，这里改用它的静态预览图`
+        : `${unplayableReason(project.type)}，而且它没有预览图`,
   };
 }
 
@@ -508,16 +523,24 @@ export function libraryFromFiles(files: FileList | File[], label: string): Wallp
         PLAYABLE_NAMES.find((name) => byName.has(name) && wallpaperKindOf(name)) ??
         [...byName.keys()].find((name) => wallpaperKindOf(name) && !PREVIEW_NAMES.includes(name));
       const playableFile = playableName ? byName.get(playableName) : undefined;
-      const key = `${folder}/${playableName ?? (previewFile?.name ?? folder)}`;
+      const previewKey = previewFile ? `${folder}/${previewFile.name}` : undefined;
+      // Same fallback as the handle path: a scene is offered as its still.
+      const key = `${folder}/${playableName ?? previewFile?.name ?? folder}`;
       if (playableFile) nextFiles.set(key, playableFile);
-      if (previewFile) nextFiles.set(`${folder}/${previewFile.name}`, previewFile);
+      if (previewFile && previewKey) nextFiles.set(previewKey, previewFile);
+      const usesPreview = !playableFile && Boolean(previewKey);
       entries.push({
-        path: key,
+        path: playableFile || !previewKey ? key : previewKey,
         title: tidyName(folder),
-        file: playableFile ? key : undefined,
-        kind: playableName ? (wallpaperKindOf(playableName) ?? undefined) : undefined,
-        preview: previewFile ? `${folder}/${previewFile.name}` : undefined,
-        unsupported: playableFile ? undefined : unsupportedReason(undefined),
+        file: playableFile ? key : previewKey,
+        kind: playableName ? (wallpaperKindOf(playableName) ?? undefined) : usesPreview ? 'image' : undefined,
+        preview: previewKey,
+        still: usesPreview,
+        note: playableFile
+          ? undefined
+          : usesPreview
+            ? `${unplayableReason(undefined)}，这里改用它的静态预览图`
+            : `${unplayableReason(undefined)}，而且它没有预览图`,
       });
     }
   } else {

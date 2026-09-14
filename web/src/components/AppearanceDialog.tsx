@@ -123,6 +123,9 @@ export function AppearanceDialog() {
     try {
       const file = await readEntry(entry);
       await setWallpaperFile(file, 'library');
+      if (entry.still) {
+        pushToast({ title: '已使用静态预览图', message: entry.note ?? '这个壁纸无法在浏览器中播放', tone: 'info' });
+      }
     } catch (err) {
       pushToast({ title: '壁纸载入失败', message: (err as Error).message, tone: 'error' });
     } finally {
@@ -397,6 +400,8 @@ function WallpaperLibraryPanel({
 }: LibraryPanelProps) {
   const total = library?.entries.length ?? 0;
   const usable = library?.entries.filter((entry) => entry.file).length ?? 0;
+  const stills = library?.entries.filter((entry) => entry.still).length ?? 0;
+  const unusable = total - usable;
 
   return (
     <div className="space-y-2.5">
@@ -420,7 +425,9 @@ function WallpaperLibraryPanel({
             {library.detected ? <Sparkles className="h-3 w-3 text-[var(--accent)]" /> : <FolderOpen className="h-3 w-3" />}
             <span>{library.detected ? '已自动定位壁纸库' : '壁纸文件夹'}</span>
             <span className="ml-auto shrink-0">
-              {usable} 个可用{total > usable ? ` · ${total - usable} 个仅预览` : ''}
+              {usable} 个可设置
+              {stills > 0 ? ` · ${stills} 个为静态预览` : ''}
+              {unusable > 0 ? ` · ${unusable} 个不可用` : ''}
               {library.truncated ? ' · 仅显示前 240 个' : ''}
             </span>
           </div>
@@ -580,7 +587,7 @@ function LocalThumb({ entry, busy, onClick }: { entry: WallpaperEntry; busy: boo
       type="button"
       onClick={onClick}
       disabled={!usable}
-      title={entry.unsupported ? `${entry.title}\n${entry.unsupported}` : entry.title}
+      title={entry.note ? `${entry.title}\n${entry.note}` : entry.title}
       className={cn(
         'focus-ring group relative aspect-video overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)] transition-all',
         usable ? 'hover:border-[var(--accent)]' : 'cursor-not-allowed opacity-60',
@@ -612,9 +619,14 @@ function LocalThumb({ entry, busy, onClick }: { entry: WallpaperEntry; busy: boo
           {badge}
         </span>
       ) : null}
+      {entry.still ? (
+        <span className="pointer-events-none absolute left-1 top-1 rounded-md bg-black/55 px-1 py-0.5 text-[9px] leading-none text-white">
+          静态
+        </span>
+      ) : null}
       {!usable ? (
         <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/65 px-1.5 py-1 text-center text-[9px] leading-tight text-white">
-          仅预览
+          无法使用
         </span>
       ) : (
         <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 pb-1 pt-3 text-left text-[9.5px] text-white opacity-0 transition-opacity group-hover:opacity-100">
