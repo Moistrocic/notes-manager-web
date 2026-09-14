@@ -44,7 +44,9 @@ export function LoginScreen() {
             state: 'unreachable' as const,
             tone: 'danger' as const,
             label: 'OpenList 无法连接',
-            hint: `已配置 ${providers?.openlistUrl ?? 'OpenList 地址'}，但服务器无法访问它。请检查 OpenList 是否正在运行、端口是否正确、以及防火墙设置。`,
+            hint:
+              `已配置 ${providers?.openlistUrl ?? 'OpenList 地址'}，但服务器无法访问它：${providers?.openlistError ?? '连接失败'}。` +
+              '注意 127.0.0.1 指的是服务器本身，而不是你打开浏览器的那台电脑。',
           };
 
   useEffect(() => {

@@ -105,6 +105,8 @@ export interface AuthProviders {
   openlistConfigured: boolean;
   openlistUrl: string | null;
   openlistInitialized: boolean;
+  /** Why the probe failed (e.g. "connect ECONNREFUSED 127.0.0.1:5244"). */
+  openlistError?: string | null;
 }
 
 export interface AppSettingsPayload {

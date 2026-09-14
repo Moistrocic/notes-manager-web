@@ -51,4 +51,4 @@ jobs:
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           /tmp/shellcheck-v0.11.0/shellcheck --version
           /tmp/shellcheck-v0.11.0/shellcheck --severity=warning \
-            scripts/install.sh scripts/uninstall.sh scripts/test-install.sh
+            scripts/install.sh scripts/uninstall.sh scripts/test-install.sh scripts/doctor.sh

@@ -324,6 +324,9 @@ notes-manager-web/
 ├── scripts/
 │   ├── install.sh               # 一键安装（Linux + systemd）
 │   ├── uninstall.sh             # 一键卸载
+│   ├── doctor.sh                # 诊断脚本（服务/配置/网络连通性）
+│   ├── test-install.sh          # 安装脚本测试（74 项断言）
+│   ├── check-repo-files.mjs     # 仓库完整性检查
 │   ├── mock-openlist.mjs        # OpenList 兼容模拟服务（开发/测试）
 │   └── smoke-test.mjs           # 端到端接口冒烟测试
 ├── web/render-check.tsx         # 组件树渲染检查（npm run check:render）
@@ -339,9 +342,28 @@ notes-manager-web/
 
 ## 常见问题
 
+**Q：面板显示「OpenList 无法连接」，但我用浏览器打开 OpenList 是好的？**
+
+先跑诊断脚本，它会把服务状态、配置、以及**从服务器发起**的连通性测试全部打印出来：
+
+```bash
+cd ~/notes-manager-web && git pull
+sudo ./scripts/doctor.sh
+```
+
+最常见的两种原因：
+
+| 现象 | 原因 | 解决 |
+| --- | --- | --- |
+| `OPENLIST_URL is empty` | 没填地址（`.env.example` 里该项默认为空） | 「设置 → OpenList 连接」填写，或改 `/opt/notes-manager/.env` |
+| 第 7 节 `no local listener on port 5244` | **`127.0.0.1` 在服务器上指的是服务器自己**，而 OpenList 装在你的电脑/另一台机器上 | 改成服务器能访问的地址，如 `http://192.168.1.10:5244` |
+
+> 浏览器里的 `127.0.0.1` 是**你正在用的那台电脑**；面板里的 `127.0.0.1` 是**服务器**。
+> 两者只有在面板和 OpenList 跑在同一台机器上时才是同一个地址。
+
 **Q：面板显示「本地存储（降级）」？**
-A：说明 OpenList 探测失败。检查地址端口、OpenList 是否已初始化（`/api/public/init_status`），
-然后在「设置 → 测试连接」中确认。
+A：说明 OpenList 探测失败（地址已配置但连不上）。用 `sudo ./scripts/doctor.sh` 定位，
+或在「设置 → 测试连接」中查看具体报错（会显示 `ECONNREFUSED` / `ETIMEDOUT` 等底层原因）。
 
 **Q：用本地管理员登录后，写 OpenList 目录报权限错误？**
 A：本地账户没有 OpenList 令牌。请在 OpenList「设置 → API」创建令牌并填入

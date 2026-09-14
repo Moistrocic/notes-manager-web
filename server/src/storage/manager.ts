@@ -205,7 +205,13 @@ export class StorageManager {
     const client = new OpenListClient({ baseUrl: url, token: input.token, timeoutMs: 8000 });
     const ping = await client.ping();
     if (!ping.ok) {
-      return { ok: false, message: `Could not reach OpenList at ${url}. Check the address, the port and the firewall.` };
+      // The reason matters: ECONNREFUSED means "nothing is listening there",
+      // ETIMEDOUT means "filtered / wrong host", ENOTFOUND means "bad name".
+      return {
+        ok: false,
+        message: `Could not reach OpenList at ${url}${ping.error ? ` - ${ping.error}` : ''}`,
+        details: { url, error: ping.error ?? null },
+      };
     }
     const details: Record<string, unknown> = {
       initialized: ping.initialized,

@@ -18,6 +18,7 @@ export function authRoutes(services: Services): Router {
         openlistConfigured: probe.configured,
         openlistUrl: probe.url || null,
         openlistInitialized: probe.initialized,
+        openlistError: probe.reachable ? null : probe.error ?? null,
       });
     }),
   );
