@@ -36,7 +36,14 @@ C_RESET=""
 : "$C_RED" "$C_RESET"
 die() { printf '[test] die: %s\n' "$*" >&2; return 1; }
 
-# extract_function <name> - prints the body of a top level shell function
+# read by the dependency freshness functions extracted from install.sh and
+# evaluated below, which shellcheck cannot follow
+DEPS_STAMP="node_modules/.notes-manager-lock"
+: "$DEPS_STAMP"
+
+# extract_function <name> - prints the body of a top level shell function.
+# The contract: a function ends at the first "}" in column 0, so embedded
+# scripts (the node -e block in find_missing_dependencies) must be indented.
 extract_function() {
   awk -v fn="$1" '
     $0 ~ "^" fn "\\(\\) \\{" { inside = 1 }
@@ -45,7 +52,8 @@ extract_function() {
   ' "$INSTALLER"
 }
 
-for fn in verify_tree copy_application read_env_value set_env_value; do
+for fn in verify_tree copy_application read_env_value set_env_value \
+  fingerprint_lock write_deps_stamp dependencies_are_current find_missing_dependencies; do
   body="$(extract_function "$fn")"
   [ -n "$body" ] || { echo "could not extract $fn() from install.sh" >&2; exit 1; }
   eval "$body"
@@ -356,6 +364,76 @@ echo 'STORAGE_DRIVER=bogus' >> "$PROJ/.env"
 run_installer --check-config
 check "invalid driver rejected"               "$LAST_STATUS" "1"
 check "  with an explanatory message"         "$(printf '%s' "$out" | grep -c 'storage driver must be one of')" "1"
+
+# =========================================================================== #
+# 5. dependency freshness                                                     #
+# =========================================================================== #
+# The real failure this guards against: node_modules is kept between installs,
+# so a dependency added by "git pull" is missing, and "--skip-deps" then builds
+# against a tree that cannot satisfy package.json. Adding
+# @codemirror/language-data to web/package.json broke the Vite build that way.
+echo ""
+echo "dependency freshness"
+
+DEPS="$WORK/deps"
+mkdir -p "$DEPS/web" "$DEPS/server" "$DEPS/node_modules/@scope"
+cat > "$DEPS/package.json" <<'PKG'
+{ "name": "root", "workspaces": ["server", "web"] }
+PKG
+cat > "$DEPS/web/package.json" <<'PKG'
+{ "name": "web", "dependencies": { "@codemirror/language-data": "^6.5.2" } }
+PKG
+cat > "$DEPS/server/package.json" <<'PKG'
+{ "name": "server", "dependencies": { "express": "^5.1.0" } }
+PKG
+echo '{"name":"lock","lockfileVersion":3}' > "$DEPS/package-lock.json"
+
+# --- the fingerprint -------------------------------------------------------- #
+first="$(fingerprint_lock "$DEPS")"
+check "lock fingerprint is stable"            "$(fingerprint_lock "$DEPS")" "$first"
+echo '{"name":"lock","lockfileVersion":3,"changed":true}' > "$DEPS/package-lock.json"
+check "lock fingerprint follows the file"     "$([ "$(fingerprint_lock "$DEPS")" != "$first" ] && echo changed)" "changed"
+rm -f "$DEPS/package-lock.json"
+check "no lock file is its own fingerprint"   "$(fingerprint_lock "$DEPS")" "no-lock-file"
+echo '{"name":"lock","lockfileVersion":3}' > "$DEPS/package-lock.json"
+
+# --- the gate --------------------------------------------------------------- #
+if dependencies_are_current "$DEPS"; then
+  printf '  FAIL  a tree with no recorded stamp is accepted\n'; FAILED=1
+else
+  printf '  ok    a tree with no recorded stamp is rejected\n'
+fi
+
+write_deps_stamp "$DEPS"
+check "the stamp lands inside node_modules"   "$([ -f "$DEPS/node_modules/.notes-manager-lock" ] && echo yes)" "yes"
+if dependencies_are_current "$DEPS"; then
+  printf '  ok    a freshly stamped tree is accepted\n'
+else
+  printf '  FAIL  a freshly stamped tree is rejected\n'; FAILED=1
+fi
+
+# This is the exact sequence that broke the build: install, then pull a commit
+# that changes package-lock.json, then re-run with --skip-deps.
+echo '{"name":"lock","lockfileVersion":3,"added":"@codemirror/language-data"}' > "$DEPS/package-lock.json"
+if dependencies_are_current "$DEPS"; then
+  printf '  FAIL  a tree from an older lock file is accepted\n'; FAILED=1
+else
+  printf '  ok    a tree from an older lock file is rejected\n'
+fi
+
+# --- which packages are actually missing ------------------------------------ #
+# The order follows the workspace list, which is not something worth pinning.
+missing() { find_missing_dependencies "$DEPS" | LC_ALL=C sort | tr '\n' ' '; }
+check "missing dependencies are named" "$(missing)" "@codemirror/language-data express "
+
+mkdir -p "$DEPS/node_modules/express"
+echo '{"name":"express"}' > "$DEPS/node_modules/express/package.json"
+check "a hoisted package counts as installed" "$(missing)" "@codemirror/language-data "
+
+mkdir -p "$DEPS/web/node_modules/@codemirror/language-data"
+echo '{"name":"language-data"}' > "$DEPS/web/node_modules/@codemirror/language-data/package.json"
+check "a nested package counts as installed"  "$(missing)" ""
+check "a complete tree passes the gate again" "$(dependencies_are_current "$DEPS" && echo current)" ""
 
 # =========================================================================== #
 if [ "$FAILED" -eq 0 ]; then

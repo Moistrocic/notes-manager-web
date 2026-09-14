@@ -541,12 +541,85 @@ ok "application files copied"
 # --------------------------------------------------------------------------- #
 # 4. Dependencies + build                                                     #
 # --------------------------------------------------------------------------- #
+# copy_application() deliberately keeps node_modules between installs so that
+# re-installing stays fast. The cost is that a dependency added by "git pull"
+# will not exist unless npm runs, and "--skip-deps" then builds against a tree
+# that cannot satisfy package.json. That is not hypothetical: adding
+# @codemirror/language-data to web/package.json broke the build exactly this
+# way, 2000 modules into a Vite run, with an error that never mentions the real
+# cause. So the tree is fingerprinted and checked rather than trusted.
 export npm_config_cache="$INSTALL_DIR/.npm-cache"
 export npm_config_fund=false
 export npm_config_audit=false
 
+# Written after a successful install, compared on the next one.
+readonly DEPS_STAMP="node_modules/.notes-manager-lock"
+
+# A fingerprint of the lock file. sha256sum where it exists, POSIX cksum
+# everywhere else; either is more than enough to notice an edit.
+fingerprint_lock() {
+  local dir="$1"
+  [ -f "$dir/package-lock.json" ] || { printf 'no-lock-file'; return 0; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$dir/package-lock.json" | cut -d' ' -f1
+  else
+    cksum "$dir/package-lock.json" | tr -d '\n'
+  fi
+}
+
+write_deps_stamp() {
+  local dir="$1"
+  mkdir -p "$dir/node_modules"
+  fingerprint_lock "$dir" > "$dir/$DEPS_STAMP"
+}
+
+# True when the installed tree was produced from the current lock file.
+dependencies_are_current() {
+  local dir="$1"
+  [ -f "$dir/$DEPS_STAMP" ] || return 1
+  [ "$(cat "$dir/$DEPS_STAMP")" = "$(fingerprint_lock "$dir")" ]
+}
+
+# Dependencies declared by a workspace but absent from the installed tree, one
+# per line. npm hoists to the root, so both locations are checked.
+find_missing_dependencies() {
+  local dir="$1"
+  local node_bin="${NODE_BIN:-node}"
+  # Indented on purpose: scripts/test-install.sh extracts a function by reading
+  # to the first "}" in column 0, so nothing in here may sit at the margin.
+  NOTES_MANAGER_VERIFY_DIR="$dir" "$node_bin" -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const root = process.env.NOTES_MANAGER_VERIFY_DIR;
+    const workspaces = ["."].concat(
+      ["server", "web"].filter((name) => fs.existsSync(path.join(root, name, "package.json"))),
+    );
+    const missing = [];
+    for (const workspace of workspaces) {
+      const pkg = JSON.parse(fs.readFileSync(path.join(root, workspace, "package.json"), "utf8"));
+      const declared = Object.keys(pkg.dependencies || {}).concat(Object.keys(pkg.devDependencies || {}));
+      for (const name of declared) {
+        const found = [
+          path.join(root, "node_modules", name, "package.json"),
+          path.join(root, workspace, "node_modules", name, "package.json"),
+        ].some((candidate) => fs.existsSync(candidate));
+        if (!found) missing.push(name);
+      }
+    }
+    process.stdout.write(missing.join("\n"));
+  '
+}
+
 if [ "$SKIP_DEPS" = "1" ]; then
   warn "skipping npm install (--skip-deps)"
+  if dependencies_are_current "$INSTALL_DIR"; then
+    ok "installed dependencies match package-lock.json"
+  else
+    die "--skip-deps was given, but the dependency tree in $INSTALL_DIR does not
+       match package-lock.json, so it cannot be trusted. A dependency added by
+       git pull is only installed by npm. Re-run without --skip-deps:
+         sudo $SRC_DIR/scripts/install.sh"
+  fi
 else
   step "installing dependencies (this can take a few minutes)"
   cd "$INSTALL_DIR"
@@ -556,8 +629,20 @@ else
     "$NPM_BIN" install --no-audit --no-fund --loglevel=error
   fi
   cd - >/dev/null
+  write_deps_stamp "$INSTALL_DIR"
   ok "dependencies installed"
 fi
+
+# Last line of defence, and the one that produces a useful message: name the
+# packages instead of letting Vite fail on whichever import it reaches first.
+MISSING_DEPS="$(find_missing_dependencies "$INSTALL_DIR")"
+if [ -n "$MISSING_DEPS" ]; then
+  MISSING_DEPS_LIST="$(printf '%s\n' "$MISSING_DEPS" | sed 's/^/         /')"
+  die "these declared dependencies are not installed in $INSTALL_DIR:
+$MISSING_DEPS_LIST
+       Re-run this installer without --skip-deps so npm can install them."
+fi
+ok "all declared dependencies are present"
 
 if [ "$SKIP_BUILD" = "1" ]; then
   warn "skipping the build (--skip-build)"

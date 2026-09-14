@@ -280,6 +280,10 @@ sudo ./scripts/install.sh --port 8080 --openlist-url http://127.0.0.1:5244 --ope
 | `--admin-user` `--admin-password` `--no-local-auth` | 本地账户 |
 | `--skip-deps` `--skip-build` `--force-node` `--no-start` | 精细控制 |
 
+> `--skip-deps` 只在**依赖确实没变**时才用。安装脚本会保留 `node_modules` 以便快速重装，所以
+> `git pull` 带进来的新依赖只有跑过 npm 才会出现；脚本因此在校验 `package-lock.json` 指纹不符时
+> **直接拒绝并提示去掉 `--skip-deps`**，而不是等到构建时报一个看不懂的错。
+
 > `--base-path` 会被编译进前端资源路径（`VITE_BASE_PATH`），修改后需要重新执行安装或手动
 > `VITE_BASE_PATH=/notes npm run build`。
 
@@ -289,6 +293,16 @@ sudo ./scripts/install.sh --port 8080 --openlist-url http://127.0.0.1:5244 --ope
 sudo ./scripts/uninstall.sh           # 停服务、禁用开机自启、删除程序文件，保留数据与配置
 sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次确认）与系统用户
 ```
+
+### 升级到新版本
+
+```bash
+cd ~/notes-manager-web && git pull
+sudo ./scripts/install.sh          # 不要加 --skip-deps
+```
+
+> `git pull` 可能带来新的依赖，只有 npm 会把它们装上。安装脚本会比对 `package-lock.json` 的
+> 指纹，不一致时拒绝使用 `--skip-deps` 并在构建前逐个列出缺失的依赖包。
 
 ### 服务管理
 
@@ -414,6 +428,18 @@ notes-manager-web/
 
 > 字体是整站设置（所有用户共享）；壁纸是**每台浏览器各自的偏好**，因为需求是"仅前端支持、
 > 不需要服务器"。卸载脚本执行 `--purge` 时会连同数据目录一起删除。
+
+**Q：更新后构建失败，报 `Rollup failed to resolve import "..."`？**
+
+某个依赖没装上。安装脚本会保留上一次的 `node_modules` 以加快重装，如果升级时用了
+`--skip-deps`，`git pull` 带进来的新依赖就不会被安装：
+
+```bash
+cd ~/notes-manager-web && git pull
+sudo ./scripts/install.sh          # 关键：不要带 --skip-deps
+```
+
+现在的脚本会在构建前就拦住这种情况，直接列出缺失的依赖包名，不会再让你对着 Vite 的报错猜。
 
 **Q：面板显示「OpenList 无法连接」，但我用浏览器打开 OpenList 是好的？**
 
