@@ -136,9 +136,17 @@ SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
 # 2) 渲染检查：在 Node 中渲染整个组件树，覆盖启动页 / 登录页 / 工作台 / 弹窗
 npm run check:render
 
-# 3) 类型检查
+# 3) 安装脚本拷贝逻辑回归测试（从 install.sh 提取真实函数执行，14 项断言）
+npm run test:installer
+
+# 4) 仓库完整性检查：磁盘上的源文件是否都在 git 里
+npm run check:repo
+
+# 5) 类型检查
 npm run typecheck
 ```
+
+以上 5 项都会在 GitHub Actions 中自动执行（`.github/workflows/ci.yml`），另外还会跑 `shellcheck`。
 
 ---
 
@@ -166,10 +174,12 @@ sudo ./scripts/install.sh \
 1. 检测/安装 Node.js（优先系统包管理器 + NodeSource，失败则下载官方 tarball 到 `/usr/local/lib/nodejs`）
 2. 创建系统用户与目录：`/opt/notes-manager`、`/var/lib/notes-manager`、`/etc/notes-manager`
 3. 拷贝源码（自动排除 `node_modules`、`.git`、克隆的 `openlist/`、构建产物）
-4. `npm ci` + `npm run build`
-5. 生成配置文件 `/etc/notes-manager/notes-manager.env`（含随机管理员密码）
-6. 写入并启用 systemd 服务 `notes-manager.service`（带 `NoNewPrivileges`、`ProtectSystem` 等加固）
-7. 启动服务并做健康检查，最后打印访问地址、账号密码与常用命令
+4. 通过 `find -prune` + `tar` 精确拷贝源码（不使用 rsync 的 glob 排除规则，避免误伤
+   `server/src/integrations/openlist/` 这类同名嵌套目录），随后再次校验关键文件确实落地
+5. `npm ci` + `npm run build`
+6. 生成配置文件 `/etc/notes-manager/notes-manager.env`（含随机管理员密码）
+7. 写入并启用 systemd 服务 `notes-manager.service`（带 `NoNewPrivileges`、`ProtectSystem` 等加固）
+8. 启动服务并做健康检查，最后打印访问地址、账号密码与常用命令
 
 常用参数（`sudo ./scripts/install.sh --help` 查看全部）：
 

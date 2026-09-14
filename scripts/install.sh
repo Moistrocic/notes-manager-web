@@ -139,23 +139,38 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SRC_DIR/package.json" ] || die "package.json not found in $SRC_DIR - run this script from the project"
 [ -f "$SRC_DIR/server/package.json" ] || die "server/ not found in $SRC_DIR"
 
-# Fail fast - and with a useful message - when the checkout is incomplete.
-# (A missing source file otherwise surfaces as a wall of TypeScript errors.)
-missing=""
-for required in \
-  server/src/index.ts \
-  server/src/integrations/openlist/client.ts \
-  server/src/storage/manager.ts \
-  server/src/notes/repository.ts \
-  web/src/main.tsx \
-  web/src/App.tsx \
-  web/package.json; do
-  [ -f "$SRC_DIR/$required" ] || missing="$missing\n    - $required"
-done
-if [ -n "$missing" ]; then
-  printf '%b\n' "«C_RED»[error]«C_RESET» the source tree in $SRC_DIR is incomplete:$missing" >&2
-  die "update the checkout (git pull) and run the installer again"
-fi
+# Sources that must exist before the build. They are checked twice - once on the
+# checkout and once again after copying - because a bad file filter can silently
+# drop a directory, and the only symptom would be a wall of TypeScript errors
+# much later in the run.
+CRITICAL_SOURCES="
+server/src/index.ts
+server/src/integrations/openlist/client.ts
+server/src/storage/manager.ts
+server/src/notes/repository.ts
+web/src/main.tsx
+web/src/App.tsx
+web/package.json
+"
+
+# verify_tree <directory> <label>
+verify_tree() {
+  local dir="$1" label="$2" required missing=""
+  for required in $CRITICAL_SOURCES; do
+    if [ ! -f "$dir/$required" ]; then
+      missing="$missing
+    - $required"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    printf '%b\n' "«C_RED»[error]«C_RESET» $label is incomplete:$missing" >&2
+    return 1
+  fi
+  return 0
+}
+
+verify_tree "$SRC_DIR" "the source tree in $SRC_DIR" \
+  || die "run 'git pull' in $SRC_DIR to update the checkout, then try again"
 
 if [ "$(id -u)" -ne 0 ]; then
   die "please run as root: sudo $0 ..."
@@ -316,23 +331,53 @@ fi
 
 mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR"
 chmod 750 "$DATA_DIR" "$CONFIG_DIR"
-
 # --------------------------------------------------------------------------- #
 # 3. Copy the application                                                     #
 # --------------------------------------------------------------------------- #
+# The copy uses `find -prune` + tar rather than rsync on purpose. rsync matches
+# an exclude pattern without a "/" against the *final path component* at any
+# depth, so "--exclude openlist" also swallowed server/src/integrations/openlist/
+# and the build failed with TS2307. `find -path` matches exact paths instead.
+copy_application() {
+  local src="$1" dst="$2" entry
+
+  case "$dst" in
+    /|/usr|/usr/*|/etc|/etc/*|/bin|/sbin|/lib|/lib/*|/boot|/var)
+      die "refusing to use $dst as the install directory" ;;
+  esac
+
+  # Full resync: drop the previous application files but keep the dependency
+  # tree and the npm cache so that re-installing stays fast.
+  for entry in "$dst"/* "$dst"/.[!.]*; do
+    [ -e "$entry" ] || continue
+    case "${entry##*/}" in
+      node_modules|.npm-cache) continue ;;
+    esac
+    rm -rf "$entry"
+  done
+
+  (
+    cd "$src" || exit 1
+    find . -mindepth 1 \
+      \( -name node_modules -o -name .npm-cache -o -name .git \) -prune -o \
+      -path './openlist' -prune -o \
+      -path './tmp' -prune -o \
+      -path './data' -prune -o \
+      -path './.env' -prune -o \
+      -path './web/dist' -prune -o \
+      -path './server/dist' -prune -o \
+      -type f -print
+  ) | tar -cf - -T - | ( cd "$dst" && tar -xf - )
+
+  # tar preserves modes, but keep the helper scripts executable even on tar
+  # builds or filesystems that drop the bit.
+  chmod +x "$dst"/scripts/*.sh 2>/dev/null || true
+}
+
 step "copying the application to $INSTALL_DIR"
-if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete \
-    --exclude 'node_modules' --exclude '.git' --exclude 'openlist' \
-    --exclude '.npm-cache' --exclude 'tmp' --exclude 'data' \
-    --exclude '.env' --exclude 'web/dist' --exclude 'server/dist' \
-    "$SRC_DIR/" "$INSTALL_DIR/"
-else
-  ( cd "$SRC_DIR" && tar -cf - \
-      --exclude='./node_modules' --exclude='./.git' --exclude='./openlist' \
-      --exclude='./.npm-cache' --exclude='./tmp' --exclude='./data' \
-      --exclude='./.env' --exclude='./web/dist' --exclude='./server/dist' . ) | ( cd "$INSTALL_DIR" && tar -xf - )
-fi
+copy_application "$SRC_DIR" "$INSTALL_DIR"
+verify_tree "$INSTALL_DIR" "the copied tree in $INSTALL_DIR" \
+  || die "the file copy dropped source files - please report this together with the installer output"
 ok "application files copied"
 
 # --------------------------------------------------------------------------- #
