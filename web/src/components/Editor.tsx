@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
-import { extractHeadings } from '../lib/outline';
+import { extractHeadings, type Heading } from '../lib/outline';
 import { replaceAnchor } from '../lib/url';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
@@ -115,16 +115,36 @@ export function Editor() {
     [setSplitRatio],
   );
 
-  /** Jumps both panes to an in-page anchor (`[text](#slug)`). */
+  /**
+   * The single way to move inside the open note.
+   *
+   * Every entry point - the outline, a `[text](#anchor)` link, a deep link -
+   * goes through here, so the address bar, the editor and the preview always
+   * agree. They previously drifted: the outline scrolled both panes but left the
+   * address bar alone, while an anchor link updated the address bar but not the
+   * editor.
+   */
+  const goToHeading = useCallback((heading: Heading, index: number) => {
+    replaceAnchor(slugifyHeading(heading.text));
+    apiRef.current?.revealLine(heading.line);
+    previewApiRef.current?.scrollToHeading({ index, text: heading.text, level: heading.level });
+  }, []);
+
+  /** Follows a `#anchor` link written inside a note. */
   const followAnchor = useCallback(
     (anchor: string) => {
-      replaceAnchor(anchor);
       const content = useAppStore.getState().activeNote?.content ?? '';
       const headings = extractHeadings(content);
       const index = headings.findIndex((h) => slugifyHeading(h.text) === anchor);
-      if (index >= 0) apiRef.current?.revealLine(headings[index].line);
+      if (index >= 0) {
+        goToHeading(headings[index], index);
+        return;
+      }
+      // Not a heading: still record it and let the preview find any element.
+      replaceAnchor(anchor);
+      previewApiRef.current?.scrollToAnchor(anchor);
     },
-    [],
+    [goToHeading],
   );
 
   // A deep link (`.../Readme.md#11-分层`) can only be applied once the note and
@@ -134,17 +154,12 @@ export function Editor() {
     const timer = window.setTimeout(() => {
       const headings = extractHeadings(activeNote.content);
       const index = headings.findIndex((h) => slugifyHeading(h.text) === pendingAnchor);
-      if (index >= 0) {
-        const heading = headings[index];
-        apiRef.current?.revealLine(heading.line);
-        previewApiRef.current?.scrollToHeading({ index, text: heading.text, level: heading.level });
-      } else {
-        previewApiRef.current?.scrollToAnchor(pendingAnchor);
-      }
+      if (index >= 0) goToHeading(headings[index], index);
+      else previewApiRef.current?.scrollToAnchor(pendingAnchor);
       setPendingAnchor(null);
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [pendingAnchor, activeNote, setPendingAnchor]);
+  }, [pendingAnchor, activeNote, setPendingAnchor, goToHeading]);
 
   // While dragging, keep the pointer and suppress text selection everywhere.
   useEffect(() => {
@@ -459,7 +474,7 @@ export function Editor() {
               transition={{ type: 'spring', stiffness: 320, damping: 34 }}
               className="shrink-0 overflow-hidden"
             >
-              <OutlinePanel editorApiRef={apiRef} previewApiRef={previewApiRef} />
+              <OutlinePanel onNavigate={goToHeading} />
             </motion.div>
           ) : null}
         </AnimatePresence>

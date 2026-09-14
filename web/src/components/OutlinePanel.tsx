@@ -2,34 +2,23 @@ import { motion } from 'framer-motion';
 import { ListTree, PanelRightClose } from 'lucide-react';
 import { useMemo } from 'react';
 import { cn } from '../lib/cn';
-import { extractHeadings } from '../lib/outline';
+import { extractHeadings, type Heading } from '../lib/outline';
 import { useAppStore } from '../store/useAppStore';
-import type { EditorApi } from './CodeEditor';
-import type { PreviewApi } from './Preview';
 
-/** Document outline. It shares the editor's content row so it lines up with the note. */
-export function OutlinePanel({
-  editorApiRef,
-  previewApiRef,
-}: {
-  editorApiRef: { current: EditorApi | null };
-  previewApiRef: { current: PreviewApi | null };
-}) {
+/**
+ * Document outline. It shares the editor's content row so it lines up with the
+ * note.
+ *
+ * Navigation itself is the editor's job: the outline only says which heading was
+ * picked, so that the address bar, the editor and the preview cannot drift apart
+ * (they did when each of them had its own idea of what a click means).
+ */
+export function OutlinePanel({ onNavigate }: { onNavigate: (heading: Heading, index: number) => void }) {
   const activeNote = useAppStore((s) => s.activeNote);
   const toggleMeta = useAppStore((s) => s.toggleMeta);
   const headings = useMemo(() => extractHeadings(activeNote?.content ?? ''), [activeNote?.content]);
 
   if (!activeNote) return null;
-
-  /**
-   * Jump to a heading in *both* panes. In split view they are independent
-   * scrollers, so moving only the editor leaves the preview showing something
-   * else entirely.
-   */
-  const goTo = (heading: { text: string; level: number; line: number }, index: number) => {
-    editorApiRef.current?.revealLine(heading.line);
-    previewApiRef.current?.scrollToHeading({ index, text: heading.text, level: heading.level });
-  };
 
   return (
     <div className="outline-panel flex h-full w-[228px] shrink-0 flex-col border-l border-[var(--line)]">
@@ -62,7 +51,7 @@ export function OutlinePanel({
               >
                 <button
                   type="button"
-                  onClick={() => goTo(heading, index)}
+                  onClick={() => onNavigate(heading, index)}
                   title={heading.text}
                   className={cn(
                     'focus-ring flex w-full items-center gap-1.5 rounded-lg py-1 pr-1.5 text-left text-[12px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] hover:text-[var(--accent)]',

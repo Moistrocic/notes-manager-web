@@ -170,6 +170,7 @@ SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
 #    render-check  渲染整个组件树（启动页/登录页/工作台/弹窗/只读/专注模式）
 #    store-check   驱动 store 验证「什么时候才会触发保存」
 #    outline-check 大纲/锚点 slug 与渲染器逐项对齐（跳转不会错位）
+#    dom-check     jsdom 中真实点击大纲与锚点链接，断言地址栏/编辑器/预览三者一致
 npm run check:web
 
 # 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行，48 项断言）

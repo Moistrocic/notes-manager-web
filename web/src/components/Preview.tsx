@@ -54,8 +54,12 @@ export function Preview({ content, className, onOpenLink, onOpenAnchor, apiRef }
       scrollToAnchor(id) {
         const container = containerRef.current;
         if (!container || !id) return false;
+        const escaped =
+          typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+            ? CSS.escape(id)
+            : id.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
         const target =
-          container.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ??
+          container.querySelector<HTMLElement>(`#${escaped}`) ??
           // fall back to a slug match when the id came from a slightly
           // different text (markdown formatting inside the heading)
           Array.from(container.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')).find(
@@ -105,8 +109,10 @@ export function Preview({ content, className, onOpenLink, onOpenAnchor, apiRef }
       } catch {
         /* keep the raw value */
       }
-      apiRef?.current?.scrollToAnchor(id);
+      // Report first: the app has to learn about the anchor even if scrolling
+      // fails, otherwise the address bar silently keeps the old value.
       onOpenAnchor?.(id);
+      apiRef?.current?.scrollToAnchor(id);
       return;
     }
 

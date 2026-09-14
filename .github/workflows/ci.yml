@@ -31,8 +31,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Renders the component tree in Node (splash, login, workspace, dialogs)
-      # and drives the store to assert when a save is issued.
+      # Renders the component tree in Node (splash, login, workspace, dialogs),
+      # drives the store to assert when a save is issued, checks the outline
+      # against the renderer, and clicks through the navigation in jsdom.
       - name: Web checks
         run: npm run check:web
 

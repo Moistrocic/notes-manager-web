@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check:web": "vite build --config vite.ssr.config.ts --logLevel warn && node .ssr-out/render-check.js && node .ssr-out/store-check.js && node .ssr-out/outline-check.js"
+    "check:web": "vite build --config vite.ssr.config.ts --logLevel warn && node .ssr-out/render-check.js && node .ssr-out/store-check.js && node .ssr-out/outline-check.js && node .ssr-out/dom-check.js"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -34,6 +34,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
+    "jsdom": "^30.0.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^7.3.6"
