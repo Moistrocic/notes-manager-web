@@ -1,0 +1,14 @@
+# Normalise everything to LF so the Linux installer scripts keep working after
+# a checkout on Windows (core.autocrlf would otherwise rewrite them to CRLF).
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.bash text eol=lf
+
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
