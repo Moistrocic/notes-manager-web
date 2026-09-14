@@ -1,4 +1,5 @@
-import { create } from 'zustand';
+import { useStore } from 'zustand';
+import { createStore } from 'zustand/vanilla';
 import { api } from '../lib/api';
 import { stripMarkdown } from '../lib/markdown';
 import { ApiError } from '../lib/types';
@@ -157,7 +158,12 @@ function toSummary(note: Note): NoteSummary {
   return { ...rest, excerpt: stripMarkdown(note.content, 200) };
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
+/**
+ * The store is created as a vanilla store so the API object is reachable from
+ * outside React (tests, hotkeys, non-component code) while `useAppStore`
+ * behaves exactly like the usual zustand hook.
+ */
+export const appStore = createStore<AppState>((set, get) => ({
   booted: false,
   bootError: null,
   providers: null,
@@ -562,3 +568,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 }));
+
+const useAppStoreBase = <T,>(selector: (state: AppState) => T): T => useStore(appStore, selector);
+
+/** zustand hook with the vanilla store API attached (`getState`, `setState`, …). */
+export const useAppStore = Object.assign(useAppStoreBase, appStore);

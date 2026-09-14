@@ -19,6 +19,8 @@
     "dev:web": "npm run dev --workspace web",
     "start": "node server/dist/index.js",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
-    "smoke": "node scripts/smoke-test.mjs"
+    "check:render": "npm run check:render --workspace web",
+    "smoke": "node scripts/smoke-test.mjs",
+    "mock:openlist": "node scripts/mock-openlist.mjs"
   }
 }

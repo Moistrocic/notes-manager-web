@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:render": "vite build --config vite.ssr.config.ts --logLevel warn && node .ssr-out/render-check.js"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

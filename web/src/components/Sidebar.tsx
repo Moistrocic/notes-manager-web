@@ -7,7 +7,6 @@ import {
   Layers,
   LogOut,
   Moon,
-  PanelLeft,
   Plus,
   Settings,
   Star,
@@ -15,6 +14,7 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '../lib/cn';
 import { formatNumber } from '../lib/format';
@@ -313,7 +313,7 @@ function SidebarItem({
   onClick,
 }: {
   label: string;
-  icon: typeof PanelLeft;
+  icon: LucideIcon;
   count?: number;
   active: boolean;
   onClick: () => void;

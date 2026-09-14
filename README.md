@@ -125,15 +125,19 @@ node scripts/mock-openlist.mjs --port 5244 --root ./tmp/mock-openlist
 
 随后在面板「设置」里把 OpenList 地址填成 `http://127.0.0.1:5244` 即可。
 
-### 冒烟测试
+### 测试
 
 ```bash
-# 本地磁盘模式（provider=local）
-node scripts/smoke-test.mjs http://127.0.0.1:8080 admin <password>
-
-# OpenList 模式（provider=openlist）
+# 1) 接口冒烟测试：登录 → 增删改查 → 标签 / 文件夹 / 回收站 → 退出（22 项断言）
+node scripts/smoke-test.mjs http://127.0.0.1:8080 admin <password>          # 本地磁盘模式
 SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
-  node scripts/smoke-test.mjs http://127.0.0.1:8080
+  node scripts/smoke-test.mjs http://127.0.0.1:8080                        # OpenList 模式
+
+# 2) 渲染检查：在 Node 中渲染整个组件树，覆盖启动页 / 登录页 / 工作台 / 弹窗
+npm run check:render
+
+# 3) 类型检查
+npm run typecheck
 ```
 
 ---
@@ -276,6 +280,7 @@ notes-manager-web/
 │   ├── uninstall.sh             # 一键卸载
 │   ├── mock-openlist.mjs        # OpenList 兼容模拟服务（开发/测试）
 │   └── smoke-test.mjs           # 端到端接口冒烟测试
+├── web/render-check.tsx         # 组件树渲染检查（npm run check:render）
 ├── openlist/                    # OpenList 源码（仅用于阅读参考，已在 .gitignore 中忽略）
 ├── .env.example
 └── package.json                 # npm workspaces（server + web）
