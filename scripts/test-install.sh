@@ -2,11 +2,16 @@
 # =============================================================================
 #  Tests for the installer (scripts/install.sh).
 # =============================================================================
-#  The functions under test are extracted straight out of install.sh, so these
-#  tests exercise the shipped implementation rather than a copy of it.
+#  Three of the four suites extract the real functions / configuration section
+#  out of install.sh, and the last one executes install.sh itself, so ordering
+#  mistakes at the top level are covered too.
 #
 #    bash scripts/test-install.sh
 # =============================================================================
+# shellcheck disable=SC2034
+#   The fixture variables in the "runtime configuration" suite are read by the
+#   configuration section that is extracted from install.sh and evaluated here;
+#   shellcheck cannot follow that, so unused-variable warnings are off.
 set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -21,18 +26,14 @@ check() {
   if [ "$2" = "$3" ]; then
     printf '  ok    %s\n' "$1"
   else
-    printf '  FAIL  %s (got %s, want %s)\n' "$1" "$2" "$3"
+    printf '  FAIL  %s (got [%s], want [%s])\n' "$1" "$2" "$3"
     FAILED=1
   fi
 }
 exists() { [ -e "$1" ] && echo yes || echo no; }
 
 # --- stubs for the parts of install.sh we do not want to run --------------- #
-# C_RED/C_RESET are read by the verify_tree() body that is extracted from
-# install.sh and evaluated below; shellcheck cannot see those references.
-# shellcheck disable=SC2034
 C_RED=""
-# shellcheck disable=SC2034
 C_RESET=""
 die() { printf '[test] die: %s\n' "$*" >&2; return 1; }
 
@@ -51,7 +52,6 @@ for fn in verify_tree copy_application read_env_value set_env_value; do
   eval "$body"
 done
 
-# the list of sources verify_tree() insists on
 critical="$(sed -n '/^CRITICAL_SOURCES="/,/^"$/p' "$INSTALLER")"
 [ -n "$critical" ] || { echo "could not extract CRITICAL_SOURCES from install.sh" >&2; exit 1; }
 eval "$critical"
@@ -73,26 +73,26 @@ EMPTY=
 # COMMENTED=9
 ENV_FIXTURE
 
-check "plain value"              "$(read_env_value "$ENVFILE" PORT)" "8080"
-check "double quoted value"      "$(read_env_value "$ENVFILE" HOST)" "192.168.1.10"
-check "single quotes keep #"     "$(read_env_value "$ENVFILE" TOKEN)" "se#cret"
-check "trailing comment stripped" "$(read_env_value "$ENVFILE" WITH_COMMENT)" "value"
-check "empty value"              "$(read_env_value "$ENVFILE" EMPTY)" ""
-check "indented key"             "$(read_env_value "$ENVFILE" INDENTED)" "1"
-check "commented key is ignored" "$(read_env_value "$ENVFILE" COMMENTED 2>/dev/null || echo ABSENT)" "ABSENT"
-check "missing key is ignored"   "$(read_env_value "$ENVFILE" NOPE 2>/dev/null || echo ABSENT)" "ABSENT"
-check "missing file is ignored"  "$(read_env_value "$WORK/nope.env" PORT 2>/dev/null || echo ABSENT)" "ABSENT"
+check "plain value"                "$(read_env_value "$ENVFILE" PORT)" "8080"
+check "double quoted value"        "$(read_env_value "$ENVFILE" HOST)" "192.168.1.10"
+check "single quotes keep #"       "$(read_env_value "$ENVFILE" TOKEN)" "se#cret"
+check "trailing comment stripped"  "$(read_env_value "$ENVFILE" WITH_COMMENT)" "value"
+check "empty value"                "$(read_env_value "$ENVFILE" EMPTY)" ""
+check "indented key"               "$(read_env_value "$ENVFILE" INDENTED)" "1"
+check "commented key is ignored"   "$(read_env_value "$ENVFILE" COMMENTED 2>/dev/null || echo ABSENT)" "ABSENT"
+check "missing key is ignored"     "$(read_env_value "$ENVFILE" NOPE 2>/dev/null || echo ABSENT)" "ABSENT"
+check "missing file is ignored"    "$(read_env_value "$WORK/nope.env" PORT 2>/dev/null || echo ABSENT)" "ABSENT"
 
 set_env_value "$ENVFILE" PORT 9000
-check "existing key replaced"    "$(read_env_value "$ENVFILE" PORT)" "9000"
-check "no duplicate left behind" "$(grep -c '^PORT=' "$ENVFILE")" "1"
+check "existing key replaced"      "$(read_env_value "$ENVFILE" PORT)" "9000"
+check "no duplicate left behind"   "$(grep -c '^PORT=' "$ENVFILE")" "1"
 set_env_value "$ENVFILE" NEWKEY "hello world"
-check "new key appended"         "$(read_env_value "$ENVFILE" NEWKEY)" "hello world"
-check "surrounding comments kept" "$(grep -c '^# leading comment$' "$ENVFILE")" "1"
+check "new key appended"           "$(read_env_value "$ENVFILE" NEWKEY)" "hello world"
+check "surrounding comments kept"  "$(grep -c '^# leading comment$' "$ENVFILE")" "1"
 set_env_value "$ENVFILE" DUP first
 set_env_value "$ENVFILE" DUP second
 check "repeated writes stay single" "$(grep -c '^DUP=' "$ENVFILE")" "1"
-check "repeated writes win"      "$(read_env_value "$ENVFILE" DUP)" "second"
+check "repeated writes win"        "$(read_env_value "$ENVFILE" DUP)" "second"
 
 # =========================================================================== #
 # 2. application copy                                                         #
@@ -123,7 +123,6 @@ echo build > "$SRC/server/dist/index.js"
 echo sh    > "$SRC/scripts/install.sh"
 chmod 755 "$SRC/scripts/install.sh"
 
-# every entry of CRITICAL_SOURCES
 echo idx  > "$SRC/server/src/index.ts"
 echo cli  > "$SRC/server/src/integrations/openlist/client.ts"   # <-- the regression
 echo mgr  > "$SRC/server/src/storage/manager.ts"                 #     case
@@ -134,11 +133,9 @@ echo app  > "$SRC/web/src/App.tsx"
 echo wpkg > "$SRC/web/package.json"
 echo spkg > "$SRC/server/package.json"
 
-# a stale file from a previous release must be wiped by the resync
 echo stale > "$DST/obsolete-module.js"
 mkdir -p "$DST/node_modules/keepme"
 echo keep > "$DST/node_modules/keepme/index.js"
-# while local configuration and the dependency tree must survive it
 echo 'PORT=9000' > "$DST/.env"
 
 copy_application "$SRC" "$DST"
@@ -146,7 +143,7 @@ verify_tree "$DST" "copied tree"
 
 check "nested server/src/integrations/openlist/client.ts copied" "$(exists "$DST/server/src/integrations/openlist/client.ts")" "yes"
 check "root reference clone openlist/ excluded"                  "$(exists "$DST/openlist")" "no"
-check "node_modules excluded from the copy source"               "$(exists "$DST/.git")" "no"
+check ".git excluded"                                            "$(exists "$DST/.git")" "no"
 check ".npm-cache excluded"                                      "$(exists "$DST/.npm-cache")" "no"
 check "tmp excluded"                                             "$(exists "$DST/tmp")" "no"
 check "data excluded"                                            "$(exists "$DST/data")" "no"
@@ -160,7 +157,6 @@ check "stale file from a previous release removed"               "$(exists "$DST
 check "existing node_modules preserved"                          "$(exists "$DST/node_modules/keepme/index.js")" "yes"
 check "existing .env preserved across a reinstall"               "$(exists "$DST/.env")" "yes"
 
-# verify_tree must also fail loudly on an incomplete tree
 rm -f "$DST/server/src/integrations/openlist/client.ts"
 if verify_tree "$DST" "broken tree" >/dev/null 2>&1; then
   printf '  FAIL  verify_tree accepts a tree with missing sources\n'
@@ -175,8 +171,8 @@ fi
 echo ""
 echo "runtime configuration"
 
-CFG_SRC="$WORK/project"
-CFG_INSTALL="$WORK/opt"
+CFG_SRC="$WORK/cfg-src"
+CFG_INSTALL="$WORK/cfg-install"
 mkdir -p "$CFG_SRC" "$CFG_INSTALL"
 cat > "$CFG_SRC/.env" <<'ENV_FIXTURE'
 # user configuration, exactly as "cp .env.example .env" would leave it
@@ -194,34 +190,29 @@ NOTES_ROOT=./data/notes
 LOG_LEVEL=debug
 ENV_FIXTURE
 
-# These are the variables the configuration section of install.sh expects. They
-# are exported so that shellcheck does not report them as unused - the section
-# that reads them is extracted and evaluated at runtime, which shellcheck
-# cannot follow.
-export SRC_DIR="$CFG_SRC"
-export SOURCE_ENV="$SRC_DIR/.env"
-export INSTALL_DIR="$CFG_INSTALL"
-export RUNTIME_ENV="$INSTALL_DIR/.env"
-export CONFIG_DIR="$WORK/etc"
-export SERVICE_NAME="notes-manager"
-export SERVICE_USER
+SRC_DIR="$CFG_SRC"
+SOURCE_ENV="$SRC_DIR/.env"
+INSTALL_DIR="$CFG_INSTALL"
+RUNTIME_ENV="$INSTALL_DIR/.env"
+CONFIG_DIR="$WORK/etc"
+SERVICE_NAME="notes-manager"
 SERVICE_USER="$(id -un)"
-export DATA_DIR="$WORK/var-lib"
-export DEFAULT_DATA_DIR="$WORK/var-lib"
-export ADMIN_PASSWORD_GENERATED="0"
-export configured_data_dir="./data"
-export HOST="127.0.0.1"
-export PORT="9777"
-export BASE_PATH=""
-export PUBLIC_URL=""
-export STORAGE_DRIVER="openlist"
-export OPENLIST_URL="http://127.0.0.1:5244"
-export OPENLIST_TOKEN=""
-export OPENLIST_ROOT="/my-notes"
-export OPENLIST_PER_USER="false"
-export ADMIN_USERNAME="boss"
-export ADMIN_PASSWORD="secret-from-dotenv"
-export AUTH_LOCAL_ENABLED="true"
+DATA_DIR="$WORK/var-lib"
+DEFAULT_DATA_DIR="$WORK/var-lib"
+ADMIN_PASSWORD_GENERATED="0"
+configured_data_dir="./data"
+HOST="127.0.0.1"
+PORT="9777"
+BASE_PATH=""
+PUBLIC_URL=""
+STORAGE_DRIVER="openlist"
+OPENLIST_URL="http://127.0.0.1:5244"
+OPENLIST_TOKEN=""
+OPENLIST_ROOT="/my-notes"
+OPENLIST_PER_USER="false"
+ADMIN_USERNAME="boss"
+ADMIN_PASSWORD="secret-from-dotenv"
+AUTH_LOCAL_ENABLED="true"
 
 # the section under test only prints and chowns; stub both out
 step() { :; }
@@ -245,40 +236,121 @@ check "ADMIN_PASSWORD kept as configured"    "$(read_env_value "$RUNTIME_ENV" AD
 check "LOG_LEVEL preserved"                  "$(read_env_value "$RUNTIME_ENV" LOG_LEVEL)" "debug"
 check "relative DATA_DIR made absolute"      "$(read_env_value "$RUNTIME_ENV" DATA_DIR)" "$DATA_DIR"
 check "relative NOTES_ROOT follows DATA_DIR" "$(read_env_value "$RUNTIME_ENV" NOTES_ROOT)" "$DATA_DIR/notes"
-check "comments from the source .env survive" "$(grep -c '^# user configuration' "$RUNTIME_ENV" || true)" "1"
+check "comments from the source .env survive" "$(grep -c '^# user configuration' "$RUNTIME_ENV")" "1"
 
-# an absolute NOTES_ROOT must be respected
 set_env_value "$SOURCE_ENV" NOTES_ROOT /srv/notes
 : > "$RUNTIME_ENV"
 eval "$cfg_block"
 check "absolute NOTES_ROOT respected"        "$(read_env_value "$RUNTIME_ENV" NOTES_ROOT)" "/srv/notes"
 
-# A re-install must not rotate the administrator password: the project .env no
-# longer carries one (it was consumed on the first install), so the password
-# already present in the runtime file has to win.
+# A reinstall must not rotate the administrator password: the project .env no
+# longer carries one, so the value already in the runtime file has to win.
 set_env_value "$SOURCE_ENV" ADMIN_PASSWORD ""
 ADMIN_PASSWORD=""
-export ADMIN_PASSWORD
 eval "$cfg_block"
 check "existing password survives reinstall" "$(read_env_value "$RUNTIME_ENV" ADMIN_PASSWORD)" "secret-from-dotenv"
 
-# ...and a password given on the command line still overrides it
-export ADMIN_PASSWORD="from-command-line"
+ADMIN_PASSWORD="from-command-line"
 eval "$cfg_block"
 check "command line password overrides"      "$(read_env_value "$RUNTIME_ENV" ADMIN_PASSWORD)" "from-command-line"
 ADMIN_PASSWORD=""
-export ADMIN_PASSWORD
 
-# an empty runtime file (fresh install) gets a generated password
 rm -f "$RUNTIME_ENV"
 set_env_value "$SOURCE_ENV" ADMIN_PASSWORD ""
 ADMIN_PASSWORD=""
-export ADMIN_PASSWORD
 eval "$cfg_block"
 generated="$(read_env_value "$RUNTIME_ENV" ADMIN_PASSWORD)"
 check "fresh install generates a password"   "$([ -n "$generated" ] && echo yes || echo no)" "yes"
 check "generated password has 18 chars"      "${#generated}" "18"
 
+# =========================================================================== #
+# 4. resolved configuration - runs the real install.sh --check-config         #
+# =========================================================================== #
+echo ""
+echo "resolved configuration (install.sh --check-config)"
+
+PROJ="$WORK/ckproj"
+mkdir -p "$PROJ/scripts" "$PROJ/server" "$PROJ/web"
+cp "$INSTALLER" "$PROJ/scripts/install.sh"
+echo '{}' > "$PROJ/package.json"
+echo '{}' > "$PROJ/server/package.json"
+for rel in $CRITICAL_SOURCES; do
+  mkdir -p "$PROJ/$(dirname "$rel")"
+  echo x > "$PROJ/$rel"
+done
+
+out=""
+LAST_STATUS=0
+run_installer() {
+  LAST_STATUS=0
+  out="$( cd "$PROJ" && bash scripts/install.sh "$@" 2>&1 )" || LAST_STATUS=$?
+}
+
+# cfg <label> - the value printed for a label in the resolved configuration
+cfg() {
+  printf '%s\n' "$out" | sed -n "s/^  $1  *//p" | head -n 1
+}
+
+# -- defaults, no .env ------------------------------------------------------- #
+run_installer --check-config
+check "runs without root and without a .env"  "$LAST_STATUS" "0"
+check "port defaults to 8080"                 "$(cfg listen)" "0.0.0.0:8080"
+check "storage driver defaults to auto"       "$(cfg 'storage driver')" "auto"
+check "openlist root default"                 "$(cfg 'openlist root')" "/notes"
+check "openlist url unset"                    "$(cfg 'openlist url')" "(not configured)"
+check "openlist token unset"                  "$(cfg 'openlist token')" "(not set)"
+check "admin user default"                    "$(cfg 'admin user')" "admin"
+check "password marked as generated"          "$(cfg 'admin password')" "(will be generated)"
+check "runtime file next to the install dir"  "$(cfg 'runtime .env')" "/opt/notes-manager/.env"
+check "source .env reported as missing"       "$(cfg 'source .env')" "$PROJ/.env (not found - defaults are used)"
+
+# -- values flow from .env --------------------------------------------------- #
+cat > "$PROJ/.env" <<'ENV_FIXTURE'
+PORT=9123
+HOST=127.0.0.1
+BASE_PATH=/notes
+STORAGE_DRIVER=openlist
+OPENLIST_URL=http://127.0.0.1:5244
+OPENLIST_TOKEN=token-abc
+OPENLIST_ROOT=/my-notes
+OPENLIST_PER_USER=true
+ADMIN_USERNAME=boss
+ADMIN_PASSWORD=pw-from-dotenv
+AUTH_LOCAL_ENABLED=false
+DATA_DIR=./data
+NOTES_ROOT=./data/notes
+ENV_FIXTURE
+
+run_installer --check-config
+check "port comes from .env"                  "$(cfg listen)" "127.0.0.1:9123/notes"
+check "storage driver comes from .env"        "$(cfg 'storage driver')" "openlist"
+check "openlist url comes from .env"          "$(cfg 'openlist url')" "http://127.0.0.1:5244"
+check "openlist root comes from .env"         "$(cfg 'openlist root')" "/my-notes"
+check "per user comes from .env"              "$(cfg 'per user')" "true"
+check "admin user comes from .env"            "$(cfg 'admin user')" "boss"
+check "local auth comes from .env"            "$(cfg 'local auth')" "false"
+check "token reported as set"                 "$(cfg 'openlist token')" "(set)"
+check "password reported as set"              "$(cfg 'admin password')" "(set)"
+check "relative DATA_DIR made absolute"       "$(cfg 'data dir')" "/var/lib/notes-manager"
+check "relative NOTES_ROOT follows DATA_DIR"  "$(cfg 'notes root')" "/var/lib/notes-manager/notes"
+
+# -- command line wins over .env --------------------------------------------- #
+run_installer --check-config --port 9500 --driver local
+check "command line port overrides .env"      "$(cfg listen)" "127.0.0.1:9500/notes"
+check "command line driver overrides .env"    "$(cfg 'storage driver')" "local"
+
+# -- absolute NOTES_ROOT is respected ---------------------------------------- #
+echo 'NOTES_ROOT=/srv/notes' >> "$PROJ/.env"
+run_installer --check-config
+check "absolute NOTES_ROOT respected"         "$(cfg 'notes root')" "/srv/notes"
+
+# -- invalid values are rejected with a clear message ------------------------ #
+echo 'STORAGE_DRIVER=bogus' >> "$PROJ/.env"
+run_installer --check-config
+check "invalid driver rejected"               "$LAST_STATUS" "1"
+check "  with an explanatory message"         "$(printf '%s' "$out" | grep -c 'storage driver must be one of')" "1"
+
+# =========================================================================== #
 if [ "$FAILED" -eq 0 ]; then
   printf '\nInstaller tests passed\n'
 else

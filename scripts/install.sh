@@ -16,6 +16,9 @@ DEFAULT_INSTALL_DIR="/opt/notes-manager"
 DEFAULT_DATA_DIR="/var/lib/notes-manager"
 DEFAULT_CONFIG_DIR="/etc/notes-manager"
 DEFAULT_PORT="8080"
+DEFAULT_HOST="0.0.0.0"
+DEFAULT_OPENLIST_ROOT="/notes"
+DEFAULT_ADMIN_USERNAME="admin"
 NODE_MAJOR="22"
 NODE_MIN_MAJOR="20"
 NODE_MIN_MINOR="19"
@@ -64,6 +67,7 @@ SKIP_BUILD="0"
 SKIP_DEPS="0"
 FORCE_NODE="0"
 START_SERVICE="1"
+CHECK_CONFIG="0"
 ADMIN_PASSWORD_GENERATED="0"
 
 usage() {
@@ -94,6 +98,8 @@ Options:
   --skip-deps             Do not run npm install
   --force-node            Install Node.js even when a suitable version exists
   --no-start              Install without starting the service
+  --check-config          Print the configuration that would be used and exit
+                          (reads .env, needs no root). Useful before installing
   -h, --help              Show this help
 
 Environment variables with the NOTES_MANAGER_ prefix are honoured as well, e.g.
@@ -174,25 +180,11 @@ while [ $# -gt 0 ]; do
     --skip-deps) SKIP_DEPS="1"; shift ;;
     --force-node) FORCE_NODE="1"; shift ;;
     --no-start) START_SERVICE="0"; shift ;;
+    --check-config) CHECK_CONFIG="1"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (use --help)" ;;
   esac
 done
-
-case "$STORAGE_DRIVER" in
-  auto|openlist|local) ;;
-  *) die "storage driver must be one of: auto, openlist, local (got '$STORAGE_DRIVER')" ;;
-esac
-
-case "$AUTH_LOCAL_ENABLED" in
-  true|false) ;;
-  *) die "AUTH_LOCAL_ENABLED must be true or false (got '$AUTH_LOCAL_ENABLED')" ;;
-esac
-
-case "$OPENLIST_PER_USER" in
-  true|false) ;;
-  *) die "OPENLIST_PER_USER must be true or false (got '$OPENLIST_PER_USER')" ;;
-esac
 
 # --------------------------------------------------------------------------- #
 # Preconditions                                                               #
@@ -244,6 +236,57 @@ esac
 
 RUNTIME_ENV="$INSTALL_DIR/.env"
 
+# NOTES_ROOT is written as-is when absolute, otherwise derived from DATA_DIR.
+NOTES_ROOT_PREVIEW="$DATA_DIR/notes"
+configured_notes_root_preview="$(read_env_value "$SOURCE_ENV" NOTES_ROOT 2>/dev/null || true)"
+case "$configured_notes_root_preview" in
+  /*) NOTES_ROOT_PREVIEW="$configured_notes_root_preview" ;;
+esac
+
+# Validation runs *after* the values above have been resolved. Doing it earlier
+# is a real trap: a plain "./scripts/install.sh" would then compare an empty
+# STORAGE_DRIVER against the allow-list and abort.
+case "$STORAGE_DRIVER" in
+  auto|openlist|local) ;;
+  *) die "storage driver must be one of: auto, openlist, local (got '$STORAGE_DRIVER')" ;;
+esac
+
+case "$AUTH_LOCAL_ENABLED" in
+  true|false) ;;
+  *) die "AUTH_LOCAL_ENABLED must be true or false (got '$AUTH_LOCAL_ENABLED')" ;;
+esac
+
+case "$OPENLIST_PER_USER" in
+  true|false) ;;
+  *) die "OPENLIST_PER_USER must be true or false (got '$OPENLIST_PER_USER')" ;;
+esac
+
+case "$PORT" in
+  ''|*[!0-9]*) die "PORT must be a number (got '$PORT')" ;;
+esac
+
+# show_resolved_config - what "install.sh --check-config" prints
+show_resolved_config() {
+  printf '\n%s\n\n' "${C_BOLD}resolved configuration${C_RESET}"
+  printf '  %-16s %s\n' 'source .env' "${SOURCE_ENV}$([ -f "$SOURCE_ENV" ] && echo ' (found)' || echo ' (not found - defaults are used)')"
+  printf '  %-16s %s\n' 'runtime .env' "$RUNTIME_ENV"
+  printf '  %-16s %s\n' 'install dir' "$INSTALL_DIR"
+  printf '  %-16s %s\n' 'data dir' "$DATA_DIR"
+  printf '  %-16s %s\n' 'notes root' "$NOTES_ROOT_PREVIEW"
+  printf '  %-16s %s\n' 'service user' "$SERVICE_USER"
+  printf '  %-16s %s\n' 'listen' "${HOST}:${PORT}${BASE_PATH}"
+  printf '  %-16s %s\n' 'public url' "${PUBLIC_URL:-(none)}"
+  printf '  %-16s %s\n' 'storage driver' "$STORAGE_DRIVER"
+  printf '  %-16s %s\n' 'openlist url' "${OPENLIST_URL:-(not configured)}"
+  printf '  %-16s %s\n' 'openlist root' "$OPENLIST_ROOT"
+  printf '  %-16s %s\n' 'openlist token' "$([ -n "$OPENLIST_TOKEN" ] && echo '(set)' || echo '(not set)')"
+  printf '  %-16s %s\n' 'per user' "$OPENLIST_PER_USER"
+  printf '  %-16s %s\n' 'admin user' "$ADMIN_USERNAME"
+  printf '  %-16s %s\n' 'local auth' "$AUTH_LOCAL_ENABLED"
+  printf '  %-16s %s\n' 'admin password' "$([ -n "$ADMIN_PASSWORD" ] && echo '(set)' || echo '(will be generated)')"
+  printf '\n'
+}
+
 # Sources that must exist before the build. They are checked twice - once on the
 # checkout and once again after copying - because a bad file filter can silently
 # drop a directory, and the only symptom would be a wall of TypeScript errors
@@ -276,6 +319,14 @@ verify_tree() {
 
 verify_tree "$SRC_DIR" "the source tree in $SRC_DIR" \
   || die "run 'git pull' in $SRC_DIR to update the checkout, then try again"
+
+# Everything above runs as a normal user: --check-config resolves the whole
+# configuration (project .env, environment, defaults) without touching the
+# system, which also makes the resolution testable.
+if [ "$CHECK_CONFIG" = "1" ]; then
+  show_resolved_config
+  exit 0
+fi
 
 if [ "$(id -u)" -ne 0 ]; then
   die "please run as root: sudo $0 ..."
