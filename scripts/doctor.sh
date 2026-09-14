@@ -108,7 +108,7 @@ head1 "4. is the panel listening?"
 # listeners <port> - the sockets listening on a port, using whichever tool exists
 listeners() {
   local port="$1" re
-  re="[:.]$port[^0-9]"
+  re="[:.]${port}[^0-9]"
   if command -v ss >/dev/null 2>&1; then
     ss -ltn 2>/dev/null | grep -E "$re" || true
   elif ! netstat -ltn >/dev/null 2>&1; then
