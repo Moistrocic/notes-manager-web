@@ -29,12 +29,30 @@ function arg(name, fallback) {
 const PORT = Number.parseInt(arg('port', '5244'), 10);
 const ROOT = path.resolve(arg('root', './tmp/mock-openlist'));
 const USERS = [
-  { id: 1, username: 'admin', password: 'admin', role: 2, permission: 0xffff },
-  { id: 2, username: 'writer', password: 'writer', role: 0, permission: (1 << 3) | (1 << 4) | (1 << 7) },
+  { id: 1, username: 'admin', password: 'admin', role: 2, permission: 0xffff, base_path: '/' },
+  // jailed to /public, like a real OpenList account with a base path
+  {
+    id: 2,
+    username: 'writer',
+    password: 'writer',
+    role: 0,
+    permission: (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7),
+    base_path: '/public',
+  },
+  // read-only account used for the permission tests
+  { id: 3, username: 'reader', password: 'reader', role: 0, permission: 0, base_path: '/' },
 ];
+
+/** The anonymous visitor, mirroring OpenList's guest user (role 1). */
+const GUEST = { id: 0, username: 'guest', role: 1, permission: 0, base_path: '/' };
+
+/** OpenList permission bit 3 = mkdir/upload (see internal/model/user.go). */
+const canWrite = (user) => (user.permission & (1 << 3)) !== 0;
 const API_TOKEN = 'mock-api-token';
 /** Newer OpenList builds expose /api/public/init_status; v4.2.6 does not. */
 const WITH_INIT_STATUS = args.includes('--with-init-status');
+/** `--no-guest` makes anonymous requests fail, as an OpenList with guests off. */
+const GUEST_ENABLED = !args.includes('--no-guest');
 
 const SPA_PAGE = [
   '<!doctype html>',
@@ -111,6 +129,18 @@ function authenticate(req) {
   return null;
 }
 
+/**
+ * OpenList prefixes every filesystem path with the account's own base path
+ * (`utils.JoinBasePath` is just `path.Join(basePath, reqPath)`). Reproducing it
+ * here is what makes the "do not request /public/public/Notes" behaviour
+ * testable.
+ */
+function joinBasePath(user, reqPath) {
+  const base = (user?.base_path ?? '/').replace(/\/+$/, '');
+  if (!base || base === '/') return reqPath;
+  return base + (reqPath === '/' ? '' : reqPath);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
@@ -141,11 +171,13 @@ const server = http.createServer(async (req, res) => {
       return ok(res, { token });
     }
 
-    const user = authenticate(req);
+    const account = authenticate(req);
+    /** The account that acts on this request: a real user, or the guest. */
+    const user = account ?? (GUEST_ENABLED ? GUEST : null);
 
     if (pathname === '/api/me') {
-      if (!user) return fail(res, 401, 'not logged in');
-      return ok(res, { ...user, base_path: '/', otp: false, disabled: false });
+      if (!user) return fail(res, 401, 'Guest user is disabled, login please');
+      return ok(res, { ...user, otp: false, disabled: false });
     }
     if (pathname === '/api/auth/logout') {
       if (req.headers.authorization) tokens.delete(req.headers.authorization);
@@ -157,8 +189,9 @@ const server = http.createServer(async (req, res) => {
 
       if (action === 'put' && method === 'PUT') {
         if (!user) return fail(res, 401, 'Guest user is disabled, login please');
+        if (!canWrite(user)) return fail(res, 403, 'Permission denied');
         const raw = req.headers['file-path'] ?? '';
-        const storagePath = decodeURIComponent(raw);
+        const storagePath = joinBasePath(user, decodeURIComponent(raw));
         const target = resolveFs(storagePath);
         await fsp.mkdir(path.dirname(target), { recursive: true });
         const data = await readBody(req);
@@ -169,14 +202,16 @@ const server = http.createServer(async (req, res) => {
 
       if (action === 'mkdir' && method === 'POST') {
         if (!user) return fail(res, 401, 'Guest user is disabled, login please');
+        if (!canWrite(user)) return fail(res, 403, 'Permission denied');
         const body = await readBody(req);
-        await fsp.mkdir(resolveFs(String(body.path ?? '/')), { recursive: true });
+        await fsp.mkdir(resolveFs(joinBasePath(user, String(body.path ?? '/'))), { recursive: true });
         return ok(res, null);
       }
 
       if (action === 'list' && method === 'POST') {
+        if (!user) return fail(res, 401, 'Guest user is disabled, login please');
         const body = await readBody(req);
-        const storagePath = String(body.path ?? '/');
+        const storagePath = joinBasePath(user, String(body.path ?? '/'));
         const target = resolveFs(storagePath);
         let entries;
         try {
@@ -189,12 +224,20 @@ const server = http.createServer(async (req, res) => {
           const stat = await fsp.stat(path.join(target, entry.name));
           content.push(statEntry(storagePath, entry.name, stat));
         }
-        return ok(res, { content, total: content.length, readme: '', header: '', write: Boolean(user), provider: 'local' });
+        return ok(res, {
+          content,
+          total: content.length,
+          readme: '',
+          header: '',
+          write: canWrite(user),
+          provider: 'local',
+        });
       }
 
       if (action === 'get' && method === 'POST') {
+        if (!user) return fail(res, 401, 'Guest user is disabled, login please');
         const body = await readBody(req);
-        const storagePath = String(body.path ?? '/');
+        const storagePath = joinBasePath(user, String(body.path ?? '/'));
         const target = resolveFs(storagePath);
         let stat;
         try {
@@ -214,9 +257,11 @@ const server = http.createServer(async (req, res) => {
 
       if (action === 'remove' && method === 'POST') {
         if (!user) return fail(res, 401, 'Guest user is disabled, login please');
+        if (!canWrite(user)) return fail(res, 403, 'Permission denied');
         const body = await readBody(req);
+        const dir = joinBasePath(user, String(body.dir ?? '/'));
         for (const name of body.names ?? []) {
-          await fsp.rm(resolveFs(`${body.dir ?? '/'}/${name}`), { recursive: true, force: true });
+          await fsp.rm(resolveFs(`${dir}/${name}`), { recursive: true, force: true });
         }
         return ok(res, null);
       }

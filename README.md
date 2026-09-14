@@ -66,6 +66,31 @@
 
 ### 2. 笔记存放到 OpenList 目录
 
+**关于 `OPENLIST_ROOT` 与账号「基础路径」**
+
+`OPENLIST_ROOT` 填的是 **OpenList 中的绝对路径**。OpenList 会给每个账号加一层
+「基础路径」(`base_path`)，并且是简单拼接（`path.Join(basePath, reqPath)`），
+所以如果面板把 `/public/Notes` 原样发出去、而账号的基础路径是 `/public`，
+就会变成 `/public/public/Notes`。
+
+面板会自动做换算：**先确定 OpenList 的绝对路径，再按当前账号的基础路径取相对路径**。
+
+| `.env` 的 `OPENLIST_ROOT` | 账号基础路径 | 实际访问 | 结果 |
+| --- | --- | --- | --- |
+| `/public/Notes` | `/public` | `/public/Notes` | 正常 |
+| `/public` | `/public` | `/public` | 正常 |
+| `/public/Notes` | `/`（管理员） | `/public/Notes` | 正常 |
+| `/notes` | `/public` | — | **权限不足**，面板会明确提示 |
+| `/other` | `/public` | — | **权限不足**，面板会明确提示 |
+
+无法访问时的提示形如：
+
+> 只读模式：… / No access to /notes: /notes is outside /public, which is the folder this
+> OpenList account is limited to. Change OPENLIST_ROOT, or use an account whose base path contains it.
+
+要解决：把 `OPENLIST_ROOT` 改成该账号基础路径**之内**的目录，或改用基础路径覆盖该目录的账号。
+
+
 - 默认根目录 `OPENLIST_ROOT=/notes`，可通过 `--openlist-root` 或界面「设置」修改
 - 写入走 `PUT /api/fs/put`（`File-Path` 头 + 原始字节），读取走 `POST /api/fs/get` → `raw_url`，
   失败时自动回退到 `/p/<path>` 代理端点
@@ -139,14 +164,17 @@ npm run check:render
 # 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行，48 项断言）
 npm run test:installer
 
-# 4) 仓库完整性检查：磁盘上的源文件是否都在 git 里
+# 4) 服务端单元测试（基础路径换算等）
+npm run test:server
+
+# 5) 仓库完整性检查：磁盘上的源文件是否都在 git 里
 npm run check:repo
 
-# 5) 类型检查
+# 6) 类型检查
 npm run typecheck
 ```
 
-以上 5 项都会在 GitHub Actions 中自动执行（`.github/workflows/ci.yml`），另外还会跑 `shellcheck`。
+以上各项都会在 GitHub Actions 中自动执行（`.github/workflows/ci.yml`），另外还会跑 `shellcheck`。
 
 ---
 
@@ -261,7 +289,7 @@ journalctl -u notes-manager -f
 | `STORAGE_DRIVER` | `auto` | `auto` / `openlist` / `local` |
 | `OPENLIST_URL` | 空 | OpenList 地址，如 `http://127.0.0.1:5244` |
 | `OPENLIST_TOKEN` | 空 | OpenList API 令牌（本地账户读写用） |
-| `OPENLIST_ROOT` | `/notes` | OpenList 中的笔记根目录 |
+| `OPENLIST_ROOT` | `/notes` | OpenList 中的笔记根目录（**绝对路径**，见下） |
 | `OPENLIST_PER_USER` | `false` | 每个用户存到 `<root>/<用户名>` |
 | `NOTES_ROOT` | `<DATA_DIR>/notes` | 本地驱动的笔记目录 |
 | `ADMIN_USERNAME` | `admin` | 本地管理员用户名 |
@@ -284,7 +312,7 @@ journalctl -u notes-manager -f
 | `POST` | `/api/system/openlist/test` | 测试 OpenList 连接（管理员） |
 | `POST` | `/api/system/cache/clear` | 清空服务端缓存（管理员） |
 | `GET` | `/api/auth/providers` | 可用的登录方式 |
-| `POST` | `/api/auth/login` | `{username, password, otp?, provider?}` |
+| `POST` | `/api/auth/login` | `{username, password, otp?, provider?}`；`provider` 可为 `auto`/`openlist`/`local`/**`guest`** |
 | `POST` | `/api/auth/logout` | 退出登录 |
 | `GET` | `/api/auth/me` | 当前用户 |
 | `POST` | `/api/auth/password` | 修改本地管理员密码 |

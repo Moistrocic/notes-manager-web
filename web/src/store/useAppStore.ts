@@ -7,6 +7,7 @@ import type {
   AuthProviders,
   FolderCount,
   Note,
+  NoteCapabilities,
   NoteStats,
   NoteSummary,
   SessionUser,
@@ -50,6 +51,7 @@ interface AppState {
   tags: TagCount[];
   folders: FolderCount[];
   stats: NoteStats | null;
+  capabilities: NoteCapabilities | null;
   loadingNotes: boolean;
   notesError: string | null;
 
@@ -68,7 +70,12 @@ interface AppState {
   view: ViewMode;
   editorMode: EditorMode;
   sidebarOpen: boolean;
+  /** Outline pane on the right of the editor. */
   metaOpen: boolean;
+  /** Collapsible navigation block inside the merged left column. */
+  navOpen: boolean;
+  /** Editor/preview split, 0.2 - 0.8. */
+  splitRatio: number;
   theme: Theme;
   trash: NoteSummary[];
   trashOpen: boolean;
@@ -77,12 +84,19 @@ interface AppState {
   toasts: Toast[];
 
   boot: () => Promise<void>;
-  login: (input: { username: string; password: string; otp?: string; provider?: 'auto' | 'openlist' | 'local' }) => Promise<void>;
+  login: (input: {
+    username: string;
+    password: string;
+    otp?: string;
+    provider?: 'auto' | 'openlist' | 'local' | 'guest';
+  }) => Promise<void>;
   logout: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 
   refreshNotes: (options?: { silent?: boolean }) => Promise<void>;
   selectNote: (id: string) => Promise<void>;
+  /** Follow a link inside a note: another note opens in the panel. */
+  openInternalLink: (href: string) => Promise<void>;
   closeNote: () => void;
   createNote: (input?: { title?: string; folder?: string; content?: string }) => Promise<void>;
   patchActive: (patch: NotePatch, options?: { save?: boolean }) => void;
@@ -107,6 +121,10 @@ interface AppState {
   setEditorMode: (mode: EditorMode) => void;
   toggleSidebar: (value?: boolean) => void;
   toggleMeta: (value?: boolean) => void;
+  toggleNav: (value?: boolean) => void;
+  setSplitRatio: (value: number) => void;
+  /** OpenList guest session (no credentials). */
+  guestLogin: () => Promise<void>;
   setTheme: (theme: Theme) => void;
   setTrashOpen: (value: boolean) => void;
   setSettingsOpen: (value: boolean) => void;
@@ -119,6 +137,7 @@ interface AppState {
 const THEME_KEY = 'notes-manager-theme';
 const VIEW_KEY = 'notes-manager-view';
 const MODE_KEY = 'notes-manager-editor-mode';
+const SPLIT_KEY = 'notes-manager-split-ratio';
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -175,6 +194,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   tags: [],
   folders: [],
   stats: null,
+  capabilities: null,
   loadingNotes: false,
   notesError: null,
 
@@ -194,6 +214,8 @@ export const appStore = createStore<AppState>((set, get) => ({
   editorMode: readLocal<EditorMode>(MODE_KEY, 'split'),
   sidebarOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1024,
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
+  navOpen: false,
+  splitRatio: Number(readLocal(SPLIT_KEY, '0.5')) || 0.5,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
   trashOpen: false,
@@ -217,6 +239,17 @@ export const appStore = createStore<AppState>((set, get) => ({
     set({ authBusy: true });
     try {
       const result = await api.login(input);
+      set({ user: result.user });
+      await Promise.all([get().refreshNotes(), get().refreshStatus()]);
+    } finally {
+      set({ authBusy: false });
+    }
+  },
+
+  guestLogin: async () => {
+    set({ authBusy: true });
+    try {
+      const result = await api.login({ username: '', password: '', provider: 'guest' });
       set({ user: result.user });
       await Promise.all([get().refreshNotes(), get().refreshStatus()]);
     } finally {
@@ -276,6 +309,7 @@ export const appStore = createStore<AppState>((set, get) => ({
         tags: payload.tags,
         folders: payload.folders,
         stats: payload.stats,
+        capabilities: payload.capabilities ?? null,
         loadingNotes: false,
         notesError: null,
         activeNote: nextActive,
@@ -297,6 +331,39 @@ export const appStore = createStore<AppState>((set, get) => ({
       set({ loadingNote: false });
       get().pushToast({ title: '打开笔记失败', message: errorMessage(err), tone: 'error' });
     }
+  },
+
+  openInternalLink: async (href) => {
+    const state = get();
+    const raw = href.startsWith('notes:') ? href.slice('notes:'.length) : href;
+    let target = raw;
+    try {
+      target = decodeURIComponent(raw);
+    } catch {
+      /* keep the raw value */
+    }
+    target = target.split('#')[0]?.split('?')[0] ?? target;
+    target = target.replace(/^\.\//, '').replace(/^\//, '');
+
+    const notes = state.notes;
+    const byId = notes.find((n) => n.id === target);
+    const byPath = notes.find((n) => {
+      const p = n.path.replace(/^\//, '').replace(/^\.[/\\]?/, '');
+      return p === target || p.toLowerCase() === target.toLowerCase();
+    });
+    const byName = notes.find((n) => n.path.split('/').pop()?.toLowerCase() === target.toLowerCase());
+    const byTitle = notes.find((n) => n.title.toLowerCase() === target.replace(/\.(md|markdown)$/i, '').toLowerCase());
+
+    const found = byId ?? byPath ?? byName ?? byTitle;
+    if (!found) {
+      state.pushToast({
+        title: '找不到链接指向的笔记',
+        message: `${href} —— 该笔记可能还没同步到当前目录`,
+        tone: 'error',
+      });
+      return;
+    }
+    await get().selectNote(found.id);
   },
 
   closeNote: () => {
@@ -543,6 +610,12 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
   toggleSidebar: (value) => set((state) => ({ sidebarOpen: value ?? !state.sidebarOpen })),
   toggleMeta: (value) => set((state) => ({ metaOpen: value ?? !state.metaOpen })),
+  toggleNav: (value) => set((state) => ({ navOpen: value ?? !state.navOpen })),
+  setSplitRatio: (value) => {
+    const clamped = Math.min(0.8, Math.max(0.2, value));
+    writeLocal(SPLIT_KEY, String(clamped));
+    set({ splitRatio: clamped });
+  },
   setTheme: (theme) => {
     writeLocal(THEME_KEY, theme);
     applyTheme(theme);
@@ -573,3 +646,35 @@ const useAppStoreBase = <T,>(selector: (state: AppState) => T): T => useStore(ap
 
 /** zustand hook with the vanilla store API attached (`getState`, `setState`, …). */
 export const useAppStore = Object.assign(useAppStoreBase, appStore);
+
+/**
+ * Whether the current account may modify the notes folder.
+ *
+ * The backend's own answer (OpenList reports `write` with every listing) wins;
+ * the account's permission bits are the fallback, and while nothing is known yet
+ * the UI stays optimistic - the server enforces the rule either way.
+ */
+export function useCanWrite(): boolean {
+  return useAppStore((s) => {
+    if (s.capabilities) return s.capabilities.writable;
+    if (s.user?.permissions) return s.user.permissions.write && s.user.permissions.remove;
+    return true;
+  });
+}
+
+/** Why the account is read-only, for the banner. */
+export function useReadOnlyReason(): string | null {
+  const canWrite = useCanWrite();
+  const capabilities = useAppStore((s) => s.capabilities);
+  const user = useAppStore((s) => s.user);
+  if (canWrite) return null;
+
+  const reasons: string[] = [];
+  if (user?.permissions && !user.permissions.write) {
+    reasons.push(user.openlistGuest ? '游客账号没有写入权限' : '当前 OpenList 账号没有写入权限');
+  }
+  if (capabilities && !capabilities.writable) {
+    reasons.push(`OpenList 报告 ${capabilities.root} 不可写`);
+  }
+  return reasons.length ? reasons.join('，且') : '当前账号没有写入权限';
+}

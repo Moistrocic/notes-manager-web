@@ -15,6 +15,12 @@ export class OpenListStorageDriver implements StorageDriver {
   readonly label: string;
   readonly root: string;
   private readonly rootPath: string;
+  private lastWriteFlag: boolean | null = null;
+
+  /** Reported by OpenList with every listing. */
+  get writable(): boolean | null {
+    return this.lastWriteFlag;
+  }
 
   constructor(
     private readonly client: OpenListClient,
@@ -58,6 +64,7 @@ export class OpenListStorageDriver implements StorageDriver {
     const target = this.toRemote(dir);
     try {
       const result = await this.client.list(target);
+      this.lastWriteFlag = result.write;
       const base = normalisePath(dir);
       return result.content
         .filter((entry) => entry && typeof entry.name === 'string')

@@ -50,6 +50,32 @@ function sanitizeSegment(value: string): string {
   return cleaned || 'user';
 }
 
+/**
+ * Maps the absolute notes root configured in `.env` onto the path a single
+ * OpenList account may ask for.
+ *
+ * OpenList prefixes every request with the account's own `base_path`
+ * (`JoinBasePath` is simply `path.Join(basePath, reqPath)`), so an account
+ * jailed to `/public` asking for `/public/Notes` would end up in
+ * `/public/public/Notes`. The configured value is therefore treated as an
+ * absolute OpenList path and the base path is stripped before the request.
+ */
+export function resolveRootForAccount(
+  absoluteRoot: string,
+  basePath: string | undefined | null,
+): { path: string; accessible: boolean; reason?: string } {
+  const root = normalisePath(absoluteRoot, '/');
+  const base = normalisePath(basePath || '/', '/');
+  if (base === '/') return { path: root, accessible: true };
+  if (root === base) return { path: '/', accessible: true };
+  if (root.startsWith(`${base}/`)) return { path: root.slice(base.length), accessible: true };
+  return {
+    path: root,
+    accessible: false,
+    reason: `${root} is outside ${base}, which is the folder this OpenList account is limited to`,
+  };
+}
+
 export class StorageManager {
   private probeCache: { key: string; at: number; result: ProbeResult } | null = null;
 
@@ -128,23 +154,38 @@ export class StorageManager {
         : useLocal('OpenList is not configured yet - using the local disk', false);
     }
 
-    const token = user?.provider === 'openlist' && user.openlistToken ? user.openlistToken : openlist.token || undefined;
+    // Sessions that signed in *through* OpenList use their own token and nothing
+    // else. Falling back to the service token here would silently hand a guest
+    // (or a low privileged account) the rights of whoever owns that token.
+    const token = user?.provider === 'openlist' ? user.openlistToken || undefined : openlist.token || undefined;
     if (!token) {
-      // Anonymous access still works when OpenList allows guests, so we do not
-      // hard fail here - the first real request will surface a clear 403.
       log.debug('resolving OpenList storage without a token (guest access)');
     }
 
     const client = new OpenListClient({ baseUrl: openlist.url, token, timeoutMs: openlist.timeoutMs });
-    let root = openlist.root;
+
+    let absoluteRoot = openlist.root;
     if (openlist.perUser && user?.username) {
-      root = normalisePath(`${root}/${sanitizeSegment(user.username)}`);
+      absoluteRoot = normalisePath(`${absoluteRoot}/${sanitizeSegment(user.username)}`);
     }
-    const driver = new OpenListStorageDriver(client, root);
+
+    const resolved = resolveRootForAccount(absoluteRoot, user?.openlistBasePath);
+    if (!resolved.accessible) {
+      throw new StorageError(
+        `No access to ${absoluteRoot}: ${resolved.reason}. ` +
+          `Change OPENLIST_ROOT, or use an account whose base path contains it. ` +
+          `(当前 OpenList 账号被限制在 ${user?.openlistBasePath || '/'}，无法访问 ${absoluteRoot})`,
+        403,
+        'openlist_forbidden',
+      );
+    }
+
+    log.debug(`openlist root: configured ${absoluteRoot}, base ${user?.openlistBasePath || '/'}, requesting ${resolved.path}`);
+    const driver = new OpenListStorageDriver(client, resolved.path);
     return {
       driver,
       kind: 'openlist',
-      displayRoot: root,
+      displayRoot: absoluteRoot,
       degraded: false,
       detail: token
         ? `OpenList account: ${user?.provider === 'openlist' ? user.username : 'service token'}`

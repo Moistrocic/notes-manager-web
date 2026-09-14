@@ -225,6 +225,30 @@ export class OpenListClient {
     return this.request<Record<string, unknown>>('/api/public/settings');
   }
 
+  /**
+   * Checks whether anonymous (guest) access actually works.
+   *
+   * Asking the API is more reliable than reading a setting: it answers the only
+   * question that matters - can an anonymous visitor list the root? - and it
+   * keeps working across OpenList versions.
+   */
+  async guestAccess(): Promise<{ available: boolean; user?: OpenListUser; error?: string }> {
+    try {
+      const user = await this.request<OpenListUser>('/api/me', { token: null, timeoutMs: Math.min(this.timeoutMs, 6000) });
+      if (user?.disabled) return { available: false, error: 'Guest access is disabled' };
+      await this.request('/api/fs/list', {
+        method: 'POST',
+        token: null,
+        json: { path: '/', password: '', page: 1, per_page: 1, refresh: false },
+        timeoutMs: Math.min(this.timeoutMs, 6000),
+      });
+      return { available: true, user };
+    } catch (err) {
+      const message = err instanceof OpenListError ? err.message : (err as Error).message;
+      return { available: false, error: message };
+    }
+  }
+
   /* ------------------------------ auth ----------------------------------- */
 
   async login(username: string, password: string, otpCode?: string): Promise<string> {

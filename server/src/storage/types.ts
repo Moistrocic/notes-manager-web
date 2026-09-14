@@ -34,6 +34,12 @@ export interface StorageDriver {
   removePath(path: string): Promise<void>;
   rename(path: string, newName: string): Promise<void>;
   exists(path: string): Promise<boolean>;
+  /**
+   * Whether the backend reported write access the last time it was asked.
+   * `null` means "not known yet". OpenList answers this per listing
+   * (`write`), which is more accurate than the account's permission bits.
+   */
+  readonly writable?: boolean | null;
 }
 
 export class StorageError extends Error {

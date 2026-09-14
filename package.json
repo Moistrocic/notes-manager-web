@@ -22,6 +22,7 @@
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "check:render": "npm run check:render --workspace web",
     "check:repo": "node scripts/check-repo-files.mjs",
+    "test:server": "node scripts/test-server.mjs",
     "test:installer": "bash scripts/test-install.sh",
     "doctor": "bash scripts/doctor.sh",
     "smoke": "node scripts/smoke-test.mjs",

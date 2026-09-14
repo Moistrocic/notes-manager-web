@@ -19,6 +19,8 @@ export interface SessionUser {
   /** OpenList base path of the account (users can be jailed to a sub folder). */
   openlistBasePath?: string;
   openlistIsAdmin?: boolean;
+  /** Anonymous OpenList visitor - must never fall back to the service token. */
+  openlistGuest?: boolean;
   permissions?: { write: boolean; rename: boolean; move: boolean; remove: boolean };
 }
 

@@ -124,6 +124,10 @@ export class LocalStorageDriver implements StorageDriver {
     }
   }
 
+  get writable(): boolean {
+    return true;
+  }
+
   /** Absolute filesystem location of a storage path (diagnostics only). */
   describePath(storagePath: string): string {
     return this.toFsPath(storagePath);

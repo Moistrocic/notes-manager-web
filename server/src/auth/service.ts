@@ -19,7 +19,7 @@ export interface LoginInput {
   password: string;
   otp?: string;
   /** `auto` tries OpenList first, then the local administrator account. */
-  provider?: 'auto' | 'openlist' | 'local';
+  provider?: 'auto' | 'openlist' | 'local' | 'guest';
 }
 
 export interface LoginResult {
@@ -73,6 +73,7 @@ export class AuthService {
 
   async login(input: LoginInput): Promise<LoginResult> {
     const provider = input.provider ?? 'auto';
+    if (provider === 'guest') return { user: await this.loginAsGuest(), provider: 'openlist' };
     const username = (input.username ?? '').trim();
     if (!username || !input.password) throw new AuthError('Username and password are required', 400, 'invalid_credentials');
 
@@ -151,6 +152,49 @@ export class AuthService {
     };
     log.info(`openlist sign-in: ${user.username} (${user.role})`);
     return user;
+  }
+
+  /**
+   * Signs in as the anonymous OpenList visitor.
+   *
+   * No token is stored on purpose: the session then talks to OpenList without an
+   * Authorization header, which is exactly what "guest" means there.
+   */
+  async loginAsGuest(): Promise<SessionUser> {
+    const cfg = this.settings.effective().storage.openlist;
+    if (!cfg.url) throw new AuthError('No OpenList instance is configured', 503, 'openlist_unreachable');
+    const client = new OpenListClient({ baseUrl: cfg.url, timeoutMs: cfg.timeoutMs });
+    const guest = await client.guestAccess();
+    if (!guest.available) {
+      throw new AuthError(guest.error || 'Guest access is not available on this OpenList', 403, 'guest_disabled');
+    }
+    const permission = guest.user?.permission ?? 0;
+    const user: SessionUser = {
+      id: 'openlist:guest',
+      username: 'guest',
+      displayName: '游客',
+      role: 'user',
+      provider: 'openlist',
+      openlistBasePath: guest.user?.base_path ?? '',
+      openlistIsAdmin: false,
+      openlistGuest: true,
+      permissions: {
+        write: (permission & PERM_WRITE) !== 0,
+        rename: (permission & PERM_RENAME) !== 0,
+        move: (permission & PERM_MOVE) !== 0,
+        remove: (permission & PERM_REMOVE) !== 0,
+      },
+    };
+    log.info('openlist sign-in: guest');
+    return user;
+  }
+
+  async guestAvailable(): Promise<boolean> {
+    const cfg = this.settings.effective().storage.openlist;
+    if (!cfg.url) return false;
+    const client = new OpenListClient({ baseUrl: cfg.url, timeoutMs: Math.min(cfg.timeoutMs, 6000) });
+    const guest = await client.guestAccess();
+    return guest.available;
   }
 
   private async loginLocal(username: string, password: string): Promise<SessionUser> {

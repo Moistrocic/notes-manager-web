@@ -1,13 +1,13 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, FolderInput, Palette, Pin, Plus, Star, Tag, X } from 'lucide-react';
+import { Check, FolderInput, Lock, Palette, Pin, Plus, Star, Tag, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { useAppStore } from '../store/useAppStore';
-import { Button } from './ui/primitives';
+import { Badge, Button } from './ui/primitives';
 
 const COLORS = ['#8b6cff', '#22d3ee', '#34d399', '#fbbf24', '#fb7185', '#a78bfa', '#60a5fa', '#f472b6'];
 
-export function NoteMetaBar() {
+export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
   const activeNote = useAppStore((s) => s.activeNote);
   const folders = useAppStore((s) => s.folders);
   const patchActive = useAppStore((s) => s.patchActive);
@@ -32,6 +32,7 @@ export function NoteMetaBar() {
   if (!activeNote) return null;
 
   const addTag = () => {
+    if (readOnly) return;
     const value = tagInput.trim().replace(/^#/, '');
     if (!value) return;
     if (activeNote.tags.includes(value)) {
@@ -42,7 +43,10 @@ export function NoteMetaBar() {
     setTagInput('');
   };
 
-  const removeTag = (tag: string) => patchActive({ tags: activeNote.tags.filter((t) => t !== tag) });
+  const removeTag = (tag: string) => {
+    if (readOnly) return;
+    patchActive({ tags: activeNote.tags.filter((t) => t !== tag) });
+  };
 
   return (
     <div
@@ -63,17 +67,21 @@ export function NoteMetaBar() {
               className="group inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[11.5px] font-medium text-[var(--accent)]"
             >
               #{tag}
-              <button
-                type="button"
-                onClick={() => removeTag(tag)}
-                className="opacity-0 transition-opacity group-hover:opacity-100"
-                aria-label={`移除标签 ${tag}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
+              {readOnly ? null : (
+                <button
+                  type="button"
+                  onClick={() => removeTag(tag)}
+                  className="opacity-0 transition-opacity group-hover:opacity-100"
+                  aria-label={`移除标签 ${tag}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
             </motion.span>
           ))}
         </AnimatePresence>
+        {readOnly ? null : (
+          <>
         <input
           value={tagInput}
           onChange={(e) => setTagInput(e.target.value)}
@@ -98,12 +106,21 @@ export function NoteMetaBar() {
         >
           <Plus className="h-3 w-3" />
         </button>
+          </>
+        )}
       </div>
 
       <div className="ml-auto flex items-center gap-1">
+        {readOnly ? (
+          <Badge tone="neutral" className="mr-1">
+            <Lock className="h-3 w-3" />
+            只读
+          </Badge>
+        ) : null}
         <Button
           variant={activeNote.pinned ? 'soft' : 'ghost'}
           size="sm"
+          disabled={readOnly}
           onClick={() => patchActive({ pinned: !activeNote.pinned })}
           title="置顶"
         >
@@ -113,6 +130,7 @@ export function NoteMetaBar() {
         <Button
           variant={activeNote.favorite ? 'soft' : 'ghost'}
           size="sm"
+          disabled={readOnly}
           onClick={() => patchActive({ favorite: !activeNote.favorite })}
           title="收藏"
         >
@@ -121,7 +139,7 @@ export function NoteMetaBar() {
         </Button>
 
         <div className="relative">
-          <Button variant="ghost" size="sm" onClick={() => setShowColors((v) => !v)} title="强调色">
+          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowColors((v) => !v)} title="强调色">
             <Palette className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">颜色</span>
           </Button>
@@ -164,7 +182,7 @@ export function NoteMetaBar() {
         </div>
 
         <div className="relative">
-          <Button variant="ghost" size="sm" onClick={() => setShowFolders((v) => !v)} title="移动到文件夹">
+          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowFolders((v) => !v)} title="移动到文件夹">
             <FolderInput className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">移动</span>
           </Button>

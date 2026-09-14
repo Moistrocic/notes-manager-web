@@ -36,9 +36,13 @@ jobs:
       - name: Render check
         run: npm run check:render
 
+      # Unit tests for the server helpers (base path resolution, ...).
+      - name: Server tests
+        run: npm run test:server
+
       # Extracts the installer's own functions and configuration section from
       # install.sh and runs them: KEY=VALUE parsing, the application copy and
-      # the runtime .env assembly (48 assertions).
+      # the runtime .env assembly (74 assertions).
       - name: Installer tests
         run: npm run test:installer
 

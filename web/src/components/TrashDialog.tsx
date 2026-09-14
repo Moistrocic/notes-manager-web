@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { RotateCcw, Trash2 } from 'lucide-react';
 import { relativeTime } from '../lib/format';
-import { useAppStore } from '../store/useAppStore';
+import { useAppStore, useCanWrite } from '../store/useAppStore';
 import { Button, Modal } from './ui/primitives';
 
 export function TrashDialog() {
@@ -11,6 +11,7 @@ export function TrashDialog() {
   const restoreNote = useAppStore((s) => s.restoreNote);
   const deleteNote = useAppStore((s) => s.deleteNote);
   const emptyTrash = useAppStore((s) => s.emptyTrash);
+  const canWrite = useCanWrite();
 
   return (
     <Modal
@@ -25,7 +26,8 @@ export function TrashDialog() {
           <Button
             variant="outline"
             size="sm"
-            disabled={trash.length === 0}
+            disabled={trash.length === 0 || !canWrite}
+            title={canWrite ? '清空回收站' : '没有删除权限'}
             onClick={() => void emptyTrash()}
             className="hover:border-[var(--danger)] hover:text-[var(--danger)]"
           >
@@ -61,13 +63,14 @@ export function TrashDialog() {
                     {note.originFolder ? <span>· 原位置 /{note.originFolder}</span> : null}
                   </div>
                 </div>
-                <Button variant="soft" size="sm" onClick={() => void restoreNote(note.id)}>
+                <Button variant="soft" size="sm" disabled={!canWrite} onClick={() => void restoreNote(note.id)}>
                   <RotateCcw className="h-3.5 w-3.5" />
                   恢复
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={!canWrite}
                   className="text-[var(--faint)] hover:text-[var(--danger)]"
                   onClick={() => void deleteNote(note.id, { permanent: true })}
                 >

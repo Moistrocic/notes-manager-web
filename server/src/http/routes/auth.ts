@@ -12,6 +12,7 @@ export function authRoutes(services: Services): Router {
     '/providers',
     handler(async (_req, res) => {
       const probe = await services.storage.probeOpenList();
+      const guest = probe.reachable ? await services.auth.guestAvailable() : false;
       res.json({
         local: services.auth.localEnabled,
         openlist: probe.reachable,
@@ -19,6 +20,7 @@ export function authRoutes(services: Services): Router {
         openlistUrl: probe.url || null,
         openlistInitialized: probe.initialized,
         openlistError: probe.reachable ? null : probe.error ?? null,
+        guest,
       });
     }),
   );
@@ -31,7 +33,7 @@ export function authRoutes(services: Services): Router {
         username: String(body.username ?? ''),
         password: String(body.password ?? ''),
         otp: body.otp ? String(body.otp) : undefined,
-        provider: (body.provider as 'auto' | 'openlist' | 'local' | undefined) ?? 'auto',
+        provider: (body.provider as 'auto' | 'openlist' | 'local' | 'guest' | undefined) ?? 'auto',
       });
       const session = services.sessions.create(result.user, {
         userAgent: req.headers['user-agent'],

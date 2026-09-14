@@ -32,10 +32,28 @@ export function decorateMarkdown(root: HTMLElement): void {
   });
   root.querySelectorAll<HTMLAnchorElement>('a[href]').forEach((anchor) => {
     const href = anchor.getAttribute('href') ?? '';
-    if (href.startsWith('#')) return;
+    // In-page anchors and links to another note stay in the app; everything
+    // else opens in a new tab as before.
+    if (href.startsWith('#') || isInternalLink(href)) {
+      anchor.removeAttribute('target');
+      anchor.setAttribute('data-internal-link', 'true');
+      return;
+    }
     anchor.target = '_blank';
     anchor.rel = 'noreferrer noopener';
   });
+}
+
+/**
+ * True for links that point at another note rather than at the web.
+ * Covers `notes:<id>`, relative markdown paths and bare `*.md` targets.
+ */
+export function isInternalLink(href: string): boolean {
+  if (!href || href.startsWith('#') || href.startsWith('//')) return false;
+  if (href.startsWith('notes:')) return true;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false; // http(s), mailto, ...
+  const clean = href.split('#')[0]?.split('?')[0] ?? '';
+  return /\.(md|markdown)$/i.test(clean) || clean.startsWith('./') || clean.startsWith('../') || !clean.includes('/');
 }
 
 /** Plain text preview used for cards and the command palette. */

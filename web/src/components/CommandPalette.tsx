@@ -3,6 +3,8 @@ import {
   Columns2,
   Eye,
   FileText,
+  Folder,
+  ListTree,
   LayoutGrid,
   List as ListIcon,
   Moon,
@@ -16,7 +18,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { relativeTime } from '../lib/format';
-import { useAppStore } from '../store/useAppStore';
+import { useAppStore, useCanWrite } from '../store/useAppStore';
 
 interface Command {
   id: string;
@@ -40,6 +42,11 @@ export function CommandPalette() {
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setTrashOpen = useAppStore((s) => s.setTrashOpen);
   const user = useAppStore((s) => s.user);
+  const canWrite = useCanWrite();
+  const toggleMeta = useAppStore((s) => s.toggleMeta);
+  const metaOpen = useAppStore((s) => s.metaOpen);
+  const toggleNav = useAppStore((s) => s.toggleNav);
+  const navOpen = useAppStore((s) => s.navOpen);
 
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -56,12 +63,30 @@ export function CommandPalette() {
 
   const commands = useMemo<Command[]>(() => {
     const actions: Command[] = [
+      ...(canWrite
+        ? [
+            {
+              id: 'new',
+              label: '新建笔记',
+              group: '操作',
+              icon: Plus,
+              run: () => void createNote(),
+            },
+          ]
+        : []),
       {
-        id: 'new',
-        label: '新建笔记',
+        id: 'outline',
+        label: metaOpen ? '隐藏大纲' : '显示大纲',
         group: '操作',
-        icon: Plus,
-        run: () => void createNote(),
+        icon: ListTree,
+        run: () => toggleMeta(),
+      },
+      {
+        id: 'nav',
+        label: navOpen ? '收起导航（文件夹 / 标签）' : '展开导航（文件夹 / 标签）',
+        group: '操作',
+        icon: Folder,
+        run: () => toggleNav(),
       },
       {
         id: 'theme',
@@ -110,7 +135,21 @@ export function CommandPalette() {
       actions.push({ id: 'settings', label: '存储与服务器设置', group: '导航', icon: Settings, run: () => setSettingsOpen(true) });
     }
     return actions;
-  }, [createNote, setEditorMode, setSettingsOpen, setTheme, setTrashOpen, setView, theme, user?.role]);
+  }, [
+    canWrite,
+    createNote,
+    metaOpen,
+    navOpen,
+    setEditorMode,
+    setSettingsOpen,
+    setTheme,
+    setTrashOpen,
+    setView,
+    theme,
+    toggleMeta,
+    toggleNav,
+    user?.role,
+  ]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();

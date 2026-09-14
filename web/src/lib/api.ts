@@ -51,7 +51,7 @@ export const api = {
   /* ------------------------------- auth -------------------------------- */
   providers: () => request<AuthProviders>('/auth/providers'),
   me: () => request<{ user: SessionUser | null }>('/auth/me'),
-  login: (body: { username: string; password: string; otp?: string; provider?: 'auto' | 'openlist' | 'local' }) =>
+  login: (body: { username: string; password: string; otp?: string; provider?: 'auto' | 'openlist' | 'local' | 'guest' }) =>
     request<{ user: SessionUser; provider: 'openlist' | 'local' }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify(body),

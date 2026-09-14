@@ -49,6 +49,8 @@ export interface SessionUser {
   provider: 'local' | 'openlist';
   openlistBasePath?: string;
   openlistIsAdmin?: boolean;
+  /** Anonymous OpenList visitor (no credentials). */
+  openlistGuest?: boolean;
   permissions?: { write: boolean; rename: boolean; move: boolean; remove: boolean };
   createdAt: number;
   expiresAt: number;
@@ -97,6 +99,15 @@ export interface NotesPayload {
   stats: NoteStats;
   tags: TagCount[];
   folders: FolderCount[];
+  capabilities?: NoteCapabilities;
+  user?: {
+    username: string;
+    provider: 'local' | 'openlist';
+    role: 'admin' | 'user';
+    guest: boolean;
+    permissions: NoteCapabilities['permissions'];
+    basePath: string | null;
+  } | null;
 }
 
 export interface AuthProviders {
@@ -107,6 +118,21 @@ export interface AuthProviders {
   openlistInitialized: boolean;
   /** Why the probe failed (e.g. "connect ECONNREFUSED 127.0.0.1:5244"). */
   openlistError?: string | null;
+  /** True when OpenList accepts anonymous visitors. */
+  guest: boolean;
+}
+
+export interface NoteCapabilities {
+  driver: 'openlist' | 'local';
+  root: string;
+  /** The backend says the notes folder can be written to. */
+  writable: boolean;
+  permissions: {
+    write: boolean;
+    rename: boolean;
+    move: boolean;
+    remove: boolean;
+  } | null;
 }
 
 export interface AppSettingsPayload {

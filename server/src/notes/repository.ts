@@ -382,11 +382,42 @@ export class NotesRepository {
     return `${base}-${id.slice(0, 8)}.md`;
   }
 
+  /** Finds a note in the active tree, falling back to the trash. */
+  private async locate(user: SessionUser | null | undefined, id: string): Promise<Note> {
+    try {
+      return await this.get(user, id);
+    } catch (err) {
+      const trashed = await this.listTrash(user).catch(() => [] as Note[]);
+      const found = trashed.find((n) => n.id === id);
+      if (found) return found;
+      throw err;
+    }
+  }
+
+  /** What the active backend allows - used to disable editing in the UI. */
+  async capabilities(user: SessionUser | null | undefined): Promise<{
+    driver: 'openlist' | 'local';
+    root: string;
+    writable: boolean;
+    permissions: SessionUser['permissions'];
+  }> {
+    const storage = await this.storageManager.resolve(user);
+    const permissions = user?.permissions;
+    const byPermission = permissions ? permissions.write && permissions.remove : true;
+    return {
+      driver: storage.kind,
+      root: storage.displayRoot,
+      // the backend's own answer wins; the permission bits are the fallback
+      writable: storage.driver.writable ?? byPermission,
+      permissions,
+    };
+  }
+
   async remove(user: SessionUser | null | undefined, id: string, permanent = false): Promise<{ trashed: boolean }> {
     const storage = await this.storageManager.resolve(user);
     const ns = this.namespace(storage, user);
     const driver = storage.driver;
-    const note = await this.get(user, id);
+    const note = await this.locate(user, id);
 
     if (permanent) {
       await driver.removePath(note.path);
@@ -394,6 +425,7 @@ export class NotesRepository {
       log.info(`permanently deleted note ${note.path}`);
       return { trashed: false };
     }
+
 
     const doc = parseDocument(await driver.readText(note.path));
     const attributes: Record<string, unknown> = {

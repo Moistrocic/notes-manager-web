@@ -59,14 +59,31 @@ export function notesRoutes(services: Services): Router {
         }
       });
 
-      const [stats, tags, folders] = await Promise.all([
+      const [stats, tags, folders, capabilities] = await Promise.all([
         services.notes.stats(user),
         services.notes.tags(user),
         services.notes.folders(user),
+        services.notes.capabilities(user),
       ]);
 
       const summaries = notes.map(({ content: _content, ...rest }) => rest);
-      res.json({ notes: summaries, stats, tags, folders });
+      res.json({
+        notes: summaries,
+        stats,
+        tags,
+        folders,
+        capabilities,
+        user: user
+          ? {
+              username: user.username,
+              provider: user.provider,
+              role: user.role,
+              guest: Boolean(user.openlistGuest),
+              permissions: user.permissions ?? null,
+              basePath: user.openlistBasePath ?? null,
+            }
+          : null,
+      });
     }),
   );
 

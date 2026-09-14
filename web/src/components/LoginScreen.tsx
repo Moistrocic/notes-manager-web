@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertCircle, Cloud, HardDrive, KeyRound, Loader2, Lock, LogIn, Server, User } from 'lucide-react';
+import { AlertCircle, Cloud, HardDrive, KeyRound, Loader2, Lock, LogIn, Server, User, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Field, Input } from './ui/primitives';
 import { cn } from '../lib/cn';
@@ -10,6 +10,7 @@ type Provider = 'auto' | 'openlist' | 'local';
 export function LoginScreen() {
   const providers = useAppStore((s) => s.providers);
   const login = useAppStore((s) => s.login);
+  const guestLogin = useAppStore((s) => s.guestLogin);
   const authBusy = useAppStore((s) => s.authBusy);
   const bootError = useAppStore((s) => s.bootError);
 
@@ -241,6 +242,32 @@ export function LoginScreen() {
             </Button>
           </form>
 
+          {providers?.guest ? (
+            <div className="mt-4">
+              <div className="mb-3 flex items-center gap-3 text-[11px] text-[var(--faint)]">
+                <span className="h-px flex-1 bg-[var(--line)]" />
+                或
+                <span className="h-px flex-1 bg-[var(--line)]" />
+              </div>
+              <Button
+                variant="outline"
+                size="lg"
+                className="w-full justify-center"
+                loading={authBusy}
+                onClick={() => {
+                  setError(null);
+                  void guestLogin().catch((err: Error) => setError(err.message));
+                }}
+              >
+                <UserRound className="h-4 w-4" />
+                以游客身份浏览
+              </Button>
+              <p className="mt-2 text-center text-[11px] leading-relaxed text-[var(--faint)]">
+                OpenList 已开启游客访问，可免登录浏览公开目录（通常是只读）。
+              </p>
+            </div>
+          ) : null}
+
           <div className="mt-5 space-y-2.5">
             <div className="flex flex-wrap items-center justify-center gap-2 text-[11.5px] text-[var(--faint)]">
               <Badge tone={openlist.tone}>
@@ -251,6 +278,12 @@ export function LoginScreen() {
                 <HardDrive className="h-3 w-3" />
                 {providers?.local ? '本地账户已启用' : '本地账户已禁用'}
               </Badge>
+              {providers?.guest ? (
+                <Badge tone="success">
+                  <UserRound className="h-3 w-3" />
+                  游客访问已开启
+                </Badge>
+              ) : null}
               {tabs.length ? (
                 <span className="whitespace-nowrap">
                   {tabs.find((tab) => tab.value === provider)?.hint ?? tabs[0]?.hint}

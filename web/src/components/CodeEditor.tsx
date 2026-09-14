@@ -1,7 +1,7 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { Compartment, EditorState } from '@codemirror/state';
+import { Compartment, EditorState, type Extension } from '@codemirror/state';
 import { EditorView, drawSelection, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers, placeholder } from '@codemirror/view';
 import { tags as t } from '@lezer/highlight';
 import { useEffect, useRef } from 'react';
@@ -75,15 +75,20 @@ interface CodeEditorProps {
   dark: boolean;
   placeholderText?: string;
   apiRef?: { current: EditorApi | null };
+  /** Read-only mode for accounts without write permission. */
+  readOnly?: boolean;
 }
 
-export function CodeEditor({ value, onChange, onSave, dark, placeholderText, apiRef }: CodeEditorProps) {
+export function CodeEditor({ value, onChange, onSave, dark, placeholderText, apiRef, readOnly }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const themeCompartment = useRef(new Compartment());
   const highlightCompartment = useRef(new Compartment());
+  const readOnlyCompartment = useRef(new Compartment());
+  const readOnlyRef = useRef(Boolean(readOnly));
+  readOnlyRef.current = Boolean(readOnly);
 
   onChangeRef.current = onChange;
   onSaveRef.current = onSave;
@@ -115,6 +120,9 @@ export function CodeEditor({ value, onChange, onSave, dark, placeholderText, api
           ...historyKeymap,
         ]),
         themeCompartment.current.of(transparentTheme),
+        readOnlyCompartment.current.of(
+          readOnlyRef.current ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
+        ),
         highlightCompartment.current.of(
           syntaxHighlighting(dark ? darkHighlight : lightHighlight, { fallback: true }),
         ),
@@ -153,6 +161,15 @@ export function CodeEditor({ value, onChange, onSave, dark, placeholderText, api
       ),
     });
   }, [dark]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const extension: Extension = readOnly
+      ? [EditorState.readOnly.of(true), EditorView.editable.of(false)]
+      : [];
+    view.dispatch({ effects: readOnlyCompartment.current.reconfigure(extension) });
+  }, [readOnly]);
 
   useEffect(() => {
     if (!apiRef) return;

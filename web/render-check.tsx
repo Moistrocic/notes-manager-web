@@ -69,6 +69,22 @@ interface Scenario {
   expect: string[];
 }
 
+const providers = {
+  local: true,
+  openlist: true,
+  openlistConfigured: true,
+  openlistUrl: 'http://127.0.0.1:5244',
+  openlistInitialized: true,
+  guest: false,
+};
+
+const capabilities = {
+  driver: 'openlist' as const,
+  root: '/notes',
+  writable: true,
+  permissions: { write: true, rename: true, move: true, remove: true },
+};
+
 const scenarios: Scenario[] = [
   {
     name: 'boot / splash',
@@ -76,30 +92,70 @@ const scenarios: Scenario[] = [
     expect: ['笔记管理面板', 'aurora'],
   },
   {
-    name: 'login screen',
-    state: {
-      booted: true,
-      user: null,
-      providers: { local: true, openlist: true, openlistConfigured: true, openlistUrl: 'http://127.0.0.1:5244', openlistInitialized: true },
-    },
-    expect: ['登录工作台', 'OpenList 账户', '进入工作台'],
+    name: 'login screen (with OpenList guest access)',
+    state: { booted: true, user: null, providers: { ...providers, guest: true } },
+    expect: ['登录工作台', 'OpenList 账户', '进入工作台', '以游客身份浏览', '游客访问已开启'],
   },
   {
-    name: 'workspace (editor + list + sidebar + outline)',
+    name: 'workspace: editor + merged left panel + outline',
     state: {
       booted: true,
       user,
       status,
-      providers: { local: true, openlist: true, openlistConfigured: true, openlistUrl: 'http://127.0.0.1:5244', openlistInitialized: true },
+      providers,
       notes: [note],
       tags: [{ tag: 'check', count: 1 }],
       folders: [{ path: '工作', name: '工作', count: 0 }],
       stats: { notes: 1, tags: 2, folders: 1, words: 12, updatedAt: note.updated },
+      capabilities,
       activeId: note.id,
       activeNote: note,
       editorMode: 'edit',
+      metaOpen: true,
+      sidebarOpen: true,
     },
-    expect: ['渲染检查笔记', '新建笔记', '置顶', '文档信息', '大纲'],
+    expect: ['渲染检查笔记', '大纲', '新建笔记', '置顶'],
+  },
+  {
+    name: 'workspace: no note selected (merged left panel visible)',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [note],
+      tags: [{ tag: 'check', count: 1 }],
+      folders: [],
+      stats: { notes: 1, tags: 1, folders: 0, words: 12, updatedAt: note.updated },
+      capabilities,
+      activeId: null,
+      activeNote: null,
+      sidebarOpen: true,
+      navOpen: true,
+    },
+    expect: ['笔记管理面板', '导航', '搜索笔记、标签', '全部笔记', '文件夹', 'OpenList 存储'],
+  },
+  {
+    name: 'workspace: read-only account',
+    state: {
+      booted: true,
+      user: {
+        ...user,
+        provider: 'openlist',
+        role: 'user',
+        openlistGuest: true,
+        permissions: { write: false, rename: false, move: false, remove: false },
+      },
+      status,
+      providers,
+      notes: [note],
+      capabilities: { ...capabilities, writable: false, permissions: { write: false, rename: false, move: false, remove: false } },
+      activeId: note.id,
+      activeNote: note,
+      editorMode: 'edit',
+      metaOpen: true,
+    },
+    expect: ['只读', '没有写入权限', '渲染检查笔记'],
   },
   {
     name: 'command palette + dialogs',
@@ -107,9 +163,10 @@ const scenarios: Scenario[] = [
       paletteOpen: true,
       settingsOpen: true,
       trashOpen: true,
+      metaOpen: false,
       trash: [{ ...note, deletedAt: note.updated }],
     },
-    expect: ['存储与服务器设置', '回收站', '搜索笔记或输入命令'],
+    expect: ['存储与服务器设置', '回收站', '搜索笔记或输入命令', '显示大纲'],
   },
 ];
 

@@ -1,17 +1,14 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { FilePlus2, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Aurora } from './components/Aurora';
 import { CommandPalette } from './components/CommandPalette';
 import { Editor } from './components/Editor';
 import { LoginScreen } from './components/LoginScreen';
-import { NoteList } from './components/NoteList';
-import { OutlinePanel } from './components/OutlinePanel';
+import { NotesPanel } from './components/NoteList';
 import { SettingsDialog } from './components/SettingsDialog';
-import { Sidebar } from './components/Sidebar';
 import { Toasts } from './components/Toasts';
 import { TrashDialog } from './components/TrashDialog';
-import type { EditorApi } from './components/CodeEditor';
 import { Button } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
@@ -93,7 +90,6 @@ function Workspace() {
   const activeNote = useAppStore((s) => s.activeNote);
   const closeNote = useAppStore((s) => s.closeNote);
   const isDesktop = useMediaQuery('(min-width: 1024px)');
-  const editorApiRef = useRef<EditorApi | null>(null);
 
   useEffect(() => {
     if (!isDesktop) toggleSidebar(false);
@@ -109,45 +105,27 @@ function Workspace() {
       transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
       className="relative z-10 flex h-full w-full gap-3 p-3"
     >
-      {/* Desktop sidebar */}
+      {/* Single left column: navigation + list. Collapsible as a whole. */}
       <AnimatePresence initial={false}>
         {sidebarOpen && isDesktop ? (
           <motion.div
-            key="sidebar"
-            initial={{ width: 0, opacity: 0, x: -20 }}
-            animate={{ width: 268, opacity: 1, x: 0 }}
-            exit={{ width: 0, opacity: 0, x: -20 }}
+            key="left-panel"
+            initial={{ width: 0, opacity: 0, x: -24 }}
+            animate={{ width: 340, opacity: 1, x: 0 }}
+            exit={{ width: 0, opacity: 0, x: -24 }}
             transition={{ type: 'spring', stiffness: 320, damping: 34 }}
             className="hidden shrink-0 overflow-hidden lg:block"
           >
-            <div className="glass h-full w-[268px] rounded-3xl shadow-soft">
-              <Sidebar />
+            <div className="glass h-full w-[340px] rounded-3xl shadow-soft">
+              <NotesPanel />
             </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
 
-      {/* Main column */}
+      {/* Editor */}
       <div className="glass relative flex min-w-0 flex-1 overflow-hidden rounded-3xl shadow-soft">
-        <div
-          className={cn(
-            'flex min-w-0 shrink-0 flex-col border-r border-[var(--line)] transition-[width] duration-300',
-            'w-full lg:w-[336px]',
-            activeNote && 'hidden lg:flex',
-          )}
-        >
-          <div className="flex items-center gap-2 px-3 pt-3 lg:hidden">
-            <Button variant="ghost" size="icon" onClick={() => toggleSidebar(true)} aria-label="打开侧栏">
-              <Menu className="h-4 w-4" />
-            </Button>
-            <span className="text-[13px] font-medium">全部笔记</span>
-          </div>
-          <div className="min-h-0 flex-1">
-            <NoteList />
-          </div>
-        </div>
-
-        <div className="flex min-w-0 flex-1">
+        <div className={cn('flex min-w-0 flex-1 flex-col', !activeNote && 'hidden lg:flex')}>
           <AnimatePresence mode="wait">
             {activeNote ? (
               <motion.div
@@ -156,14 +134,9 @@ function Workspace() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}
                 transition={{ duration: 0.22 }}
-                className="flex min-w-0 flex-1"
+                className="flex min-h-0 flex-1"
               >
-                <div className="min-w-0 flex-1">
-                  <Editor />
-                </div>
-                <div className="hidden xl:flex">
-                  <OutlinePanel editorApiRef={editorApiRef} />
-                </div>
+                <Editor />
               </motion.div>
             ) : (
               <motion.div
@@ -178,6 +151,21 @@ function Workspace() {
             )}
           </AnimatePresence>
         </div>
+
+        {/* Mobile: the list takes the whole area until a note is opened */}
+        {!activeNote ? (
+          <div className="flex w-full min-w-0 flex-col lg:hidden">
+            <div className="flex items-center gap-2 px-3 pt-3">
+              <Button variant="ghost" size="icon" onClick={() => toggleSidebar(true)} aria-label="打开侧栏">
+                <Menu className="h-4 w-4" />
+              </Button>
+              <span className="text-[13px] font-medium">笔记</span>
+            </div>
+            <div className="min-h-0 flex-1">
+              <NotesPanel />
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Mobile drawer */}
@@ -192,13 +180,13 @@ function Workspace() {
               className="absolute inset-0 bg-[rgba(4,7,16,0.5)] backdrop-blur-sm"
             />
             <motion.div
-              initial={{ x: -300, opacity: 0.6 }}
+              initial={{ x: -320, opacity: 0.6 }}
               animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -300, opacity: 0 }}
+              exit={{ x: -320, opacity: 0 }}
               transition={{ type: 'spring', stiffness: 380, damping: 36 }}
-              className="glass absolute inset-y-0 left-0 w-[280px] rounded-r-3xl shadow-strong"
+              className="glass absolute inset-y-0 left-0 w-[320px] rounded-r-3xl shadow-strong"
             >
-              <Sidebar />
+              <NotesPanel />
             </motion.div>
           </div>
         ) : null}
