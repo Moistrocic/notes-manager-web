@@ -9,6 +9,11 @@
  *   node scripts/mock-openlist.mjs [--port 5244] [--root ./tmp/mock-openlist]
  *
  * Log in with:  admin / admin
+ *
+ * By default it behaves like a released OpenList build (verified against
+ * v4.2.6): /api/public/init_status does NOT exist and unknown paths answer with
+ * the SPA HTML, exactly like the real NoRoute handler. Pass --with-init-status
+ * to emulate newer builds that do expose it - the client must work with both.
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -28,6 +33,20 @@ const USERS = [
   { id: 2, username: 'writer', password: 'writer', role: 0, permission: (1 << 3) | (1 << 4) | (1 << 7) },
 ];
 const API_TOKEN = 'mock-api-token';
+/** Newer OpenList builds expose /api/public/init_status; v4.2.6 does not. */
+const WITH_INIT_STATUS = args.includes('--with-init-status');
+
+const SPA_PAGE = [
+  '<!doctype html>',
+  '<html lang="en" translate="no"><head><meta charset="utf-8"><title>OpenList</title></head>',
+  '<body><div id="root"></div></body></html>',
+].join('\n');
+
+/** Unknown routes fall through to the SPA with HTTP 200, as OpenList does. */
+function spa(res) {
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(SPA_PAGE);
+}
 
 const tokens = new Map();
 
@@ -104,7 +123,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (pathname === '/api/public/init_status') return ok(res, { initialized: true });
+    if (pathname === '/api/public/init_status') {
+      if (!WITH_INIT_STATUS) return spa(res);
+      return ok(res, { initialized: true });
+    }
     if (pathname === '/api/public/settings') {
       return ok(res, { site_title: 'Mock OpenList', version: 'v4.0.0-mock', favicon: '' });
     }
@@ -238,7 +260,8 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    return fail(res, 404, `not found: ${method} ${pathname}`);
+    // Anything else is a page request as far as the mock is concerned.
+    return spa(res);
   } catch (err) {
     console.error('[mock-openlist] error:', err);
     return fail(res, 500, err instanceof Error ? err.message : String(err));
@@ -249,5 +272,9 @@ await fsp.mkdir(ROOT, { recursive: true });
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[mock-openlist] listening on http://127.0.0.1:${PORT}`);
   console.log(`[mock-openlist] storage root: ${ROOT}`);
+  console.log(
+    '[mock-openlist] /api/public/init_status: ' +
+      (WITH_INIT_STATUS ? 'present (newer build)' : 'absent, SPA fallback (v4.2.6 behaviour)'),
+  );
   console.log('[mock-openlist] accounts: admin/admin (admin), writer/writer; API token: ' + API_TOKEN);
 });

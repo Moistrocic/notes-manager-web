@@ -186,19 +186,33 @@ export class OpenListClient {
 
   /* ----------------------------- system ---------------------------------- */
 
+  /**
+   * Health check.
+   *
+   * The probe deliberately starts with `/api/public/settings`, which every
+   * OpenList release answers with JSON. It must NOT start with
+   * `/api/public/init_status`: that route was added after v4.2.6, and on older
+   * builds it falls through to the SPA fallback and answers `index.html` with
+   * HTTP 200 - which looks exactly like "not an OpenList server".
+   */
   async ping(): Promise<{ ok: boolean; initialized: boolean; siteTitle?: string; version?: string; error?: string }> {
+    const probeTimeout = Math.min(this.timeoutMs, 6000);
     try {
-      const init = await this.request<{ initialized: boolean }>('/api/public/init_status', { timeoutMs: Math.min(this.timeoutMs, 6000) });
-      let siteTitle: string | undefined;
-      let version: string | undefined;
+      const settings = await this.request<Record<string, unknown>>('/api/public/settings', { timeoutMs: probeTimeout });
+      const siteTitle = typeof settings?.site_title === 'string' ? settings.site_title : undefined;
+      const version = typeof settings?.version === 'string' ? settings.version : undefined;
+
+      // Optional: only newer builds expose it. When it is missing we simply
+      // assume the instance is usable instead of reporting a false negative.
+      let initialized = true;
       try {
-        const settings = await this.request<Record<string, unknown>>('/api/public/settings', { timeoutMs: Math.min(this.timeoutMs, 6000) });
-        siteTitle = typeof settings?.site_title === 'string' ? settings.site_title : undefined;
-        version = typeof settings?.version === 'string' ? settings.version : undefined;
+        const init = await this.request<{ initialized?: boolean }>('/api/public/init_status', { timeoutMs: probeTimeout });
+        if (typeof init?.initialized === 'boolean') initialized = init.initialized;
       } catch {
-        /* settings endpoint is optional */
+        /* route not available in this OpenList build */
       }
-      return { ok: true, initialized: Boolean(init?.initialized), siteTitle, version };
+
+      return { ok: true, initialized, siteTitle, version };
     } catch (err) {
       if (err instanceof OpenListError) {
         return { ok: false, initialized: false, error: err.message };

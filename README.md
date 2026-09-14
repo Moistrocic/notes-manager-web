@@ -357,9 +357,15 @@ sudo ./scripts/doctor.sh
 | --- | --- | --- |
 | `OPENLIST_URL is empty` | 没填地址（`.env.example` 里该项默认为空） | 「设置 → OpenList 连接」填写，或改 `/opt/notes-manager/.env` |
 | 第 7 节 `no local listener on port 5244` | **`127.0.0.1` 在服务器上指的是服务器自己**，而 OpenList 装在你的电脑/另一台机器上 | 改成服务器能访问的地址，如 `http://192.168.1.10:5244` |
+| 第 6 节返回 HTML 而不是 JSON | OpenList 版本较旧 | 已修复（见下），升级到最新版本即可 |
 
 > 浏览器里的 `127.0.0.1` 是**你正在用的那台电脑**；面板里的 `127.0.0.1` 是**服务器**。
 > 两者只有在面板和 OpenList 跑在同一台机器上时才是同一个地址。
+
+> **OpenList 版本兼容性**：健康探测使用 `/api/public/settings`，该接口在所有已发布版本中都存在。
+> `/api/public/init_status` 是 **v4.2.6 之后**才加入的路由，在旧版本上会落到 SPA 回退、返回
+> `index.html`（HTTP 200、`text/html`）——早期版本的面板正是因此误判为"无法连接"。
+> 现在它只作为可选的版本探测，缺失时按"可用"处理。
 
 **Q：面板显示「本地存储（降级）」？**
 A：说明 OpenList 探测失败（地址已配置但连不上）。用 `sudo ./scripts/doctor.sh` 定位，
