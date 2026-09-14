@@ -139,6 +139,24 @@ SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SRC_DIR/package.json" ] || die "package.json not found in $SRC_DIR - run this script from the project"
 [ -f "$SRC_DIR/server/package.json" ] || die "server/ not found in $SRC_DIR"
 
+# Fail fast - and with a useful message - when the checkout is incomplete.
+# (A missing source file otherwise surfaces as a wall of TypeScript errors.)
+missing=""
+for required in \
+  server/src/index.ts \
+  server/src/openlist/client.ts \
+  server/src/storage/manager.ts \
+  server/src/notes/repository.ts \
+  web/src/main.tsx \
+  web/src/App.tsx \
+  web/package.json; do
+  [ -f "$SRC_DIR/$required" ] || missing="$missing\n    - $required"
+done
+if [ -n "$missing" ]; then
+  printf '%b\n' "«C_RED»[error]«C_RESET» the source tree in $SRC_DIR is incomplete:$missing" >&2
+  die "update the checkout (git pull) and run the installer again"
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   die "please run as root: sudo $0 ..."
 fi
