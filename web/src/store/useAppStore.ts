@@ -17,7 +17,7 @@ import type {
 
 export type Theme = 'dark' | 'light';
 export type SortKey = 'updated' | 'created' | 'title' | 'words';
-export type ViewMode = 'list' | 'grid';
+export type ViewMode = 'list' | 'grid' | 'compact';
 export type EditorMode = 'edit' | 'split' | 'preview';
 
 export interface Toast {
@@ -76,6 +76,10 @@ interface AppState {
   navOpen: boolean;
   /** Editor/preview split, 0.2 - 0.8. */
   splitRatio: number;
+  /** Focus mode hides the note list and every toolbar above the note. */
+  focusMode: boolean;
+  /** Panes to restore when leaving focus mode. */
+  focusRestore: { sidebarOpen: boolean; metaOpen: boolean } | null;
   theme: Theme;
   trash: NoteSummary[];
   trashOpen: boolean;
@@ -122,6 +126,7 @@ interface AppState {
   toggleSidebar: (value?: boolean) => void;
   toggleMeta: (value?: boolean) => void;
   toggleNav: (value?: boolean) => void;
+  toggleFocusMode: (value?: boolean) => void;
   setSplitRatio: (value: number) => void;
   /** OpenList guest session (no credentials). */
   guestLogin: () => Promise<void>;
@@ -216,6 +221,8 @@ export const appStore = createStore<AppState>((set, get) => ({
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
   navOpen: false,
   splitRatio: Number(readLocal(SPLIT_KEY, '0.5')) || 0.5,
+  focusMode: false,
+  focusRestore: null,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
   trashOpen: false,
@@ -611,6 +618,25 @@ export const appStore = createStore<AppState>((set, get) => ({
   toggleSidebar: (value) => set((state) => ({ sidebarOpen: value ?? !state.sidebarOpen })),
   toggleMeta: (value) => set((state) => ({ metaOpen: value ?? !state.metaOpen })),
   toggleNav: (value) => set((state) => ({ navOpen: value ?? !state.navOpen })),
+  toggleFocusMode: (value) =>
+    set((state) => {
+      const next = value ?? !state.focusMode;
+      if (next === state.focusMode) return {};
+      if (next) {
+        return {
+          focusMode: true,
+          focusRestore: { sidebarOpen: state.sidebarOpen, metaOpen: state.metaOpen },
+          sidebarOpen: false,
+          metaOpen: false,
+        };
+      }
+      return {
+        focusMode: false,
+        sidebarOpen: state.focusRestore?.sidebarOpen ?? state.sidebarOpen,
+        metaOpen: state.focusRestore?.metaOpen ?? state.metaOpen,
+        focusRestore: null,
+      };
+    }),
   setSplitRatio: (value) => {
     const clamped = Math.min(0.8, Math.max(0.2, value));
     writeLocal(SPLIT_KEY, String(clamped));

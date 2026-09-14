@@ -89,6 +89,7 @@ function Workspace() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const activeNote = useAppStore((s) => s.activeNote);
   const closeNote = useAppStore((s) => s.closeNote);
+  const focusMode = useAppStore((s) => s.focusMode);
   const isDesktop = useMediaQuery('(min-width: 1024px)');
 
   useEffect(() => {
@@ -191,6 +192,23 @@ function Workspace() {
           </div>
         ) : null}
       </AnimatePresence>
+
+      {/* Always available way back to the list - the button in the editor header
+          only exists while a note is open. */}
+      {!sidebarOpen && !focusMode ? (
+        <motion.button
+          type="button"
+          initial={{ opacity: 0, x: -14 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -14 }}
+          onClick={() => toggleSidebar(true)}
+          title="显示笔记列表"
+          className="glass focus-ring fixed left-4 top-4 z-30 flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] font-medium shadow-strong"
+        >
+          <PanelLeftOpen className="h-4 w-4" />
+          显示列表
+        </motion.button>
+      ) : null}
 
       {/* Floating "back to list" for small screens */}
       {activeNote && !isDesktop ? (

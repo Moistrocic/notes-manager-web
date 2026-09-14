@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  ChevronRight,
   FileText,
   Folder,
   FolderPlus,
@@ -12,10 +13,11 @@ import {
   Trash2,
   UserRound,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '../lib/cn';
 import { formatNumber } from '../lib/format';
+import type { FolderCount } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Input, Tooltip } from './ui/primitives';
 import { StatusDetail, StatusPill } from './StatusPill';
@@ -43,6 +45,39 @@ export function NavSections() {
 
   const [addingFolder, setAddingFolder] = useState(false);
   const [folderName, setFolderName] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Nested folders: group by parent so the list renders as a tree.
+  const childrenOf = useMemo(() => {
+    const map = new Map<string, typeof folders>();
+    for (const folder of folders) {
+      const idx = folder.path.lastIndexOf('/');
+      const parent = idx === -1 ? '' : folder.path.slice(0, idx);
+      const bucket = map.get(parent);
+      if (bucket) bucket.push(folder);
+      else map.set(parent, [folder]);
+    }
+    return map;
+  }, [folders]);
+
+  // Keep the selected folder visible when it is picked from elsewhere.
+  useEffect(() => {
+    if (activeFolder === null) return;
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      const parts = activeFolder.split('/');
+      for (let i = 1; i < parts.length; i += 1) next.add(parts.slice(0, i).join('/'));
+      return next;
+    });
+  }, [activeFolder]);
+
+  const toggleExpanded = (path: string) =>
+    setExpanded((previous) => {
+      const next = new Set(previous);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
 
   const favoriteCount = notes.filter((n) => n.favorite).length;
   const pinnedCount = notes.filter((n) => n.pinned).length;
@@ -122,9 +157,14 @@ export function NavSections() {
                   }
                   if (e.key === 'Escape') setAddingFolder(false);
                 }}
-                placeholder="文件夹名称，回车创建"
+                placeholder="名称，支持 a/b/c 嵌套"
                 className="h-8 text-[12px]"
               />
+              <p className="px-1 pt-1 text-[10.5px] leading-relaxed text-[var(--faint)]">
+                {activeFolder
+                  ? `将创建在 /${activeFolder} 下；也可以用 a/b/c 直接指定层级`
+                  : '输入名称创建；用 a/b/c 可直接创建多层'}
+              </p>
             </motion.div>
           ) : null}
         </AnimatePresence>
@@ -132,29 +172,24 @@ export function NavSections() {
           {folders.length === 0 && !addingFolder ? (
             <p className="px-2 py-1 text-[11px] text-[var(--faint)]">还没有文件夹</p>
           ) : null}
-          {folders.map((folder) => (
-            <div key={folder.path} className="group/folder relative">
-              <NavItem
-                label={folder.name}
-                icon={Folder}
-                count={folder.count}
-                active={activeFolder === folder.path}
-                onClick={() => {
-                  setActiveFolder(activeFolder === folder.path ? null : folder.path);
-                  setFavoriteOnly(false);
-                  setActiveTag(null);
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => void deleteFolder(folder.path)}
-                className="focus-ring absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-[var(--faint)] opacity-0 transition-opacity hover:text-[var(--danger)] group-hover/folder:opacity-100"
-                aria-label={`删除文件夹 ${folder.path}`}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
+          <FolderBranch
+            parent=""
+            depth={0}
+            childrenOf={childrenOf}
+            expanded={expanded}
+            onToggle={toggleExpanded}
+            activeFolder={activeFolder}
+            onSelect={(path) => {
+              setActiveFolder(activeFolder === path ? null : path);
+              setFavoriteOnly(false);
+              setActiveTag(null);
+            }}
+            onCreateChild={(parent) => {
+              setFolderName(parent ? `${parent}/` : '');
+              setAddingFolder(true);
+            }}
+            onDelete={(path) => void deleteFolder(path)}
+          />
         </div>
       </section>
 
@@ -199,6 +234,116 @@ export function NavSections() {
         {pinnedCount > 0 ? <Badge tone="neutral">{pinnedCount} 置顶</Badge> : null}
       </div>
     </div>
+  );
+}
+
+interface FolderBranchProps {
+  parent: string;
+  depth: number;
+  childrenOf: Map<string, FolderCount[]>;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+  activeFolder: string | null;
+  onSelect: (path: string) => void;
+  onCreateChild: (parent: string) => void;
+  onDelete: (path: string) => void;
+}
+
+/** One level of the folder tree; recurses into expanded folders. */
+function FolderBranch({
+  parent,
+  depth,
+  childrenOf,
+  expanded,
+  onToggle,
+  activeFolder,
+  onSelect,
+  onCreateChild,
+  onDelete,
+}: FolderBranchProps) {
+  const folders = childrenOf.get(parent) ?? [];
+  if (folders.length === 0) return null;
+
+  return (
+    <>
+      {folders.map((folder) => {
+        const children = childrenOf.get(folder.path) ?? [];
+        const isOpen = expanded.has(folder.path);
+        const active = activeFolder === folder.path;
+        return (
+          <div key={folder.path}>
+            <div className="group/folder relative flex items-center">
+              <button
+                type="button"
+                onClick={() => children.length && onToggle(folder.path)}
+                aria-label={isOpen ? '收起' : '展开'}
+                className={cn(
+                  'focus-ring ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-transform',
+                  children.length === 0 && 'pointer-events-none opacity-0',
+                  isOpen && 'rotate-90',
+                )}
+                style={{ marginLeft: 4 + depth * 12 }}
+              >
+                <ChevronRight className="h-3 w-3" />
+              </button>
+              <div className="min-w-0 flex-1">
+                <NavItem
+                  label={folder.name}
+                  icon={Folder}
+                  count={folder.count}
+                  active={active}
+                  onClick={() => onSelect(folder.path)}
+                />
+              </div>
+              <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-hover/folder:opacity-100">
+                <button
+                  type="button"
+                  onClick={() => onCreateChild(folder.path)}
+                  className="focus-ring rounded-md p-1 text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+                  aria-label={`在 ${folder.path} 下新建子文件夹`}
+                  title="新建子文件夹"
+                >
+                  <FolderPlus className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(folder.path)}
+                  className="focus-ring rounded-md p-1 text-[var(--faint)] transition-colors hover:text-[var(--danger)]"
+                  aria-label={`删除文件夹 ${folder.path}`}
+                  title="删除文件夹"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+
+            <AnimatePresence initial={false}>
+              {isOpen && children.length ? (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="overflow-hidden"
+                >
+                  <FolderBranch
+                    parent={folder.path}
+                    depth={depth + 1}
+                    childrenOf={childrenOf}
+                    expanded={expanded}
+                    onToggle={onToggle}
+                    activeFolder={activeFolder}
+                    onSelect={onSelect}
+                    onCreateChild={onCreateChild}
+                    onDelete={onDelete}
+                  />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </div>
+        );
+      })}
+    </>
   );
 }
 

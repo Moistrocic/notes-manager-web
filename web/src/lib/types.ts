@@ -29,7 +29,10 @@ export interface TagCount {
 export interface FolderCount {
   path: string;
   name: string;
+  /** Notes directly inside this folder. */
   count: number;
+  /** Nesting level, 0 for a top level folder. */
+  depth: number;
 }
 
 export interface NoteStats {

@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  AlignJustify,
   ArrowDownUp,
   ChevronDown,
   ChevronLeft,
@@ -16,7 +17,7 @@ import {
 import { useEffect, useMemo, useRef } from 'react';
 import { cn } from '../lib/cn';
 import { relativeTime } from '../lib/format';
-import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey } from '../store/useAppStore';
+import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey, type ViewMode } from '../store/useAppStore';
 import type { NoteSummary } from '../lib/types';
 import { Badge, Button, Skeleton, Tooltip } from './ui/primitives';
 import { NavSections, SessionFooter } from './Sidebar';
@@ -232,6 +233,25 @@ export function NotesPanel() {
             <div className="flex items-center gap-0.5 rounded-lg border border-[var(--line)] p-0.5">
               <button
                 type="button"
+                onClick={() => setView('compact')}
+                className={cn(
+                  'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
+                  view === 'compact' ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
+                )}
+                aria-label="紧凑视图（仅标题）"
+                title="紧凑视图（仅标题）"
+              >
+                {view === 'compact' ? (
+                  <motion.span
+                    layoutId="view-toggle"
+                    className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
+                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                  />
+                ) : null}
+                <AlignJustify className="relative h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
                 onClick={() => setView('list')}
                 className={cn(
                   'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
@@ -355,11 +375,28 @@ function NoteGrid({
   canWrite,
 }: {
   notes: NoteSummary[];
-  view: 'list' | 'grid';
+  view: ViewMode;
   activeId: string | null;
   onSelect: (id: string) => void | Promise<void>;
   canWrite: boolean;
 }) {
+  if (view === 'compact') {
+    return (
+      <motion.div layout className="flex flex-col gap-0.5">
+        <AnimatePresence initial={false} mode="popLayout">
+          {notes.map((note, index) => (
+            <CompactRow
+              key={note.id}
+              note={note}
+              active={note.id === activeId}
+              index={index}
+              onSelect={() => void onSelect(note.id)}
+            />
+          ))}
+        </AnimatePresence>
+      </motion.div>
+    );
+  }
   return (
     <motion.div layout className={cn('gap-2', view === 'grid' ? 'grid grid-cols-2' : 'flex flex-col')}>
       <AnimatePresence initial={false} mode="popLayout">
@@ -376,6 +413,46 @@ function NoteGrid({
         ))}
       </AnimatePresence>
     </motion.div>
+  );
+}
+
+/** Title only row, for scanning a long list quickly. */
+function CompactRow({
+  note,
+  active,
+  index,
+  onSelect,
+}: {
+  note: NoteSummary;
+  active: boolean;
+  index: number;
+  onSelect: () => void;
+}) {
+  return (
+    <motion.button
+      layout
+      type="button"
+      initial={{ opacity: 0, x: -6 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -6, transition: { duration: 0.12 } }}
+      transition={{ duration: 0.16, delay: Math.min(index * 0.012, 0.15) }}
+      onClick={onSelect}
+      title={note.title}
+      className={cn(
+        'focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors',
+        active
+          ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-[var(--text)]'
+          : 'text-[var(--muted)] hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-[var(--text)]',
+      )}
+    >
+      <span
+        className="h-1.5 w-1.5 shrink-0 rounded-full"
+        style={{ background: note.color ?? (active ? 'var(--accent)' : 'transparent') }}
+      />
+      {note.pinned ? <Pin className="h-3 w-3 shrink-0 fill-current text-[var(--accent)]" /> : null}
+      <span className="truncate">{note.title || '未命名笔记'}</span>
+      {note.favorite ? <Star className="ml-auto h-3 w-3 shrink-0 fill-current text-[var(--warn)]" /> : null}
+    </motion.button>
   );
 }
 

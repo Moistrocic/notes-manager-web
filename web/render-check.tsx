@@ -67,6 +67,8 @@ interface Scenario {
   name: string;
   state: Record<string, unknown>;
   expect: string[];
+  /** Markup that must NOT be present (panes that were hidden). */
+  absent?: string[];
 }
 
 const providers = {
@@ -114,7 +116,7 @@ const scenarios: Scenario[] = [
       metaOpen: true,
       sidebarOpen: true,
     },
-    expect: ['渲染检查笔记', '大纲', '新建笔记', '置顶'],
+    expect: ['渲染检查笔记', 'outline-panel', '新建笔记', '置顶'],
   },
   {
     name: 'workspace: no note selected (merged left panel visible)',
@@ -158,6 +160,64 @@ const scenarios: Scenario[] = [
     expect: ['只读', '没有写入权限', '渲染检查笔记'],
   },
   {
+    name: 'workspace: outline hidden leaves no pane behind',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [note],
+      stats: { notes: 1, tags: 0, folders: 0, words: 12, updatedAt: note.updated },
+      capabilities,
+      activeId: note.id,
+      activeNote: note,
+      // 'edit' keeps the markdown preview out of the picture: DOMPurify needs a
+      // real DOM, which this Node renderer does not provide.
+      editorMode: 'edit',
+      metaOpen: false,
+    },
+    expect: ['渲染检查笔记'],
+    absent: ['outline-panel'],
+  },
+  {
+    name: 'workspace: focus mode hides the list and the toolbars',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [note],
+      stats: { notes: 1, tags: 0, folders: 0, words: 12, updatedAt: note.updated },
+      capabilities,
+      activeId: note.id,
+      activeNote: note,
+      editorMode: 'edit',
+      focusMode: true,
+      sidebarOpen: false,
+      metaOpen: false,
+    },
+    // Focus mode keeps only the mini bar: no title row, no tag row, no toolbar.
+    expect: ['退出专注模式', '显示大纲'],
+    absent: ['outline-panel', '更新于', '笔记标题', '添加标签'],
+  },
+  {
+    name: 'workspace: list hidden shows a way back',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [note],
+      stats: { notes: 1, tags: 0, folders: 0, words: 12, updatedAt: note.updated },
+      capabilities,
+      activeId: null,
+      activeNote: null,
+      sidebarOpen: false,
+      focusMode: false,
+    },
+    expect: ['显示列表', '你好'],
+  },
+  {
     name: 'command palette + dialogs',
     state: {
       paletteOpen: true,
@@ -181,11 +241,15 @@ for (const scenario of scenarios) {
   try {
     const html = renderToString(<App />);
     const missing = scenario.expect.filter((needle) => !html.includes(needle));
-    if (missing.length === 0) {
+    const unexpected = (scenario.absent ?? []).filter((needle) => html.includes(needle));
+    if (missing.length === 0 && unexpected.length === 0) {
       console.log(`  ok    ${scenario.name} (${html.length} bytes)`);
     } else {
       failed += 1;
-      console.log(`  FAIL  ${scenario.name} - missing: ${missing.join(', ')}`);
+      const parts: string[] = [];
+      if (missing.length) parts.push(`missing: ${missing.join(', ')}`);
+      if (unexpected.length) parts.push(`should be hidden: ${unexpected.join(', ')}`);
+      console.log(`  FAIL  ${scenario.name} - ${parts.join(' | ')}`);
     }
   } catch (err) {
     failed += 1;

@@ -33,7 +33,7 @@ export function OutlinePanel({ editorApiRef }: { editorApiRef: { current: Editor
   if (!activeNote) return null;
 
   return (
-    <div className="flex h-full w-[228px] shrink-0 flex-col border-l border-[var(--line)]">
+    <div className="outline-panel flex h-full w-[228px] shrink-0 flex-col border-l border-[var(--line)]">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--line)] px-3">
         <ListTree className="h-3.5 w-3.5 text-[var(--accent)]" />
         <span className="flex-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--faint)]">大纲</span>

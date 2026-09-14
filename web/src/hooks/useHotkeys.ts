@@ -47,6 +47,7 @@ export function useHotkeys(): void {
         if (state.paletteOpen) state.setPaletteOpen(false);
         else if (state.settingsOpen) state.setSettingsOpen(false);
         else if (state.trashOpen) state.setTrashOpen(false);
+        else if (state.focusMode) state.toggleFocusMode(false);
       }
     };
 

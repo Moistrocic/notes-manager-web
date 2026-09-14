@@ -10,8 +10,14 @@ import { countWords, hashId, slugify, toExcerpt } from './markdown.js';
 const log = createLogger('notes');
 
 export const TRASH_DIR = '_trash';
-const MAX_FOLDER_DEPTH = 3;
-const MAX_DIRS_PER_SCAN = 120;
+/**
+ * How deep the tree is walked. `MAX_FOLDER_DEPTH = 6` visits folders nested up
+ * to five levels below the root - the previous value of 3 stopped after two
+ * levels, so notes in `a/b/c/` were silently invisible.
+ */
+const MAX_FOLDER_DEPTH = 6;
+/** Upper bound on directory requests per scan, so a huge tree stays responsive. */
+const MAX_DIRS_PER_SCAN = 240;
 const SCAN_TTL_MS = 1500;
 const READ_CONCURRENCY = 6;
 const NOTE_EXTENSIONS = ['.md', '.markdown'];
@@ -178,7 +184,7 @@ export class NotesRepository {
         if (entry.isDir) {
           const name = entry.name;
           if (name === TRASH_DIR || name.startsWith('.')) continue;
-          if (current.depth + 1 <= MAX_FOLDER_DEPTH - 1) queue.push({ dir: entry.path, depth: current.depth + 1 });
+          if (current.depth + 1 < MAX_FOLDER_DEPTH) queue.push({ dir: entry.path, depth: current.depth + 1 });
           continue;
         }
         if (!isNoteFile(entry.name)) continue;
@@ -501,22 +507,51 @@ export class NotesRepository {
     return removed;
   }
 
-  async folders(user: SessionUser | null | undefined): Promise<{ path: string; name: string; count: number }[]> {
+  /**
+   * Every folder in the notes tree, including nested ones.
+   *
+   * `count` is the number of notes directly inside the folder (not the subtree),
+   * so the UI can show a meaningful badge next to each level.
+   */
+  async folders(user: SessionUser | null | undefined): Promise<{ path: string; name: string; count: number; depth: number }[]> {
     const notes = await this.list(user);
     const counts = new Map<string, number>();
     for (const note of notes) {
       if (!note.folder) continue;
       counts.set(note.folder, (counts.get(note.folder) ?? 0) + 1);
     }
+
+    // Walk the tree so that empty folders show up as well.
     const storage = await this.storageManager.resolve(user);
-    const top = await storage.driver.list('/').catch(() => []);
-    for (const entry of top) {
-      if (!entry.isDir || entry.name === TRASH_DIR || entry.name.startsWith('.')) continue;
-      if (!counts.has(entry.name)) counts.set(entry.name, 0);
+    const queue: { dir: string; depth: number }[] = [{ dir: '/', depth: 0 }];
+    let visited = 0;
+    while (queue.length && visited < MAX_DIRS_PER_SCAN) {
+      const current = queue.shift() as { dir: string; depth: number };
+      visited += 1;
+      let entries;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        entries = await storage.driver.list(current.dir);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDir) continue;
+        if (entry.name === TRASH_DIR || entry.name.startsWith('.')) continue;
+        const path = current.dir === '/' ? entry.name : `${current.dir.slice(1)}/${entry.name}`;
+        if (!counts.has(path)) counts.set(path, 0);
+        if (current.depth + 1 < MAX_FOLDER_DEPTH) queue.push({ dir: entry.path, depth: current.depth + 1 });
+      }
     }
+
     return [...counts.entries()]
-      .map(([path, count]) => ({ path, name: path, count }))
-      .sort((a, b) => a.path.localeCompare(b.path));
+      .map(([path, count]) => ({
+        path,
+        name: path.split('/').pop() ?? path,
+        count,
+        depth: path.split('/').length - 1,
+      }))
+      .sort((a, b) => a.path.localeCompare(b.path, 'zh-Hans-CN'));
   }
 
   async createFolder(user: SessionUser | null | undefined, folder: string): Promise<string> {
