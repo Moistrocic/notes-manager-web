@@ -181,13 +181,15 @@ SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
 #    dom-check     jsdom 中真实点击大纲与锚点链接，断言地址栏/编辑器/预览三者一致
 npm run check:web
 
-# 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行，48 项断言）
+# 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行）
 npm run test:installer
 
-# 4) 服务端单元测试（基础路径换算等）
+# 4) 服务端单元测试（基础路径换算、字体仓库、内置字体 id 等）
 npm run test:server
 
-# 5) 仓库完整性检查：磁盘上的源文件是否都在 git 里
+# 5) 仓库完整性检查：磁盘上的源文件是否都在 git 里；
+#    并拒绝任何运行时状态入库（.env / data/ / sessions.json / settings.json，
+#    以及内容里带 sessionSecret、adminPasswordHash 的文件）
 npm run check:repo
 
 # 6) 类型检查
