@@ -35,6 +35,37 @@ interface Call {
 }
 let calls: Call[] = [];
 const notes = new Map<string, Note>();
+let notesRoot = '/public/Notes';
+
+/* -------------------------------------------------------------------------- */
+/* window stub, so the deep link code has somewhere to read the address from   */
+/* -------------------------------------------------------------------------- */
+const historyLog: string[] = [];
+const fakeLocation = { pathname: '/', hash: '' };
+function applyUrl(url: string) {
+  const [pathname, hash = ''] = url.split('#');
+  fakeLocation.pathname = pathname || '/';
+  fakeLocation.hash = hash ? `#${hash}` : '';
+}
+(globalThis as unknown as { window: unknown }).window = {
+  location: fakeLocation,
+  history: {
+    pushState: (_state: unknown, _title: string, url: string) => {
+      historyLog.push(`push ${url}`);
+      applyUrl(url);
+    },
+    replaceState: (_state: unknown, _title: string, url: string) => {
+      historyLog.push(`replace ${url}`);
+      applyUrl(url);
+    },
+  },
+  addEventListener: () => undefined,
+  removeEventListener: () => undefined,
+};
+const goTo = (url: string) => {
+  applyUrl(url);
+  historyLog.length = 0;
+};
 
 function makeNote(id: string, content: string): Note {
   return {
@@ -81,7 +112,18 @@ globalThis.fetch = (async (input: unknown, init: RequestInit = {}) => {
     }
   }
   if (url.includes('/api/notes')) {
-    return json({ notes: [...notes.values()], stats: { notes: notes.size, tags: 0, folders: 0, words: 0, updatedAt: null }, tags: [], folders: [] });
+    return json({
+      notes: [...notes.values()],
+      stats: { notes: notes.size, tags: 0, folders: 0, words: 0, updatedAt: null },
+      tags: [],
+      folders: [],
+      capabilities: {
+        driver: 'openlist',
+        root: notesRoot,
+        writable: true,
+        permissions: { write: true, rename: true, move: true, remove: true },
+      },
+    });
   }
   return json({ ok: true });
 }) as typeof fetch;
@@ -190,6 +232,76 @@ const reset = (loaded: Note) => {
   store.getState().patchActive({ content: 'abc\n' });
   await wait(1300);
   check('retype back writes nothing', countWrites(), 0);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Deep links                                                                  */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('deep links');
+
+// 8. Selecting a note writes its storage path into the address bar.
+{
+  const a = makeNote('d1', 'body\n');
+  const b = makeNote('d2', 'body\n');
+  reset(a);
+  notes.set('d2', b);
+  // capabilities (and with them the storage root) arrive with the note list,
+  // which the app loads before any note can be clicked
+  await store.getState().refreshNotes({ silent: true });
+  goTo('/');
+  await store.getState().selectNote('d1');
+  check('opening a note pushes its path', historyLog, ['push /public/Notes/d1.md']);
+}
+
+// 9. A shared link opens the note it names, anchor and all.
+{
+  const a = makeNote('e1', '# 1.1 分层\n\ntext\n');
+  reset(a);
+  notes.set('e1', a);
+  await store.getState().refreshNotes({ silent: true });
+  goTo('/public/Notes/e1.md#11-分层');
+  await store.getState().openFromLocation();
+  check('the deep link opens the note', store.getState().activeNote?.id, 'e1');
+  check('the anchor is remembered', store.getState().pendingAnchor, '11-分层');
+  // the address already is the canonical one, so rewriting it would only add a
+  // duplicate history entry
+  check('no redundant history entry', historyLog, []);
+  check('the address still points at the note', fakeLocation.pathname + fakeLocation.hash, '/public/Notes/e1.md#11-分层');
+}
+
+// 10. A path below the storage root also resolves.
+{
+  const nested = { ...makeNote('e2', 'body\n'), path: '/工作/项目.md', folder: '工作' };
+  reset(nested);
+  notes.set('e2', nested);
+  await store.getState().refreshNotes({ silent: true });
+  goTo('/public/Notes/' + encodeURIComponent('工作') + '/' + encodeURIComponent('项目.md'));
+  await store.getState().openFromLocation();
+  check('a nested deep link resolves', store.getState().activeNote?.id, 'e2');
+}
+
+// 11. A link to a note that no longer exists reports it and resets the address.
+{
+  const a = makeNote('e3', 'body\n');
+  reset(a);
+  notes.set('e3', a);
+  await store.getState().refreshNotes({ silent: true });
+  store.setState({ toasts: [] } as never);
+  goTo('/public/Notes/gone.md');
+  await store.getState().openFromLocation();
+  check('a missing note reports a toast', store.getState().toasts.length > 0, true);
+  check('and the address bar is reset', historyLog, ['replace /']);
+}
+
+// 12. Browsing back to the root closes the note.
+{
+  const a = makeNote('e4', 'body\n');
+  reset(a);
+  await store.getState().selectNote('e4');
+  goTo('/');
+  await store.getState().openFromLocation();
+  check('the root closes the open note', store.getState().activeNote, null);
 }
 
 /* -------------------------------------------------------------------------- */

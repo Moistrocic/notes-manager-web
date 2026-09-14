@@ -25,6 +25,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { cn } from '../lib/cn';
 import { formatDateTime, relativeTime } from '../lib/format';
+import { slugifyHeading } from '../lib/markdown';
+import { extractHeadings } from '../lib/outline';
+import { replaceAnchor } from '../lib/url';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
 import { CodeEditor, type EditorApi } from './CodeEditor';
@@ -68,6 +71,8 @@ export function Editor() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
   const openInternalLink = useAppStore((s) => s.openInternalLink);
+  const pendingAnchor = useAppStore((s) => s.pendingAnchor);
+  const setPendingAnchor = useAppStore((s) => s.setPendingAnchor);
   const splitRatio = useAppStore((s) => s.splitRatio);
   const setSplitRatio = useAppStore((s) => s.setSplitRatio);
   const focusMode = useAppStore((s) => s.focusMode);
@@ -109,6 +114,37 @@ export function Editor() {
     },
     [setSplitRatio],
   );
+
+  /** Jumps both panes to an in-page anchor (`[text](#slug)`). */
+  const followAnchor = useCallback(
+    (anchor: string) => {
+      replaceAnchor(anchor);
+      const content = useAppStore.getState().activeNote?.content ?? '';
+      const headings = extractHeadings(content);
+      const index = headings.findIndex((h) => slugifyHeading(h.text) === anchor);
+      if (index >= 0) apiRef.current?.revealLine(headings[index].line);
+    },
+    [],
+  );
+
+  // A deep link (`.../Readme.md#11-分层`) can only be applied once the note and
+  // its preview exist.
+  useEffect(() => {
+    if (!pendingAnchor || !activeNote) return undefined;
+    const timer = window.setTimeout(() => {
+      const headings = extractHeadings(activeNote.content);
+      const index = headings.findIndex((h) => slugifyHeading(h.text) === pendingAnchor);
+      if (index >= 0) {
+        const heading = headings[index];
+        apiRef.current?.revealLine(heading.line);
+        previewApiRef.current?.scrollToHeading({ index, text: heading.text, level: heading.level });
+      } else {
+        previewApiRef.current?.scrollToAnchor(pendingAnchor);
+      }
+      setPendingAnchor(null);
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [pendingAnchor, activeNote, setPendingAnchor]);
 
   // While dragging, keep the pointer and suppress text selection everywhere.
   useEffect(() => {
@@ -406,6 +442,7 @@ export function Editor() {
                   content={activeNote.content}
                   apiRef={previewApiRef}
                   onOpenLink={(href) => void openInternalLink(href)}
+                  onOpenAnchor={followAnchor}
                 />
               </motion.div>
             ) : null}

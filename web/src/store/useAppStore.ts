@@ -2,6 +2,7 @@ import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
 import { api } from '../lib/api';
 import { stripMarkdown } from '../lib/markdown';
+import { pushLocation, readLocation, replaceLocation } from '../lib/url';
 import { ApiError } from '../lib/types';
 import type {
   AuthProviders,
@@ -100,9 +101,14 @@ interface AppState {
   refreshStatus: () => Promise<void>;
 
   refreshNotes: (options?: { silent?: boolean }) => Promise<void>;
-  selectNote: (id: string) => Promise<void>;
+  selectNote: (id: string, options?: { anchor?: string; replaceHistory?: boolean }) => Promise<void>;
   /** Follow a link inside a note: another note opens in the panel. */
   openInternalLink: (href: string) => Promise<void>;
+  /** Open the note named by the current address (deep link / back button). */
+  openFromLocation: () => Promise<void>;
+  /** Anchor the editor should scroll to once the note has rendered. */
+  pendingAnchor: string | null;
+  setPendingAnchor: (anchor: string | null) => void;
   closeNote: () => void;
   createNote: (input?: { title?: string; folder?: string; content?: string }) => Promise<void>;
   patchActive: (patch: NotePatch, options?: { save?: boolean }) => void;
@@ -199,6 +205,18 @@ function notePayload(note: Note) {
 
 type NotePayload = ReturnType<typeof notePayload>;
 
+const trimSlashes = (value: string) => value.replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+
+/**
+ * The path a note is addressed by in a URL: the storage root plus the note's own
+ * path, e.g. `/public/Notes/Readme.md`. Local storage has no such prefix, so
+ * the note path alone is used.
+ */
+function absoluteNotePath(note: { path: string }, capabilities: NoteCapabilities | null): string {
+  const root = capabilities?.driver === 'openlist' ? capabilities.root : '';
+  return trimSlashes(`${root === '/' ? '' : root}${note.path}`);
+}
+
 /**
  * True when the two payloads would produce the same file. JSON.stringify is
  * enough because both sides are built by `notePayload`, so the key order is
@@ -232,6 +250,7 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   activeId: null,
   activeNote: null,
+  pendingAnchor: null,
   loadingNote: false,
   saving: false,
   dirty: false,
@@ -264,7 +283,11 @@ export const appStore = createStore<AppState>((set, get) => ({
     try {
       const [providers, me, status] = await Promise.all([api.providers(), api.me(), api.status()]);
       set({ providers, user: me.user, status, booted: true, bootError: null });
-      if (me.user) await get().refreshNotes();
+      if (me.user) {
+        await get().refreshNotes();
+        // a shared link opens straight into its note
+        await get().openFromLocation();
+      }
     } catch (err) {
       set({ booted: true, bootError: errorMessage(err) });
     }
@@ -357,10 +380,10 @@ export const appStore = createStore<AppState>((set, get) => ({
     }
   },
 
-  selectNote: async (id) => {
-    if (get().activeId === id && get().activeNote) return;
+  selectNote: async (id, options) => {
+    if (get().activeId === id && get().activeNote && !options?.anchor) return;
     await get().saveActive(true);
-    set({ activeId: id, loadingNote: true });
+    set({ activeId: id, loadingNote: true, pendingAnchor: options?.anchor ?? null });
     try {
       const { note } = await api.getNote(id);
       set({
@@ -371,10 +394,40 @@ export const appStore = createStore<AppState>((set, get) => ({
         // the baseline every later comparison is made against
         lastSaved: notePayload(note),
       });
+      const target = absoluteNotePath(note, get().capabilities);
+      const anchor = options?.anchor ?? null;
+      if (options?.replaceHistory) replaceLocation(target, anchor);
+      else pushLocation(target, anchor);
     } catch (err) {
-      set({ loadingNote: false });
+      set({ loadingNote: false, pendingAnchor: null });
       get().pushToast({ title: '打开笔记失败', message: errorMessage(err), tone: 'error' });
     }
+  },
+
+  openFromLocation: async () => {
+    const { path, anchor } = readLocation();
+    if (!path) {
+      // the notes root: make sure a stale note is not left in the address bar
+      if (get().activeNote) get().closeNote();
+      return;
+    }
+    if (get().notes.length === 0) await get().refreshNotes({ silent: true });
+    const capabilities = get().capabilities;
+    const wanted = trimSlashes(path);
+    const notes = get().notes;
+    const found =
+      notes.find((n) => trimSlashes(absoluteNotePath(n, capabilities)) === wanted) ??
+      notes.find((n) => trimSlashes(n.path) === wanted);
+    if (!found) {
+      get().pushToast({
+        title: '链接指向的笔记不存在',
+        message: `${path} —— 可能已被移动或删除`,
+        tone: 'error',
+      });
+      replaceLocation(null);
+      return;
+    }
+    await get().selectNote(found.id, { anchor: anchor || undefined, replaceHistory: true });
   },
 
   openInternalLink: async (href) => {
@@ -412,7 +465,8 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   closeNote: () => {
     void get().saveActive(true);
-    set({ activeId: null, activeNote: null, dirty: false, lastSaved: null });
+    set({ activeId: null, activeNote: null, pendingAnchor: null, dirty: false, lastSaved: null });
+    replaceLocation(null);
   },
 
   createNote: async (input) => {
@@ -671,6 +725,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
 
   /* -------------------------------- ui --------------------------------- */
+  setPendingAnchor: (anchor) => set({ pendingAnchor: anchor }),
   setQuery: (value) => set({ query: value }),
   setActiveTag: (tag) => set({ activeTag: tag }),
   setActiveFolder: (folder) => set({ activeFolder: folder }),

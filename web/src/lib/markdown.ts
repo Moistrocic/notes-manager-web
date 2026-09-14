@@ -20,8 +20,40 @@ export function renderMarkdown(source: string): string {
   return DOMPurify.sanitize(html, PURIFY_CONFIG) as unknown as string;
 }
 
+/**
+ * GitHub's heading anchor algorithm: lowercase, drop everything that is not a
+ * letter, digit, space, hyphen or underscore, then spaces become hyphens.
+ * Unicode letters are kept, so `1.1 分层` becomes `11-分层`.
+ */
+export function slugifyHeading(text: string): string {
+  return (text ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s+/g, '-');
+}
+
+/**
+ * Gives every heading an id so that `[text](#anchor)` links work.
+ *
+ * marked stopped emitting header ids (v5 deprecated it, later versions removed
+ * it), so nothing in the rendered HTML can be targeted without this. Repeated
+ * headings get `-1`, `-2` … exactly like GitHub.
+ */
+export function assignHeadingIds(root: HTMLElement): void {
+  const seen = new Map<string, number>();
+  root.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6').forEach((heading) => {
+    if (heading.id) return;
+    const base = slugifyHeading(heading.textContent ?? '') || 'section';
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    heading.id = count === 0 ? base : `${base}-${count}`;
+  });
+}
+
 /** Applies syntax highlighting and safe link attributes to a rendered container. */
 export function decorateMarkdown(root: HTMLElement): void {
+  assignHeadingIds(root);
   root.querySelectorAll<HTMLElement>('pre code').forEach((block) => {
     if (block.dataset.highlighted === 'yes') return;
     try {

@@ -10,6 +10,7 @@
  */
 import { marked } from 'marked';
 import { extractHeadings } from './src/lib/outline';
+import { slugifyHeading } from './src/lib/markdown';
 
 let failed = 0;
 let passed = 0;
@@ -64,6 +65,33 @@ compare(
   'fence followed by more headings',
   '# one\n\n```\n# hidden\n```\n\n## two\n\n### three\n',
 );
+
+/* -------------------------------------------------------------------------- */
+/* Heading anchors                                                             */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('heading anchors');
+
+check('numbered Chinese heading', slugifyHeading('1.1 分层'), '11-分层');
+check('punctuation is dropped', slugifyHeading('Hello, World!'), 'hello-world');
+check('collapsed whitespace', slugifyHeading('  Spaced   Out  '), 'spaced-out');
+check('mixed scripts', slugifyHeading('中文 English 123'), '中文-english-123');
+check('inline code markers are dropped', slugifyHeading('\`code\` here'), 'code-here');
+check('emphasis markers are dropped', slugifyHeading('**bold** title'), 'bold-title');
+check('slashes and dots', slugifyHeading('a/b.c'), 'abc');
+check('underscores and hyphens survive', slugifyHeading('snake_case-name'), 'snake_case-name');
+check('empty result for symbols only', slugifyHeading('!!!'), '');
+check('unicode letters survive', slugifyHeading('Café résumé'), 'café-résumé');
+
+// The anchor a user writes in markdown has to match the id the renderer
+// generates for the same heading.
+{
+  const markdown = '# 1.1 分层\n\n## 1.2 权限\n\n### Details\n';
+  const fromSource = extractHeadings(markdown).map((h) => slugifyHeading(h.text));
+  const fromRendered = renderedHeadings(markdown).map((h) => slugifyHeading(h.text));
+  check('source and rendered slugs agree', fromSource, fromRendered);
+  check('the anchor from the report resolves', fromSource[0], '11-分层');
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

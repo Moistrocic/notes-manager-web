@@ -25,6 +25,16 @@ export default function App() {
     void boot();
   }, [boot]);
 
+  // The address bar is the source of truth for which note is open, so the
+  // browser's back and forward buttons walk through the notes.
+  useEffect(() => {
+    const onPopState = () => {
+      if (useAppStore.getState().user) void useAppStore.getState().openFromLocation();
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   return (
     <div className="relative h-screen w-screen overflow-hidden">
       <Aurora />
