@@ -1,4 +1,0 @@
-chore: drop a stray scratch file from the repository
-
-tmp-commit-msg.txt was picked up by "git add -A" while writing the previous
-commit message. The new "npm run check:repo" guard caught it.
