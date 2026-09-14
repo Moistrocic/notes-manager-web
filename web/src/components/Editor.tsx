@@ -28,7 +28,7 @@ import { formatDateTime, relativeTime } from '../lib/format';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
 import { CodeEditor, type EditorApi } from './CodeEditor';
-import { Preview } from './Preview';
+import { Preview, type PreviewApi } from './Preview';
 import { NoteMetaBar } from './NoteMetaBar';
 import { OutlinePanel } from './OutlinePanel';
 
@@ -76,6 +76,7 @@ export function Editor() {
   const readOnlyReason = useReadOnlyReason();
 
   const apiRef = useRef<EditorApi | null>(null);
+  const previewApiRef = useRef<PreviewApi | null>(null);
   const panesRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -401,7 +402,11 @@ export function Editor() {
                 transition={{ duration: 0.22 }}
                 className="min-w-0 flex-1"
               >
-                <Preview content={activeNote.content} onOpenLink={(href) => void openInternalLink(href)} />
+                <Preview
+                  content={activeNote.content}
+                  apiRef={previewApiRef}
+                  onOpenLink={(href) => void openInternalLink(href)}
+                />
               </motion.div>
             ) : null}
           </AnimatePresence>
@@ -417,7 +422,7 @@ export function Editor() {
               transition={{ type: 'spring', stiffness: 320, damping: 34 }}
               className="shrink-0 overflow-hidden"
             >
-              <OutlinePanel editorApiRef={apiRef} />
+              <OutlinePanel editorApiRef={apiRef} previewApiRef={previewApiRef} />
             </motion.div>
           ) : null}
         </AnimatePresence>

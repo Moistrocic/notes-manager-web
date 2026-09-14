@@ -368,6 +368,16 @@ body {
 .markdown-body img { max-width: 100%; border-radius: 12px; box-shadow: var(--shadow-soft); }
 .markdown-body input[type='checkbox'] { margin-right: 0.5em; accent-color: var(--accent); }
 
+/* Marks where an outline click landed in the preview. */
+.markdown-body .heading-flash {
+  border-radius: 8px;
+  animation: heading-flash 1.2s ease-out;
+}
+@keyframes heading-flash {
+  0% { background-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  100% { background-color: transparent; }
+}
+
 /* ------------------------------------------------------------------ */
 /* CodeMirror                                                          */
 /* ------------------------------------------------------------------ */

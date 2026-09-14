@@ -17,6 +17,7 @@ export default defineConfig({
       input: {
         'render-check': 'render-check.tsx',
         'store-check': 'store-check.tsx',
+        'outline-check': 'outline-check.tsx',
       },
       output: { entryFileNames: '[name].js' },
     },
