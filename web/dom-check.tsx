@@ -269,36 +269,142 @@ console.log('\nfonts and wallpapers (jsdom)');
   check('a text file is neither', wallpaperKindOf('notes.txt'), null);
   check('a name without extension is neither', wallpaperKindOf('README'), null);
 
-  // The folder input hands us every file in the tree; only media survives.
+}
+
+/* --- finding Wallpaper Engine inside a folder the user granted ------------ */
+const { pickLibrary, canPickDirectory } = await import('./src/lib/local-wallpapers');
+
+console.log('\nSteam wallpaper detection (jsdom)');
+{
+  interface FakeFile {
+    kind: 'file';
+    name: string;
+    getFile(): Promise<File>;
+  }
+  interface FakeDir {
+    kind: 'directory';
+    name: string;
+    getDirectoryHandle(name: string): Promise<FakeDir>;
+    entries(): AsyncIterableIterator<[string, FakeFile | FakeDir]>;
+  }
+  /** A file the picker would hand over; project.json is the only one read. */
+  const fakeFile = (name: string, body = ''): FakeFile => ({
+    kind: 'file',
+    name,
+    getFile: async () => ({ name, size: body.length, type: '', text: async () => body }) as unknown as File,
+  });
+  const fakeDir = (name: string, children: (FakeFile | FakeDir)[]): FakeDir => ({
+    kind: 'directory',
+    name,
+    async getDirectoryHandle(child: string) {
+      const found = children.find((entry) => entry.kind === 'directory' && entry.name === child);
+      if (!found) throw new Error('NotFoundError');
+      return found as FakeDir;
+    },
+    async *entries() {
+      for (const child of children) yield [child.name, child] as [string, FakeFile | FakeDir];
+    },
+  });
+
+  const project = (fields: Record<string, string>) => fakeFile('project.json', JSON.stringify(fields));
+
+  // A realistic library: a scene wallpaper that only Wallpaper Engine can draw,
+  // a video one, a plain image one, and a hidden cache folder.
+  const engine = fakeDir('431960', [
+    fakeDir('aurora', [project({ title: '极光', type: 'scene', file: 'scene.pkg' }), fakeFile('scene.pkg'), fakeFile('preview.jpg')]),
+    fakeDir('rain', [project({ title: '雨夜东京', type: 'video', file: 'wallpaper.mp4' }), fakeFile('wallpaper.mp4'), fakeFile('preview.gif')]),
+    fakeDir('plain', [fakeFile('wallpaper.jpg')]),
+    fakeDir('.cache', [fakeFile('junk.jpg')]),
+  ]);
+  const steam = fakeDir('Steam', [fakeDir('steamapps', [fakeDir('workshop', [fakeDir('content', [engine])])])]);
+  const loose = fakeDir('Pictures', [fakeFile('a.jpg'), fakeFile('b.mp4'), fakeFile('notes.txt')]);
+
+  check('the picker is reported as available', canPickDirectory(), false);
+  (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => steam;
+  check('and once the browser has it, so do we', canPickDirectory(), true);
+
+  // The whole point: hand over the Steam folder, land on the library.
+  const found = await pickLibrary();
+  check('picking the Steam folder succeeds', found.status, 'ok');
+  const library = found.status === 'ok' ? found.library : null;
+  check(
+    'the path down to the library is reported',
+    library?.trail.join('/'),
+    'Steam/steamapps/workshop/content/431960',
+  );
+  check('and it is marked as auto-detected', library?.detected, true);
+  check('the root used is the library itself', library?.label, '431960');
+
+  const byTitle = new Map(library?.entries.map((e) => [e.title, e]) ?? []);
+  // Folders without a project.json fall back to a tidied up folder name.
+  check(
+    'one entry per wallpaper folder, dot folders skipped',
+    [...byTitle.keys()].sort(),
+    ['Plain', '极光', '雨夜东京'].sort(),
+  );
+
+  const scene = byTitle.get('极光');
+  check('a scene wallpaper has no playable file', scene?.file, undefined);
+  check('but still offers its preview', scene?.preview, 'aurora/preview.jpg');
+  check('and says why it cannot be played', Boolean(scene?.unsupported), true);
+
+  const video = byTitle.get('雨夜东京');
+  check('a video wallpaper plays its own file', video?.file, 'rain/wallpaper.mp4');
+  check('and previews with the still', video?.preview, 'rain/preview.gif');
+  check('marked as a video', video?.kind, 'video');
+
+  const plain = byTitle.get('Plain');
+  check('a folder without project.json still works', plain?.file, 'plain/wallpaper.jpg');
+  check('and is an image', plain?.kind, 'image');
+
+  // Pointing straight at the library is the same thing without the walk.
+  (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => engine;
+  const direct = await pickLibrary();
+  check('picking 431960 directly works too', direct.status === 'ok' ? direct.library.entries.length : -1, 3);
+  check('and is not reported as a detection', direct.status === 'ok' ? direct.library.detected : null, false);
+
+  // An ordinary folder of pictures keeps the flat listing.
+  (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => loose;
+  const flat = await pickLibrary();
+  check('a plain folder lists its media', flat.status === 'ok' ? flat.library.entries.length : -1, 2);
+  check(
+    'and skips everything else',
+    flat.status === 'ok' ? flat.library.entries.map((e) => e.title).sort() : [],
+    ['A.jpg', 'B.mp4'],
+  );
+
+  delete (w as unknown as { showDirectoryPicker?: unknown }).showDirectoryPicker;
+
+  // The directory input takes the same Steam rules.
   const fake = (relative: string) =>
     ({ name: relative.split('/').pop() ?? '', webkitRelativePath: relative }) as unknown as File;
-  const library = libraryFromFiles(
+  const fromInput = libraryFromFiles(
     [
-      fake('431960/12345/preview.jpg'),
-      fake('431960/12345/scene.mp4'),
-      fake('431960/12345/scene.pkg'),
-      fake('431960/12345/project.json'),
+      fake('431960/rain/wallpaper.mp4'),
+      fake('431960/rain/preview.gif'),
+      fake('431960/aurora/scene.pkg'),
+      fake('431960/aurora/preview.jpg'),
       fake('431960/.cache/hidden.jpg'),
     ],
     '431960',
   );
-  check('the folder name is kept for the header', library.label, '431960');
-  check('a directory input is marked as such', library.via, 'input');
-  // the sort inside uses localeCompare, so compare without it
+  check('the folder name is kept for the header', fromInput.label, '431960');
+  check('a directory input is marked as such', fromInput.via, 'input');
+  check('an input with a library in it is a detection', fromInput.detected, true);
   check(
-    'only media files are listed, dot folders skipped',
-    library.entries.map((e) => e.path).sort(),
-    ['12345/preview.jpg', '12345/scene.mp4'].sort(),
+    'grouped one entry per wallpaper, dot folders skipped',
+    fromInput.entries.map((e) => e.title).sort(),
+    ['Aurora', 'Rain'].sort(),
   );
   check(
-    'videos are marked as videos',
-    library.entries.find((e) => e.path.endsWith('.mp4'))?.kind,
-    'video',
+    'the video is playable',
+    fromInput.entries.find((e) => e.title === 'Rain')?.file,
+    'rain/wallpaper.mp4',
   );
   check(
-    'images are marked as images',
-    library.entries.find((e) => e.path.endsWith('.jpg'))?.kind,
-    'image',
+    'the scene is preview only',
+    fromInput.entries.find((e) => e.title === 'Aurora')?.file,
+    undefined,
   );
 }
 
@@ -446,6 +552,71 @@ console.log('\ncode palette shared by both panes (jsdom)');
   check('the palette is installed as a style element', installed.length > 0, true);
   check('the dark scope carries the dark values', installed.includes(`--code-keyword:${CODE_COLOURS.keyword.dark}`), true);
   check('the light scope carries the light values', installed.includes(`--code-keyword:${CODE_COLOURS.keyword.light}`), true);
+}
+
+/* --- the appearance dialog actually renders both states -------------------- */
+const { AppearanceDialog } = await import('./src/components/AppearanceDialog');
+const { closeLibrary } = await import('./src/lib/local-wallpapers');
+
+console.log('\nappearance dialog (jsdom)');
+{
+  const renderDialog = async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(React.createElement(AppearanceDialog));
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const hold = appStore.getState();
+  const entry = (title: string, extra: Record<string, unknown> = {}) => ({
+    path: `${title}/wallpaper.jpg`,
+    title,
+    file: `${title}/wallpaper.jpg`,
+    kind: 'image' as const,
+    ...extra,
+  });
+
+  // Nothing granted yet: say why, and where to look.
+  closeLibrary();
+  appStore.setState({
+    appearanceOpen: true,
+    wallpaper: { kind: 'image', source: 'library', url: '', blur: 0, dim: 0.35, scale: 1 },
+    wallpaperUrl: null,
+  });
+  let markup = await renderDialog();
+  check('the library source renders', markup.includes('检测壁纸文件夹'), true);
+  check('and explains that a path cannot be read directly', markup.includes('steamapps'), true);
+  check('and offers the standard Steam locations', markup.includes('431960'), true);
+
+  // With a library open: the detection trail, the grid, and the preview-only case.
+  libraryFromFiles(
+    [
+      { name: 'wallpaper.mp4', webkitRelativePath: '431960/rain/wallpaper.mp4' } as unknown as File,
+      { name: 'preview.gif', webkitRelativePath: '431960/rain/preview.gif' } as unknown as File,
+      { name: 'scene.pkg', webkitRelativePath: '431960/aurora/scene.pkg' } as unknown as File,
+      { name: 'preview.jpg', webkitRelativePath: '431960/aurora/preview.jpg' } as unknown as File,
+    ],
+    '431960',
+  );
+  markup = await renderDialog();
+  check('the detected library is announced', markup.includes('已自动定位壁纸库'), true);
+  check('the path that was walked is shown', markup.includes('431960'), true);
+  check('both wallpapers are listed', markup.includes('Rain') && markup.includes('Aurora'), true);
+  check('the playable one counts as usable', markup.includes('1 个可用'), true);
+  check('the scene one is marked preview only', markup.includes('仅预览'), true);
+
+  appStore.setState(hold);
+  closeLibrary();
+  void entry;
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

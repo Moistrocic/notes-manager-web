@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Eye, FolderOpen, Image as ImageIcon, Loader2, MonitorPlay, RotateCcw, Upload, X } from 'lucide-react';
+import { Eye, FolderOpen, Image as ImageIcon, Loader2, MonitorPlay, RotateCcw, Sparkles, Upload, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import {
@@ -10,8 +10,11 @@ import {
   libraryFromFiles,
   pickLibrary,
   readEntry,
+  readPreview,
   restoreLibrary,
-  type LocalWallpaper,
+  STEAM_LIBRARY_PATHS,
+  steamPathHints,
+  type WallpaperEntry,
   type WallpaperLibrary,
 } from '../lib/local-wallpapers';
 import { acceptFor, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
@@ -69,7 +72,7 @@ export function AppearanceDialog() {
       if (result.status === 'ok') setLibrary(result.library);
       else if (result.status === 'needs-permission') {
         setAskPermission(true);
-        setLibrary({ via: 'directory', label: result.label, entries: [], truncated: false });
+        setLibrary({ via: 'directory', label: result.label, trail: [result.label], detected: false, entries: [], truncated: false });
       }
     })();
     return () => {
@@ -115,7 +118,7 @@ export function AppearanceDialog() {
     }
   };
 
-  const useFromLibrary = async (entry: LocalWallpaper) => {
+  const useFromLibrary = async (entry: WallpaperEntry) => {
     setApplying(entry.path);
     try {
       const file = await readEntry(entry);
@@ -379,7 +382,7 @@ interface LibraryPanelProps {
   onChooseFolder: () => void;
   onReGrant: () => void;
   onForget: () => void;
-  onUse: (entry: LocalWallpaper) => void;
+  onUse: (entry: WallpaperEntry) => void;
 }
 
 function WallpaperLibraryPanel({
@@ -393,25 +396,39 @@ function WallpaperLibraryPanel({
   onUse,
 }: LibraryPanelProps) {
   const total = library?.entries.length ?? 0;
+  const usable = library?.entries.filter((entry) => entry.file).length ?? 0;
 
   return (
     <div className="space-y-2.5">
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" loading={scanning} onClick={onChooseFolder}>
           <FolderOpen className="h-3.5 w-3.5" />
-          {library ? '更换文件夹' : '选择壁纸文件夹'}
+          {library ? '更换文件夹' : '检测壁纸文件夹'}
         </Button>
         {library ? (
           <Button variant="ghost" size="sm" onClick={onForget}>
             断开
           </Button>
         ) : null}
-        {library ? (
-          <span className="min-w-0 truncate text-[11px] text-[var(--faint)]">
-            {library.label} · {total} 个{library.truncated ? '（仅显示前 240 个）' : ''}
-          </span>
-        ) : null}
       </div>
+
+      {/* How the folder was found: the user hands over something above the
+          library and the path down to it is reported back. */}
+      {library ? (
+        <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-2.5">
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--faint)]">
+            {library.detected ? <Sparkles className="h-3 w-3 text-[var(--accent)]" /> : <FolderOpen className="h-3 w-3" />}
+            <span>{library.detected ? '已自动定位壁纸库' : '壁纸文件夹'}</span>
+            <span className="ml-auto shrink-0">
+              {usable} 个可用{total > usable ? ` · ${total - usable} 个仅预览` : ''}
+              {library.truncated ? ' · 仅显示前 240 个' : ''}
+            </span>
+          </div>
+          <div className="mt-1 break-all font-mono text-[11px] text-[var(--text)]">
+            {library.trail.join(' / ')}
+          </div>
+        </div>
+      ) : null}
 
       {askPermission ? (
         <div className="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] p-3">
@@ -427,39 +444,101 @@ function WallpaperLibraryPanel({
       {total > 0 ? (
         <div className="grid max-h-[280px] grid-cols-3 gap-2 overflow-y-auto rounded-2xl border border-[var(--line)] p-2 sm:grid-cols-4">
           {library?.entries.map((entry) => (
-            <LocalThumb
-              key={entry.path}
-              entry={entry}
-              busy={applying === entry.path}
-              onClick={() => onUse(entry)}
-            />
+            <LocalThumb key={entry.path} entry={entry} busy={applying === entry.path} onClick={() => onUse(entry)} />
           ))}
         </div>
       ) : !askPermission && library ? (
-        <p className="text-[11px] text-[var(--faint)]">这个文件夹里没有浏览器能显示的图片或视频。</p>
+        <div className="space-y-2">
+          <p className="text-[11px] leading-relaxed text-[var(--warn)]">
+            没有在这里找到 Wallpaper Engine 壁纸库。你选择的是「{library.label}」，
+            应用会在其中查找 {STEAM_LIBRARY_PATHS[0].join('/')}。
+          </p>
+          <SteamPathHints />
+        </div>
       ) : null}
+
+      {!library ? <SteamPathHints /> : null}
 
       <p className="text-[11px] leading-relaxed text-[var(--faint)]">
         {canPickDirectory()
-          ? '读取的是你电脑上已有的壁纸文件夹，比如 Wallpaper Engine 的 steamapps/workshop/content/431960。文件不会上传，只有你点中的那一张会存到浏览器里。'
+          ? '浏览器不允许网页按路径读取磁盘，所以需要你授权一次。授权时可以选中 Steam 目录、某个盘符，或者直接选中 431960 这个总文件夹——选完之后应用会自动往下找到壁纸库，并记住它。文件不会上传，只有点中的那一张会存进浏览器。'
           : '当前浏览器不支持直接读取文件夹，选择后会通过文件选择器读取其中的图片和视频。文件不会上传。'}
       </p>
     </div>
   );
 }
 
+/** The standard locations, so the first pick is a paste and an Enter. */
+function SteamPathHints() {
+  const hints = steamPathHints();
+  const [copied, setCopied] = useState<string | null>(null);
+
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-2.5">
+      <p className="text-[11px] leading-relaxed text-[var(--muted)]">
+        在文件夹选择框里可以直接把路径粘贴进去。常见位置：
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {hints.map((hint) => (
+          <li key={hint} className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 break-all font-mono text-[10.5px] text-[var(--text)]">{hint}</code>
+            <button
+              type="button"
+              onClick={() => {
+                void copyText(hint).then((ok) => setCopied(ok ? hint : null));
+              }}
+              className="focus-ring shrink-0 rounded-lg border border-[var(--line)] px-1.5 py-0.5 text-[10.5px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+            >
+              {copied === hint ? '已复制' : '复制'}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Clipboard access needs a secure context, so keep a fallback for plain http. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  try {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** One grid cell. The file is only read once the cell scrolls into view. */
-function LocalThumb({ entry, busy, onClick }: { entry: LocalWallpaper; busy: boolean; onClick: () => void }) {
+function LocalThumb({ entry, busy, onClick }: { entry: WallpaperEntry; busy: boolean; onClick: () => void }) {
   const holder = useRef<HTMLButtonElement | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const file = await readEntry(entry);
-      // a poster frame, otherwise videos show a black tile
+      // Wallpaper Engine ships a still for every wallpaper; prefer it over
+      // decoding a whole video just to draw a 100px tile.
+      const file = await readPreview(entry);
       const objectUrl = URL.createObjectURL(file);
-      setUrl(entry.kind === 'video' ? `${objectUrl}#t=0.1` : objectUrl);
+      const isStill = Boolean(entry.preview) || entry.kind !== 'video';
+      // a poster frame, otherwise videos show a black tile
+      setUrl(isStill ? objectUrl : `${objectUrl}#t=0.1`);
     } catch {
       setFailed(true);
     }
@@ -489,21 +568,33 @@ function LocalThumb({ entry, busy, onClick }: { entry: LocalWallpaper; busy: boo
     return () => URL.revokeObjectURL(url.split('#')[0]);
   }, [url]);
 
+  // A preview still is always drawn as a picture; only a bare video file is
+  // shown as a video.
+  const asStill = Boolean(entry.preview) || entry.kind !== 'video';
+  const usable = Boolean(entry.file);
+  const badge = entry.type ? TYPE_LABELS[entry.type] : entry.kind === 'video' ? TYPE_LABELS.video : null;
+
   return (
     <button
       ref={holder}
       type="button"
       onClick={onClick}
-      title={entry.path}
-      className="focus-ring group relative aspect-video overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)] transition-all hover:border-[var(--accent)]"
+      disabled={!usable}
+      title={entry.unsupported ? `${entry.title}\n${entry.unsupported}` : entry.title}
+      className={cn(
+        'focus-ring group relative aspect-video overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)] transition-all',
+        usable ? 'hover:border-[var(--accent)]' : 'cursor-not-allowed opacity-60',
+      )}
     >
       {failed ? (
-        <span className="flex h-full items-center justify-center text-[10px] text-[var(--faint)]">无法预览</span>
+        <span className="flex h-full items-center justify-center px-1 text-center text-[10px] text-[var(--faint)]">
+          无法预览
+        </span>
       ) : url ? (
-        entry.kind === 'video' ? (
-          <video src={url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-        ) : (
+        asStill ? (
           <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" />
+        ) : (
+          <video src={url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
         )
       ) : (
         <span className="flex h-full items-center justify-center">
@@ -516,14 +607,29 @@ function LocalThumb({ entry, busy, onClick }: { entry: LocalWallpaper; busy: boo
           <Loader2 className="h-4 w-4 animate-spin text-white" />
         </span>
       ) : null}
-      {entry.kind === 'video' ? (
-        <span className="pointer-events-none absolute bottom-1 right-1 rounded-md bg-black/55 p-0.5">
-          <MonitorPlay className="h-3 w-3 text-white" />
+      {badge ? (
+        <span className="pointer-events-none absolute right-1 top-1 rounded-md bg-black/55 px-1 py-0.5 text-[9px] leading-none text-white">
+          {badge}
         </span>
       ) : null}
-      <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 pb-1 pt-3 text-left text-[9.5px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-        {entry.name}
-      </span>
+      {!usable ? (
+        <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/65 px-1.5 py-1 text-center text-[9px] leading-tight text-white">
+          仅预览
+        </span>
+      ) : (
+        <span className="pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 pb-1 pt-3 text-left text-[9.5px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+          {entry.title}
+        </span>
+      )}
     </button>
   );
 }
+
+/** Wallpaper Engine's project.json types, in the user's language. */
+const TYPE_LABELS: Record<string, string> = {
+  scene: '场景',
+  video: '视频',
+  image: '图片',
+  web: '网页',
+  application: '应用',
+};

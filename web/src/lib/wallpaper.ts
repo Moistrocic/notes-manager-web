@@ -72,6 +72,10 @@ function clamp(value: number, min: number, max: number): number {
 /* -------------------------------------------------------------------------- */
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB is not available here'));
+      return;
+    }
     const request = indexedDB.open(DB_NAME, 1);
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -95,8 +99,13 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
 
 /* Generic access to the same store, for the pieces other modules keep there
  * (the wallpaper folder handle, for one). */
+/** Best effort: a browser without IndexedDB just loses the memory. */
 export async function idbPut(key: string, value: unknown): Promise<void> {
-  await withStore('readwrite', (store) => store.put(value, key));
+  try {
+    await withStore('readwrite', (store) => store.put(value, key));
+  } catch {
+    /* private mode, no IndexedDB, quota, ... */
+  }
 }
 
 export async function idbGet<T>(key: string): Promise<T | undefined> {
