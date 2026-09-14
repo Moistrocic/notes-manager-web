@@ -31,6 +31,9 @@ exists() { [ -e "$1" ] && echo yes || echo no; }
 # --- stubs for the parts of install.sh we do not want to run --------------- #
 C_RED=""
 C_RESET=""
+# read by the verify_tree() body that is extracted from install.sh and evaluated
+# below, which shellcheck cannot follow
+: "$C_RED" "$C_RESET"
 die() { printf '[test] die: %s\n' "$*" >&2; return 1; }
 
 # extract_function <name> - prints the body of a top level shell function
