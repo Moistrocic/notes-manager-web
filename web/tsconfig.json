@@ -16,5 +16,13 @@
     "noUnusedParameters": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "vite.config.ts", "vite.ssr.config.ts", "render-check.tsx"]
+  "include": [
+    "src",
+    "vite.config.ts",
+    "vite.ssr.config.ts",
+    "render-check.tsx",
+    "store-check.tsx",
+    "outline-check.tsx",
+    "dom-check.tsx"
+  ]
 }
