@@ -16,11 +16,24 @@ export interface FontRecord {
 }
 
 export interface FontSelection {
-  /** Font id used for the interface, empty for the built-in stack. */
+  /**
+   * Font id used for the interface. Empty means the stack the app ships with;
+   * otherwise an uploaded id or a "builtin:" id.
+   */
   sans: string;
-  /** Font id used for the editor and code, empty for the built-in stack. */
+  /** Font id used for the editor and code. Same rules as `sans`. */
   mono: string;
 }
+
+/**
+ * Ids starting with this prefix refer to fonts bundled with the front end
+ * (web/public/fonts). The server never stores those files, it only remembers
+ * the choice, so it has to accept the id without being able to look it up.
+ */
+export const BUILTIN_FONT_PREFIX = 'builtin:';
+
+/** Cascadia Code ships with the app; a new installation starts on it. */
+export const DEFAULT_FONT_SELECTION: FontSelection = { sans: '', mono: `${BUILTIN_FONT_PREFIX}cascadia-code` };
 
 const EXTENSIONS: Record<string, { format: FontRecord['format']; type: string }> = {
   '.woff2': { format: 'woff2', type: 'font/woff2' },
@@ -42,7 +55,10 @@ export class FontStore {
   private readonly dir: string;
   private readonly indexFile: string;
   private records: FontRecord[] = [];
-  private selection: FontSelection = { sans: '', mono: '' };
+  // A store with no index.json is a new installation and gets the default.
+  // An existing file always wins, including an explicit empty string, so
+  // "system default" stays a choice the user can make.
+  private selection: FontSelection = { ...DEFAULT_FONT_SELECTION };
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, 'fonts');
@@ -58,7 +74,10 @@ export class FontStore {
         selection?: FontSelection;
       };
       this.records = (raw.fonts ?? []).filter((font) => fs.existsSync(path.join(this.dir, font.fileName)));
-      this.selection = { sans: raw.selection?.sans ?? '', mono: raw.selection?.mono ?? '' };
+      this.selection = {
+        sans: raw.selection?.sans ?? '',
+        mono: raw.selection?.mono ?? DEFAULT_FONT_SELECTION.mono,
+      };
       log.debug(`${this.records.length} font(s) restored`);
     } catch {
       this.records = [];
@@ -71,6 +90,14 @@ export class FontStore {
     fs.renameSync(tmp, this.indexFile);
   }
 
+  /**
+   * Fonts, sorted by name.
+   *
+   * `localeCompare` is locale dependent on purpose - it orders Chinese names the
+   * way a Chinese reader expects - so the order can differ between servers.
+   * Anything that needs a stable order should sort the result itself (see
+   * scripts/test-server.mjs).
+   */
   list(): { fonts: FontRecord[]; selection: FontSelection } {
     return { fonts: [...this.records].sort((a, b) => a.name.localeCompare(b.name)), selection: { ...this.selection } };
   }
@@ -134,12 +161,19 @@ export class FontStore {
     return true;
   }
 
+  /** An empty id, a bundled font, or one of the uploaded fonts. */
+  private accepted(id: string): string {
+    if (!id) return '';
+    if (id.startsWith(BUILTIN_FONT_PREFIX)) return id;
+    return this.get(id) ? id : '';
+  }
+
   select(selection: Partial<FontSelection>): FontSelection {
     if (selection.sans !== undefined) {
-      this.selection.sans = selection.sans && this.get(selection.sans) ? selection.sans : '';
+      this.selection.sans = this.accepted(selection.sans);
     }
     if (selection.mono !== undefined) {
-      this.selection.mono = selection.mono && this.get(selection.mono) ? selection.mono : '';
+      this.selection.mono = this.accepted(selection.mono);
     }
     this.persist();
     return { ...this.selection };

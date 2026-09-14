@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
 import { formatBytes } from '../lib/format';
+import { availableFonts, fontExists, type AvailableFont } from '../lib/fonts';
 import type { AppSettingsPayload } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
@@ -49,6 +50,9 @@ export function SettingsDialog() {
 
   const fonts = useAppStore((s) => s.fonts);
   const fontSelection = useAppStore((s) => s.fontSelection);
+  // bundled fonts first, then uploads; the dropdowns only offer what fits the role
+  const fontList: AvailableFont[] = availableFonts(fonts);
+  const fontOptions = (role: 'sans' | 'mono') => fontList.filter((font) => font.kind === role || font.kind === 'both');
   const uploadFont = useAppStore((s) => s.uploadFont);
   const deleteFont = useAppStore((s) => s.deleteFont);
   const selectFonts = useAppStore((s) => s.selectFonts);
@@ -244,33 +248,35 @@ export function SettingsDialog() {
 
         {/* Fonts */}
         <section>
-          <SectionTitle icon={Type} title="界面字体" hint="上传字体文件，重启后依然生效" />
+          <SectionTitle icon={Type} title="界面字体" hint="内置 Cascadia Code，也可以上传自己的字体" />
           <div className="space-y-3">
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="界面字体">
                 <select
-                  value={fonts.find((f) => f.id === fontSelection.sans) ? fontSelection.sans : ''}
+                  value={fontExists(fonts, fontSelection.sans) ? fontSelection.sans : ''}
                   onChange={(e) => void selectFonts({ sans: e.target.value })}
                   className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
                 >
                   <option value="">系统默认</option>
-                  {fonts.map((font) => (
+                  {fontOptions('sans').map((font) => (
                     <option key={font.id} value={font.id}>
                       {font.name}
+                      {font.builtin ? '（内置）' : ''}
                     </option>
                   ))}
                 </select>
               </Field>
               <Field label="代码 / 编辑器字体">
                 <select
-                  value={fonts.find((f) => f.id === fontSelection.mono) ? fontSelection.mono : ''}
+                  value={fontExists(fonts, fontSelection.mono) ? fontSelection.mono : ''}
                   onChange={(e) => void selectFonts({ mono: e.target.value })}
                   className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
                 >
                   <option value="">系统默认</option>
-                  {fonts.map((font) => (
+                  {fontOptions('mono').map((font) => (
                     <option key={font.id} value={font.id}>
                       {font.name}
+                      {font.builtin ? '（内置）' : ''}
                     </option>
                   ))}
                 </select>
@@ -298,21 +304,22 @@ export function SettingsDialog() {
               <span className="text-[11px] text-[var(--faint)]">woff2 / woff / ttf / otf，最大 32 MB</span>
             </div>
 
-            {fonts.length > 0 ? (
-              <ul className="space-y-1.5">
-                {fonts.map((font) => (
-                  <li
-                    key={font.id}
-                    className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] px-3 py-2"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ fontFamily: `"${font.name}", var(--font-sans)` }}>
-                      {font.name}
-                    </span>
-                    <Badge tone="neutral">{font.format}</Badge>
-                    <span className="text-[11px] text-[var(--faint)]">{formatBytes(font.size)}</span>
-                    {fontSelection.sans === font.id || fontSelection.mono === font.id ? (
-                      <Badge tone="accent">使用中</Badge>
-                    ) : null}
+            <ul className="space-y-1.5">
+              {fontList.map((font) => (
+                <li
+                  key={font.id}
+                  className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] px-3 py-2"
+                >
+                  <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ fontFamily: `"${font.family}", var(--font-sans)` }}>
+                    {font.name}
+                  </span>
+                  {font.builtin ? <Badge tone="neutral">内置</Badge> : null}
+                  <Badge tone="neutral">{font.record?.format ?? 'woff2'}</Badge>
+                  {font.record ? <span className="text-[11px] text-[var(--faint)]">{formatBytes(font.record.size)}</span> : null}
+                  {fontSelection.sans === font.id || fontSelection.mono === font.id ? (
+                    <Badge tone="accent">使用中</Badge>
+                  ) : null}
+                  {font.record ? (
                     <button
                       type="button"
                       onClick={() => void onDeleteFont(font.id)}
@@ -321,12 +328,13 @@ export function SettingsDialog() {
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-[11px] text-[var(--faint)]">还没有导入字体，当前使用系统默认字体。</p>
-            )}
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {fonts.length === 0 ? (
+              <p className="text-[11px] text-[var(--faint)]">还可以导入自己的字体文件，导入的字体会列在内置字体下方。</p>
+            ) : null}
           </div>
         </section>
 
