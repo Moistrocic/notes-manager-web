@@ -6,6 +6,8 @@
 *.bash text eol=lf
 
 *.png  binary
+*.ico  binary
+*.woff binary
 *.jpg  binary
 *.jpeg binary
 *.gif  binary

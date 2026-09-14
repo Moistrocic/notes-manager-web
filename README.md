@@ -175,6 +175,9 @@ npm run check:repo
 
 # 6) 类型检查
 npm run typecheck
+
+# 7) 重新生成应用图标（改动了图标设计时）
+npm run icons
 ```
 
 以上各项都会在 GitHub Actions 中自动执行（`.github/workflows/ci.yml`），另外还会跑 `shellcheck`。
@@ -346,6 +349,7 @@ notes-manager-web/
 │       ├── notes/               # front matter 解析、笔记仓库（缓存 + 检索）
 │       └── http/                # 中间件与路由
 ├── web/                         # React 19 + Vite 7 + Tailwind v4
+│   ├── public/                  # 应用图标（favicon.svg / .ico / PNG / manifest）
 │   └── src/
 │       ├── App.tsx              # 布局与路由（登录 / 工作台）
 │       ├── components/          # 编辑器、列表、侧栏、命令面板、弹窗…
@@ -353,6 +357,7 @@ notes-manager-web/
 │       ├── lib/                 # API 客户端、Markdown 渲染、格式化
 │       └── styles.css           # 设计令牌、动画、Markdown/编辑器样式
 ├── scripts/
+│   ├── generate-icons.mjs       # 由矢量定义生成 favicon / PNG / manifest（npm run icons）
 │   ├── install.sh               # 一键安装（Linux + systemd）
 │   ├── uninstall.sh             # 一键卸载
 │   ├── doctor.sh                # 诊断脚本（服务/配置/网络连通性）
