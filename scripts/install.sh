@@ -40,26 +40,31 @@ trap 'die "installation failed at line $LINENO"' ERR
 # --------------------------------------------------------------------------- #
 # Defaults / arguments                                                        #
 # --------------------------------------------------------------------------- #
-INSTALL_DIR="${NOTES_MANAGER_DIR:-$DEFAULT_INSTALL_DIR}"
-DATA_DIR="${NOTES_MANAGER_DATA:-$DEFAULT_DATA_DIR}"
-CONFIG_DIR="${NOTES_MANAGER_CONFIG:-$DEFAULT_CONFIG_DIR}"
-SERVICE_USER="${NOTES_MANAGER_USER:-$APP_NAME}"
-PORT="${NOTES_MANAGER_PORT:-$DEFAULT_PORT}"
-HOST="0.0.0.0"
+# Option variables stay empty until resolved, so that the precedence
+#   command line  >  <project>/.env  >  NOTES_MANAGER_* environment  >  default
+# can be applied after the arguments have been parsed (see "Configuration
+# sources" below).
+INSTALL_DIR="${NOTES_MANAGER_DIR:-}"
+DATA_DIR="${NOTES_MANAGER_DATA:-}"
+CONFIG_DIR="${NOTES_MANAGER_CONFIG:-}"
+SERVICE_USER="${NOTES_MANAGER_USER:-}"
+PORT="${NOTES_MANAGER_PORT:-}"
+HOST=""
 BASE_PATH=""
 PUBLIC_URL=""
-STORAGE_DRIVER="auto"
+STORAGE_DRIVER=""
 OPENLIST_URL=""
 OPENLIST_TOKEN=""
-OPENLIST_ROOT="/notes"
-OPENLIST_PER_USER="false"
-ADMIN_USERNAME="admin"
+OPENLIST_ROOT=""
+OPENLIST_PER_USER=""
+ADMIN_USERNAME=""
 ADMIN_PASSWORD=""
-AUTH_LOCAL_ENABLED="true"
+AUTH_LOCAL_ENABLED=""
 SKIP_BUILD="0"
 SKIP_DEPS="0"
 FORCE_NODE="0"
 START_SERVICE="1"
+ADMIN_PASSWORD_GENERATED="0"
 
 usage() {
   cat <<'USAGE_EOF'
@@ -70,7 +75,8 @@ Usage: sudo ./scripts/install.sh [options]
 Options:
   --dir PATH              Install directory                 (default /opt/notes-manager)
   --data PATH             Data directory (notes, sessions) (default /var/lib/notes-manager)
-  --config PATH           Config directory                 (default /etc/notes-manager)
+  --config PATH           Legacy config directory, migrated on first install
+                          (default /etc/notes-manager)
   --user NAME             System user to run the service   (default notes-manager)
   --port PORT             HTTP port                        (default 8080)
   --host ADDR             Bind address                     (default 0.0.0.0)
@@ -98,6 +104,52 @@ USAGE_EOF
 need_value() {
   [ -n "$2" ] || die "option $1 requires a value"
   printf '%s' "$2"
+}
+
+# --------------------------------------------------------------------------- #
+# KEY=VALUE helpers                                                           #
+#                                                                             #
+# The configuration file is parsed, never sourced, so a stray command in it   #
+# cannot do anything. The rules mirror the application's own loader: strip    #
+# surrounding quotes, otherwise drop a trailing " # comment".                 #
+# --------------------------------------------------------------------------- #
+
+# read_env_value <file> <KEY> - prints the value, non-zero when absent
+read_env_value() {
+  local file="$1" key="$2" line value
+  [ -f "$file" ] || return 1
+  line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$file" | tail -n 1)" || return 1
+  [ -n "$line" ] || return 1
+  value="${line#*=}"
+  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  case "$value" in
+    \"*\") value="${value#\"}"; value="${value%\"}" ;;
+    \'*\') value="${value#\'}"; value="${value%\'}" ;;
+    *) value="${value%% #*}" ;;
+  esac
+  printf '%s' "$value"
+}
+
+# set_env_value <file> <KEY> <VALUE> - replaces the first assignment, drops the
+# rest, and appends the key when it was not present yet
+set_env_value() {
+  local file="$1" key="$2" value="$3" tmp line found="0"
+  tmp="$(mktemp)"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*|"$key "*)
+        if [ "$found" = "0" ]; then
+          printf '%s=%s\n' "$key" "$value" >> "$tmp"
+          found="1"
+        fi
+        ;;
+      *) printf '%s\n' "$line" >> "$tmp" ;;
+    esac
+  done < "$file"
+  if [ "$found" = "0" ]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
+  fi
+  mv "$tmp" "$file"
 }
 
 while [ $# -gt 0 ]; do
@@ -129,7 +181,17 @@ done
 
 case "$STORAGE_DRIVER" in
   auto|openlist|local) ;;
-  *) die "--driver must be one of: auto, openlist, local" ;;
+  *) die "storage driver must be one of: auto, openlist, local (got '$STORAGE_DRIVER')" ;;
+esac
+
+case "$AUTH_LOCAL_ENABLED" in
+  true|false) ;;
+  *) die "AUTH_LOCAL_ENABLED must be true or false (got '$AUTH_LOCAL_ENABLED')" ;;
+esac
+
+case "$OPENLIST_PER_USER" in
+  true|false) ;;
+  *) die "OPENLIST_PER_USER must be true or false (got '$OPENLIST_PER_USER')" ;;
 esac
 
 # --------------------------------------------------------------------------- #
@@ -138,6 +200,49 @@ esac
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$SRC_DIR/package.json" ] || die "package.json not found in $SRC_DIR - run this script from the project"
 [ -f "$SRC_DIR/server/package.json" ] || die "server/ not found in $SRC_DIR"
+
+# --------------------------------------------------------------------------- #
+# Configuration sources                                                       #
+# --------------------------------------------------------------------------- #
+# 1. command line options (highest priority)
+# 2. <project>/.env          <- copy .env.example to .env and edit it
+# 3. NOTES_MANAGER_* environment variables
+# 4. built-in defaults
+SOURCE_ENV="$SRC_DIR/.env"
+
+# env_from <KEY> <fallback> - value from the project .env, else the fallback
+env_from() {
+  local value=""
+  value="$(read_env_value "$SOURCE_ENV" "$1" 2>/dev/null || true)"
+  printf '%s' "${value:-$2}"
+}
+
+# everything below is already set when it came from the command line
+INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+CONFIG_DIR="${CONFIG_DIR:-$DEFAULT_CONFIG_DIR}"
+SERVICE_USER="${SERVICE_USER:-$APP_NAME}"
+DATA_DIR="${DATA_DIR:-$(env_from DATA_DIR "$DEFAULT_DATA_DIR")}"
+PORT="${PORT:-$(env_from PORT "$DEFAULT_PORT")}"
+HOST="${HOST:-$(env_from HOST "$DEFAULT_HOST")}"
+BASE_PATH="${BASE_PATH:-$(env_from BASE_PATH "")}"
+PUBLIC_URL="${PUBLIC_URL:-$(env_from PUBLIC_URL "")}"
+STORAGE_DRIVER="${STORAGE_DRIVER:-$(env_from STORAGE_DRIVER "auto")}"
+OPENLIST_URL="${OPENLIST_URL:-$(env_from OPENLIST_URL "")}"
+OPENLIST_TOKEN="${OPENLIST_TOKEN:-$(env_from OPENLIST_TOKEN "")}"
+OPENLIST_ROOT="${OPENLIST_ROOT:-$(env_from OPENLIST_ROOT "$DEFAULT_OPENLIST_ROOT")}"
+OPENLIST_PER_USER="${OPENLIST_PER_USER:-$(env_from OPENLIST_PER_USER "false")}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-$(env_from ADMIN_USERNAME "$DEFAULT_ADMIN_USERNAME")}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(env_from ADMIN_PASSWORD "")}"
+AUTH_LOCAL_ENABLED="${AUTH_LOCAL_ENABLED:-$(env_from AUTH_LOCAL_ENABLED "true")}"
+
+# A systemd service needs absolute paths; .env.example ships "./data".
+configured_data_dir="$DATA_DIR"
+case "$DATA_DIR" in
+  /*) ;;
+  *) DATA_DIR="$DEFAULT_DATA_DIR" ;;
+esac
+
+RUNTIME_ENV="$INSTALL_DIR/.env"
 
 # Sources that must exist before the build. They are checked twice - once on the
 # checkout and once again after copying - because a bad file filter can silently
@@ -351,7 +456,8 @@ copy_application() {
   for entry in "$dst"/* "$dst"/.[!.]*; do
     [ -e "$entry" ] || continue
     case "${entry##*/}" in
-      node_modules|.npm-cache) continue ;;
+      # keep the dependency tree, the npm cache and any local configuration
+      node_modules|.npm-cache|.env|.env.local) continue ;;
     esac
     rm -rf "$entry"
   done
@@ -418,45 +524,82 @@ fi
 # --------------------------------------------------------------------------- #
 # 5. Configuration                                                            #
 # --------------------------------------------------------------------------- #
-step "writing the configuration"
-ENV_FILE="$CONFIG_DIR/notes-manager.env"
+step "writing the runtime configuration"
 
-if [ -z "$ADMIN_PASSWORD" ]; then
-  if [ -f "$ENV_FILE" ] && grep -q '^ADMIN_PASSWORD=' "$ENV_FILE"; then
-    ADMIN_PASSWORD="$(grep '^ADMIN_PASSWORD=' "$ENV_FILE" | head -n1 | cut -d= -f2-)"
-    info "keeping the existing administrator password"
-  else
-    ADMIN_PASSWORD="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)"
-    info "generated a random administrator password"
-  fi
+# The runtime file is seeded from whatever the user maintains:
+#   1. <project>/.env            (what "cp .env.example .env" produces)
+#   2. /etc/notes-manager/notes-manager.env  (layout of releases before 1.0.1)
+#   3. .env.example              (first install without a .env)
+LEGACY_ENV="$CONFIG_DIR/notes-manager.env"
+BASE_ENV=""
+if [ -f "$SOURCE_ENV" ]; then
+  BASE_ENV="$SOURCE_ENV"
+  info "configuration source: $SOURCE_ENV"
+elif [ -f "$LEGACY_ENV" ]; then
+  BASE_ENV="$LEGACY_ENV"
+  warn "no $SOURCE_ENV - migrating the previous configuration from $LEGACY_ENV"
+elif [ -f "$SRC_DIR/.env.example" ]; then
+  BASE_ENV="$SRC_DIR/.env.example"
+  info "no $SOURCE_ENV - starting from .env.example"
 fi
 
-cat > "$ENV_FILE" <<ENV_EOF
-# notes-manager-web configuration - generated by install.sh
-# Edit this file and run: systemctl restart $SERVICE_NAME
+# Read the password of an existing installation *before* the file is replaced,
+# otherwise every re-install would rotate it.
+existing_password="$(read_env_value "$RUNTIME_ENV" ADMIN_PASSWORD 2>/dev/null || true)"
 
-HOST=$HOST
-PORT=$PORT
-BASE_PATH=$BASE_PATH
-PUBLIC_URL=$PUBLIC_URL
+if [ -n "$BASE_ENV" ]; then
+  cp "$BASE_ENV" "$RUNTIME_ENV"
+else
+  : > "$RUNTIME_ENV"
+fi
 
-DATA_DIR=$DATA_DIR
-LOG_LEVEL=info
+# Keep the installed password unless the project .env or the command line
+# provided a new one.
+if [ -z "$ADMIN_PASSWORD" ]; then
+  ADMIN_PASSWORD="$existing_password"
+fi
+if [ -z "$ADMIN_PASSWORD" ]; then
+  ADMIN_PASSWORD="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)"
+  ADMIN_PASSWORD_GENERATED="1"
+fi
 
-# Storage: auto (OpenList when reachable, otherwise local disk), openlist or local
-STORAGE_DRIVER=$STORAGE_DRIVER
-OPENLIST_URL=$OPENLIST_URL
-OPENLIST_TOKEN=$OPENLIST_TOKEN
-OPENLIST_ROOT=$OPENLIST_ROOT
-OPENLIST_PER_USER=$OPENLIST_PER_USER
-NOTES_ROOT=$DATA_DIR/notes
+notes_root="$DATA_DIR/notes"
+configured_notes_root="$(read_env_value "$RUNTIME_ENV" NOTES_ROOT 2>/dev/null || true)"
+case "$configured_notes_root" in
+  /*) notes_root="$configured_notes_root" ;;
+esac
 
-ADMIN_USERNAME=$ADMIN_USERNAME
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-AUTH_LOCAL_ENABLED=$AUTH_LOCAL_ENABLED
-ENV_EOF
-chmod 640 "$ENV_FILE"
-ok "configuration written to $ENV_FILE"
+log_level="$(read_env_value "$RUNTIME_ENV" LOG_LEVEL 2>/dev/null || true)"
+log_level="${log_level:-info}"
+
+set_env_value "$RUNTIME_ENV" HOST "$HOST"
+set_env_value "$RUNTIME_ENV" PORT "$PORT"
+set_env_value "$RUNTIME_ENV" BASE_PATH "$BASE_PATH"
+set_env_value "$RUNTIME_ENV" PUBLIC_URL "$PUBLIC_URL"
+set_env_value "$RUNTIME_ENV" DATA_DIR "$DATA_DIR"
+set_env_value "$RUNTIME_ENV" LOG_LEVEL "$log_level"
+set_env_value "$RUNTIME_ENV" STORAGE_DRIVER "$STORAGE_DRIVER"
+set_env_value "$RUNTIME_ENV" OPENLIST_URL "$OPENLIST_URL"
+set_env_value "$RUNTIME_ENV" OPENLIST_TOKEN "$OPENLIST_TOKEN"
+set_env_value "$RUNTIME_ENV" OPENLIST_ROOT "$OPENLIST_ROOT"
+set_env_value "$RUNTIME_ENV" OPENLIST_PER_USER "$OPENLIST_PER_USER"
+set_env_value "$RUNTIME_ENV" NOTES_ROOT "$notes_root"
+set_env_value "$RUNTIME_ENV" ADMIN_USERNAME "$ADMIN_USERNAME"
+set_env_value "$RUNTIME_ENV" ADMIN_PASSWORD "$ADMIN_PASSWORD"
+set_env_value "$RUNTIME_ENV" AUTH_LOCAL_ENABLED "$AUTH_LOCAL_ENABLED"
+
+chown "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_ENV"
+chmod 600 "$RUNTIME_ENV"
+
+if [ "$configured_data_dir" != "$DATA_DIR" ]; then
+  info "DATA_DIR '$configured_data_dir' is relative - the service uses $DATA_DIR"
+fi
+if [ "$ADMIN_PASSWORD_GENERATED" = "1" ]; then
+  info "generated a random administrator password (stored in the file below)"
+else
+  info "keeping the administrator password from the configuration"
+fi
+ok "runtime configuration: $RUNTIME_ENV"
 
 # --------------------------------------------------------------------------- #
 # 6. systemd unit                                                             #
@@ -474,7 +617,10 @@ Type=simple
 User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$INSTALL_DIR
-EnvironmentFile=$ENV_FILE
+# ENV_FILE tells the application which configuration file is authoritative.
+# There is deliberately no EnvironmentFile= here: a second source of variables
+# would silently shadow .env and make edits look like they had no effect.
+Environment=ENV_FILE=$RUNTIME_ENV
 Environment=NODE_ENV=production
 ExecStart=$NODE_BIN $INSTALL_DIR/server/dist/index.js
 Restart=on-failure
@@ -548,10 +694,14 @@ cat <<SUMMARY_EOF
   OpenList 地址       : ${OPENLIST_URL:-(未配置 / not configured)}
   OpenList 笔记目录   : $OPENLIST_ROOT
 
-  配置文件            : $ENV_FILE
+  运行时配置文件      : $RUNTIME_ENV   <-- 所有配置都在这里修改
   数据目录            : $DATA_DIR
   程序目录            : $INSTALL_DIR
   服务名称            : $SERVICE_NAME
+
+  修改配置:
+    sudo nano $RUNTIME_ENV
+    sudo systemctl restart $SERVICE_NAME
 
   常用命令:
     systemctl status $SERVICE_NAME
@@ -566,7 +716,7 @@ if [ -z "$OPENLIST_URL" ]; then
 fi
 
 if [ "$STORAGE_DRIVER" != "local" ] && [ -z "$OPENLIST_TOKEN" ]; then
-  printf '%s\n\n' "${C_DIM}提示: 在 OpenList 中创建 API 令牌并填入 $ENV_FILE 的 OPENLIST_TOKEN，本地管理员账户即可直接读写 OpenList 目录。${C_RESET}"
+  printf '%s\n\n' "${C_DIM}提示: 在 OpenList 中创建 API 令牌并填入 $RUNTIME_ENV 的 OPENLIST_TOKEN，本地管理员账户即可直接读写 OpenList 目录。${C_RESET}"
 fi
 
 exit 0

@@ -136,7 +136,7 @@ SMOKE_PROVIDER=openlist SMOKE_USERNAME=admin SMOKE_PASSWORD=admin \
 # 2) 渲染检查：在 Node 中渲染整个组件树，覆盖启动页 / 登录页 / 工作台 / 弹窗
 npm run check:render
 
-# 3) 安装脚本拷贝逻辑回归测试（从 install.sh 提取真实函数执行，14 项断言）
+# 3) 安装脚本测试（从 install.sh 提取真实函数与配置段落执行，48 项断言）
 npm run test:installer
 
 # 4) 仓库完整性检查：磁盘上的源文件是否都在 git 里
@@ -155,31 +155,66 @@ npm run typecheck
 要求：systemd 的 Linux 发行版（Debian/Ubuntu、RHEL/CentOS/Rocky、Fedora、Arch、Alpine 等），
 root 权限，能访问 npm 源（首次安装 Node.js 时会联网）。
 
-### 安装
+### 安装（推荐流程）
+
+配置写在**项目目录的 `.env`** 里，安装脚本会读取它：
 
 ```bash
-# 上传或 clone 项目到服务器后，在项目根目录执行
-sudo ./scripts/install.sh
+# 1. 拉取项目
+git clone https://github.com/Moistrocic/notes-manager-web.git
+cd notes-manager-web
 
-# 或者一步到位，直接绑定 OpenList
-sudo ./scripts/install.sh \
-  --port 8080 \
-  --openlist-url http://127.0.0.1:5244 \
-  --openlist-token <你的 OpenList API 令牌> \
-  --openlist-root /notes
+# 2. 生成并编辑配置（端口、OpenList 地址、管理员账号都在这里）
+cp .env.example .env
+vi .env
+
+# 3. 一键安装
+sudo ./scripts/install.sh
+```
+
+安装完成后脚本会明确打印**运行时配置文件的位置**（默认 `/opt/notes-manager/.env`），
+那就是服务真正读取的那一份。它在三处都能查到：
+
+| 位置 | 内容 |
+| --- | --- |
+| 安装结束的摘要 | `运行时配置文件 : /opt/notes-manager/.env` |
+| 服务启动日志 | `config file : /opt/notes-manager/.env` |
+| Web 界面 | 「设置 → 服务器配置文件」 |
+
+以后修改配置：
+
+```bash
+sudo nano /opt/notes-manager/.env
+sudo systemctl restart notes-manager
+```
+
+配置优先级（从高到低）：**命令行参数 > 项目 `.env` > `NOTES_MANAGER_*` 环境变量 > 内置默认值**。
+安装后运行期则是：**真实环境变量 > 运行时 `.env` > 界面里保存的设置 > 默认值**。
+
+> 项目目录里若存在一个**没被读取**的 `.env`，启动日志会明确告警：
+> `... exists but is NOT read - the active configuration file is ...` —— 不会再出现"改了没反应"。
+
+命令行参数依然可用，且优先级高于 `.env`：
+
+```bash
+sudo ./scripts/install.sh --port 8080 --openlist-url http://127.0.0.1:5244 --openlist-token <TOKEN>
 ```
 
 脚本会依次完成：
 
 1. 检测/安装 Node.js（优先系统包管理器 + NodeSource，失败则下载官方 tarball 到 `/usr/local/lib/nodejs`）
-2. 创建系统用户与目录：`/opt/notes-manager`、`/var/lib/notes-manager`、`/etc/notes-manager`
-3. 拷贝源码（自动排除 `node_modules`、`.git`、克隆的 `openlist/`、构建产物）
+2. 创建系统用户与目录：`/opt/notes-manager`、`/var/lib/notes-manager`
+3. 读取项目目录的 `.env`（命令行参数优先），并解析出本次安装的最终配置
 4. 通过 `find -prune` + `tar` 精确拷贝源码（不使用 rsync 的 glob 排除规则，避免误伤
-   `server/src/integrations/openlist/` 这类同名嵌套目录），随后再次校验关键文件确实落地
+   `server/src/integrations/openlist/` 这类同名嵌套目录；保留已有的 `.env`、`node_modules`），
+   随后再次校验关键文件确实落地
 5. `npm ci` + `npm run build`
-6. 生成配置文件 `/etc/notes-manager/notes-manager.env`（含随机管理员密码）
-7. 写入并启用 systemd 服务 `notes-manager.service`（带 `NoNewPrivileges`、`ProtectSystem` 等加固）
-8. 启动服务并做健康检查，最后打印访问地址、账号密码与常用命令
+6. 把最终配置写入 `/opt/notes-manager/.env`（项目 `.env` 的副本 + 解析结果，权限 600；
+   未配置管理员密码时生成随机密码并写入）
+7. 写入并启用 systemd 服务 `notes-manager.service`，通过 `Environment=ENV_FILE=...` 告诉应用
+   读哪个配置文件（**不使用 `EnvironmentFile=`**，避免第二份配置源静默覆盖 `.env`）
+8. 启动服务并做健康检查，最后打印访问地址、账号密码、
+   **运行时配置文件路径**与常用命令
 
 常用参数（`sudo ./scripts/install.sh --help` 查看全部）：
 

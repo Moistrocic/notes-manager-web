@@ -30,11 +30,6 @@ export function createServices(): Services {
   const auth = new AuthService(config, state, settings, storage);
   auth.bootstrap();
 
-  const effective = settings.effective();
-  log.info(`storage driver: ${effective.storage.driver}`);
-  log.info(`local notes root: ${effective.storage.local.root}`);
-  log.info(`openlist url: ${effective.storage.openlist.url || '(not configured)'}`);
-
   return { config, settings, state, sessions, storage, notes, auth };
 }
 

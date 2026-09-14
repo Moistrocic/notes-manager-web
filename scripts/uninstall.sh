@@ -87,6 +87,15 @@ fi
 # 2. program files ---------------------------------------------------------- #
 step "removing the program files"
 if [ -d "$INSTALL_DIR" ]; then
+  # The runtime configuration lives in the install directory and holds the
+  # administrator password, so keep a copy before deleting it.
+  if [ -f "$INSTALL_DIR/.env" ]; then
+    SAVED_ENV="$CONFIG_DIR/notes-manager.env.saved"
+    mkdir -p "$CONFIG_DIR"
+    cp "$INSTALL_DIR/.env" "$SAVED_ENV"
+    chmod 600 "$SAVED_ENV"
+    ok "your configuration was kept at $SAVED_ENV"
+  fi
   rm -rf "$INSTALL_DIR"
   ok "removed $INSTALL_DIR"
 else
@@ -96,7 +105,7 @@ fi
 # 3. configuration ---------------------------------------------------------- #
 if [ "$PURGE" = "1" ]; then
   step "removing the configuration"
-  rm -f "$CONFIG_DIR/notes-manager.env"
+  rm -f "$CONFIG_DIR/notes-manager.env" "$CONFIG_DIR/notes-manager.env.saved"
   rmdir "$CONFIG_DIR" 2>/dev/null && ok "removed $CONFIG_DIR" || warn "$CONFIG_DIR kept (not empty)"
 
   step "removing the data directory"
@@ -116,7 +125,7 @@ if [ "$PURGE" = "1" ]; then
     userdel "$SERVICE_USER" 2>/dev/null && ok "removed user $SERVICE_USER" || warn "could not remove user $SERVICE_USER"
   fi
 else
-  warn "keeping configuration ($CONFIG_DIR) and data ($DATA_DIR) - use --purge to delete them"
+  warn "keeping your configuration in $CONFIG_DIR and data in $DATA_DIR - use --purge to delete them"
 fi
 
 printf '\n%s\n\n' "${C_GREEN}${C_BOLD}卸载完成 / Uninstall complete${C_RESET}"

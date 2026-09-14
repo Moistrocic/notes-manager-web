@@ -1,5 +1,16 @@
 import { motion } from 'framer-motion';
-import { AlertCircle, CheckCircle2, Cloud, Database, HardDrive, KeyRound, RefreshCw, Save, Wand2 } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Cloud,
+  Database,
+  FileCog,
+  HardDrive,
+  KeyRound,
+  RefreshCw,
+  Save,
+  Wand2,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
@@ -198,8 +209,27 @@ export function SettingsDialog() {
 
         {/* Paths */}
         <section>
-          <SectionTitle icon={HardDrive} title="本地路径" hint="由服务器环境变量决定" />
-          <div className="space-y-1.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3 font-mono text-[11px] text-[var(--muted)]">
+          <SectionTitle icon={HardDrive} title="服务器配置文件" hint="优先级最高，改完需重启服务" />
+          <div className="rounded-2xl border border-[color-mix(in_srgb,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] p-3">
+            <div className="flex items-center gap-2 text-[11.5px] text-[var(--accent)]">
+              <FileCog className="h-3.5 w-3.5 shrink-0" />
+              <span className="font-medium">配置文件</span>
+              {payload?.paths.envFileLoaded ? (
+                <Badge tone="success">已加载</Badge>
+              ) : (
+                <Badge tone="warn">不存在，使用默认值</Badge>
+              )}
+            </div>
+            <p className="mt-1.5 break-all font-mono text-[11.5px] text-[var(--text)]">
+              {payload?.paths.envFile ?? '—'}
+            </p>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--muted)]">
+              环境变量的优先级高于此处保存的设置，被环境变量接管的字段会标注「env 锁定」。
+              修改该文件后执行 <code className="font-mono">systemctl restart notes-manager</code> 生效。
+            </p>
+          </div>
+
+          <div className="mt-3 space-y-1.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3 font-mono text-[11px] text-[var(--muted)]">
             {[
               ['项目根目录', payload?.paths.projectRoot],
               ['数据目录', payload?.paths.dataDir],

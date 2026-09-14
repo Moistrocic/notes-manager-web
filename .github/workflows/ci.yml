@@ -36,9 +36,10 @@ jobs:
       - name: Render check
         run: npm run check:render
 
-      # Extracts copy_application()/verify_tree() from install.sh and runs them
-      # against a synthetic tree, covering the installer file-copy regression.
-      - name: Installer copy test
+      # Extracts the installer's own functions and configuration section from
+      # install.sh and runs them: KEY=VALUE parsing, the application copy and
+      # the runtime .env assembly (48 assertions).
+      - name: Installer tests
         run: npm run test:installer
 
       # Pinned so CI runs exactly the version the scripts were verified with
@@ -50,4 +51,4 @@ jobs:
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           /tmp/shellcheck-v0.11.0/shellcheck --version
           /tmp/shellcheck-v0.11.0/shellcheck --severity=warning \
-            scripts/install.sh scripts/uninstall.sh scripts/test-install-copy.sh
+            scripts/install.sh scripts/uninstall.sh scripts/test-install.sh

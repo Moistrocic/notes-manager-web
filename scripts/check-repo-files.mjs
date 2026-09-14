@@ -17,8 +17,8 @@ const ROOT = process.cwd();
 const SKIP_DIRS = new Set(['node_modules', '.git', '.npm-cache', 'dist', '.ssr-out', 'tmp', 'data']);
 /** Directories ignored only at the repository root (the OpenList reference clone). */
 const SKIP_TOP = new Set(['openlist']);
-/** Local-only files that are intentionally not committed. */
-const SKIP_FILES = new Set(['.npmrc']);
+/** Local-only files that are intentionally not committed (see .gitignore). */
+const SKIP_FILES = new Set(['.npmrc', '.env', '.env.local']);
 
 function walk(dir, rel = '') {
   const out = [];
@@ -36,7 +36,7 @@ function walk(dir, rel = '') {
 }
 
 const disk = walk(ROOT)
-  .filter((f) => !(SKIP_FILES.has(f) && !f.includes('/')))
+  .filter((f) => !SKIP_FILES.has(f))
   .sort();
 const tracked = execSync('git ls-files', { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean).sort();
 

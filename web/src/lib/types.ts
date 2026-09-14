@@ -123,7 +123,14 @@ export interface AppSettingsPayload {
     };
     sources: Record<string, 'env' | 'file' | 'default'>;
   };
-  paths: { projectRoot: string; dataDir: string; localNotesRoot: string };
+  paths: {
+    projectRoot: string;
+    dataDir: string;
+    localNotesRoot: string;
+    /** Configuration file the running process actually reads. */
+    envFile: string;
+    envFileLoaded: boolean;
+  };
   env: {
     storageDriver: string | null;
     openlistUrl: string | null;

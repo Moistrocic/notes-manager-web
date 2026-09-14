@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Services } from '../../services.js';
 import { createLogger } from '../../logger.js';
 import { handler, requireAdmin } from '../middleware.js';
+import { DEFAULT_ENV_FILE, activeEnvFile, envFileOverride } from '../../boot.js';
 import type { AppSettings } from '../../config.js';
 
 const log = createLogger('routes:system');
@@ -72,6 +73,8 @@ export function systemRoutes(services: Services): Router {
           projectRoot: services.config.projectRoot,
           dataDir: services.config.dataDir,
           localNotesRoot: effective.storage.local.root,
+          envFile: activeEnvFile ?? envFileOverride ?? DEFAULT_ENV_FILE,
+          envFileLoaded: activeEnvFile !== null,
         },
         env: {
           storageDriver: process.env.STORAGE_DRIVER ?? null,
