@@ -8,10 +8,6 @@
 #
 #    bash scripts/test-install.sh
 # =============================================================================
-# shellcheck disable=SC2034
-#   The fixture variables in the "runtime configuration" suite are read by the
-#   configuration section that is extracted from install.sh and evaluated here;
-#   shellcheck cannot follow that, so unused-variable warnings are off.
 set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -213,6 +209,14 @@ OPENLIST_PER_USER="false"
 ADMIN_USERNAME="boss"
 ADMIN_PASSWORD="secret-from-dotenv"
 AUTH_LOCAL_ENABLED="true"
+
+# The configuration section that is extracted from install.sh and evaluated
+# below reads all of the variables above, which shellcheck cannot follow.
+# Referencing them here marks them as used (and is otherwise a no-op).
+: "$SRC_DIR" "$SOURCE_ENV" "$INSTALL_DIR" "$RUNTIME_ENV" "$CONFIG_DIR" "$SERVICE_NAME" \
+  "$SERVICE_USER" "$DATA_DIR" "$DEFAULT_DATA_DIR" "$ADMIN_PASSWORD_GENERATED" "$configured_data_dir" \
+  "$HOST" "$PORT" "$BASE_PATH" "$PUBLIC_URL" "$STORAGE_DRIVER" "$OPENLIST_URL" "$OPENLIST_TOKEN" \
+  "$OPENLIST_ROOT" "$OPENLIST_PER_USER" "$ADMIN_USERNAME" "$ADMIN_PASSWORD" "$AUTH_LOCAL_ENABLED"
 
 # the section under test only prints and chowns; stub both out
 step() { :; }
