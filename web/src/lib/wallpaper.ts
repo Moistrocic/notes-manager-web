@@ -7,7 +7,8 @@
  */
 
 export type WallpaperKind = 'none' | 'image' | 'video';
-export type WallpaperSource = 'url' | 'file';
+/** Where the current wallpaper came from. "library" means a local folder. */
+export type WallpaperSource = 'url' | 'file' | 'library';
 
 export interface WallpaperSettings {
   kind: WallpaperKind;
@@ -92,6 +93,28 @@ async function withStore<T>(mode: IDBTransactionMode, run: (store: IDBObjectStor
   });
 }
 
+/* Generic access to the same store, for the pieces other modules keep there
+ * (the wallpaper folder handle, for one). */
+export async function idbPut(key: string, value: unknown): Promise<void> {
+  await withStore('readwrite', (store) => store.put(value, key));
+}
+
+export async function idbGet<T>(key: string): Promise<T | undefined> {
+  try {
+    return await withStore<T | undefined>('readonly', (store) => store.get(key));
+  } catch {
+    return undefined;
+  }
+}
+
+export async function idbDelete(key: string): Promise<void> {
+  try {
+    await withStore('readwrite', (store) => store.delete(key));
+  } catch {
+    /* nothing stored */
+  }
+}
+
 export async function saveWallpaperFile(file: File): Promise<void> {
   await withStore('readwrite', (store) => store.put(file, FILE_KEY));
 }
@@ -126,4 +149,16 @@ export async function wallpaperObjectUrl(): Promise<string | null> {
 export function acceptFor(kind: WallpaperKind): string {
   if (kind === 'video') return 'video/*';
   return 'image/*';
+}
+
+/** Extensions the browser can put on screen. */
+export const WALLPAPER_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'svg'];
+export const WALLPAPER_VIDEO_EXTENSIONS = ['mp4', 'webm', 'm4v', 'mov', 'ogv'];
+
+/** image, video, or null when the file is not something a browser can show. */
+export function wallpaperKindOf(name: string): 'image' | 'video' | null {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  if (WALLPAPER_IMAGE_EXTENSIONS.includes(ext)) return 'image';
+  if (WALLPAPER_VIDEO_EXTENSIONS.includes(ext)) return 'video';
+  return null;
 }

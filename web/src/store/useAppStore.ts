@@ -11,8 +11,9 @@ import {
   loadWallpaperSettings,
   saveWallpaperFile,
   saveWallpaperSettings,
-  type WallpaperKind,
+  wallpaperKindOf,
   type WallpaperSettings,
+  type WallpaperSource,
 } from '../lib/wallpaper';
 import { ApiError } from '../lib/types';
 import type {
@@ -135,7 +136,7 @@ interface AppState {
   /** The URL the background layer should load (remote URL or blob URL). */
   wallpaperUrl: string | null;
   setWallpaper: (patch: Partial<WallpaperSettings>) => void;
-  setWallpaperFile: (file: File) => Promise<void>;
+  setWallpaperFile: (file: File, source?: WallpaperSource) => Promise<void>;
   clearWallpaper: () => Promise<void>;
   appearanceOpen: boolean;
   setAppearanceOpen: (value: boolean) => void;
@@ -827,10 +828,11 @@ export const appStore = createStore<AppState>((set, get) => ({
     void get().refreshWallpaperUrl();
   },
 
-  setWallpaperFile: async (file) => {
+  setWallpaperFile: async (file, source = 'file') => {
     await saveWallpaperFile(file);
-    const kind: WallpaperKind = file.type.startsWith('video/') ? 'video' : 'image';
-    const next: WallpaperSettings = { ...get().wallpaper, kind, source: 'file' };
+    // the extension is the better signal: a picked .webm often has no MIME type
+    const kind = wallpaperKindOf(file.name) ?? (file.type.startsWith('video/') ? 'video' : 'image');
+    const next: WallpaperSettings = { ...get().wallpaper, kind, source };
     saveWallpaperSettings(next);
     set({ wallpaper: next });
     await get().refreshWallpaperUrl();
