@@ -33,10 +33,12 @@
   `https://example.com/public/Notes/Readme.md#11-分层`；可直接分享，浏览器前进/后退可逐篇回退，
   笔记内的 `[文字](#锚点)` 与 `[文字](./另一篇.md)` 均可点击跳转
 - 深色 / 浅色主题，动态极光背景，玻璃拟态面板，全流程 Framer Motion 动画
-- **自定义字体**：管理员可上传 woff2 / woff / ttf / otf，分别指定界面字体与代码字体；
-  文件存放在服务器数据目录，**重启后依然生效**
-- **壁纸**：支持图片链接、本地图片或本地视频（静音循环），可调模糊 / 暗度 / 缩放。
-  纯前端实现——文件存在浏览器 IndexedDB，不上传服务器，人人可用
+- **字体**：内置 **Cascadia Code**（随安装包一起部署，代码字体默认就是它，开箱即用，无需联网下载）；
+  管理员还可以上传 woff2 / woff / ttf / otf，分别指定界面字体与代码字体，
+  上传的文件存放在服务器数据目录，**重启后依然生效**
+- **壁纸**：支持**本地壁纸库**（直接读取你电脑上已有的壁纸文件夹，比如 Wallpaper Engine 的
+  `steamapps/workshop/content/431960`，缩略图网格挑选）、图片链接、单个本地图片或本地视频（静音循环），
+  可调模糊 / 暗度 / 缩放。纯前端实现——文件存在浏览器 IndexedDB，不上传服务器，人人可用
   （列表布局动画、卡片入场错峰、模态弹簧过渡、Toast 堆叠）
 - CodeMirror 6 编辑器：Markdown 语法高亮、行号、括号匹配、搜索、自动换行
 - 代码块**按语言高亮**（VS Code Dark+ / Light+ 配色）：```ts```、```python``` 等 140+ 种语言，
@@ -347,7 +349,7 @@ journalctl -u notes-manager -f
 | `GET` | `/api/fonts` | 已导入字体列表与当前选择 |
 | `POST` | `/api/fonts` | 上传字体（原始字节 + `X-Font-Filename` / `X-Font-Name` 头，管理员） |
 | `DELETE` | `/api/fonts/:id` | 删除字体（管理员） |
-| `PUT` | `/api/fonts/selection` | 指定界面 / 代码字体（管理员） |
+| `PUT` | `/api/fonts/selection` | 指定界面 / 代码字体（管理员）；`builtin:` 开头的 id 表示内置字体 |
 | `GET` | `/api/fonts/:id/file` | 字体文件本体（供 `@font-face` 加载） |
 
 ---
@@ -402,9 +404,11 @@ notes-manager-web/
 
 | 内容 | 存放位置 | 重装/重启 |
 | --- | --- | --- |
+| 内置字体（Cascadia Code） | 前端静态资源 `web/dist/fonts/` | 随安装包重新部署，**无需任何配置** |
 | 上传的字体文件 | 服务器 `DATA_DIR/fonts/`（默认 `/var/lib/notes-manager/fonts`） | **保留**（重装不会删除数据目录） |
 | 字体选择 | 同目录的 `index.json` | **保留** |
 | 壁纸 | 浏览器本地（localStorage + IndexedDB） | 保留，但**换设备需重设** |
+| 壁纸文件夹授权 | 浏览器本地（IndexedDB 里的目录句柄） | 保留，但浏览器会**再确认一次**才允许读取 |
 
 > 字体是整站设置（所有用户共享）；壁纸是**每台浏览器各自的偏好**，因为需求是"仅前端支持、
 > 不需要服务器"。卸载脚本执行 `--purge` 时会连同数据目录一起删除。
@@ -459,6 +463,15 @@ A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重�
 ## 许可
 
 本项目基于 [MIT 许可](./LICENSE) 发布，完整条款见仓库根目录的 `LICENSE` 文件。
+
+### 第三方资源
+
+| 资源 | 位置 | 许可 |
+| --- | --- | --- |
+| Cascadia Code 字体 | `web/public/fonts/CascadiaCode.woff2` | [SIL OFL 1.1](./web/public/fonts/CascadiaCode-LICENSE.txt)（Microsoft，保留字体名 `Cascadia Code`；文件原样分发、未改名、未修改） |
+
+字体随前端一起构建到 `web/dist/fonts/`，因此部署后无需联网即可使用。想换成别的内置字体，
+把字体文件放进 `web/public/fonts/` 并在 `web/src/lib/builtin-fonts.ts` 里加一条即可。
 
 ### 与 OpenList 的关系（重要）
 
