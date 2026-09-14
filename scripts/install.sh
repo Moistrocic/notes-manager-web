@@ -364,6 +364,7 @@ copy_application() {
       -path './tmp' -prune -o \
       -path './data' -prune -o \
       -path './.env' -prune -o \
+      -path './.npmrc' -prune -o \
       -path './web/dist' -prune -o \
       -path './server/dist' -prune -o \
       -type f -print
