@@ -9,6 +9,9 @@ type Provider = 'auto' | 'openlist' | 'local';
 
 export function LoginScreen() {
   const providers = useAppStore((s) => s.providers);
+  // Known before signing in: boot() fetches /api/system/status alongside the
+  // providers, so the running version can be checked from here.
+  const version = useAppStore((s) => s.status?.version);
   const login = useAppStore((s) => s.login);
   const guestLogin = useAppStore((s) => s.guestLogin);
   const authBusy = useAppStore((s) => s.authBusy);
@@ -304,6 +307,12 @@ export function LoginScreen() {
               >
                 {openlist.hint}
               </motion.div>
+            ) : null}
+
+            {version ? (
+              <p className="pt-1 text-center font-mono text-[10.5px] text-[var(--faint)]">
+                {'notes-manager-web v' + version}
+              </p>
             ) : null}
           </div>
         </motion.div>

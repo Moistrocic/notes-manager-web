@@ -640,6 +640,7 @@ console.log('\nappearance dialog (jsdom)');
 /* --- the running version is visible in the page ---------------------------- */
 const { NotesPanel } = await import('./src/components/NoteList');
 const { SettingsDialog } = await import('./src/components/SettingsDialog');
+const { LoginScreen } = await import('./src/components/LoginScreen');
 
 console.log('\nversion display (jsdom)');
 {
@@ -665,9 +666,18 @@ console.log('\nversion display (jsdom)');
   appStore.setState({ status: null });
   check('no version is shown before the server reports one', (await renderOnce(React.createElement(NotesPanel))).includes('v1.0.0'), false);
 
+  check(
+    'the login screen stays clean before the server answers',
+    (await renderOnce(React.createElement(LoginScreen))).includes('v1.0.0'),
+    false,
+  );
+
   appStore.setState({
     status: { version: '1.0.0', basePath: '', publicUrl: '', uptimeSeconds: 5 } as never,
   });
+  // The login screen is where a deployed version gets checked before signing in.
+  const loginMarkup = await renderOnce(React.createElement(LoginScreen));
+  check('the login screen shows it', loginMarkup.includes('notes-manager-web v1.0.0'), true);
   check('the panel header shows the version', (await renderOnce(React.createElement(NotesPanel))).includes('v1.0.0'), true);
 
   appStore.setState({ settingsOpen: true });
