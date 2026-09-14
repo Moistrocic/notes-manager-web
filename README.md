@@ -317,4 +317,10 @@ A：用 `BASE_PATH` / `--base-path` 部署时需要带上 `VITE_BASE_PATH` 重�
 
 ## 许可
 
-本项目基于 MIT 许可发布。OpenList 为独立项目，遵循其自身的开源许可（AGPL-3.0）。
+本项目基于 [MIT 许可](./LICENSE) 发布，完整条款见仓库根目录的 `LICENSE` 文件。
+
+**与 OpenList 的关系**：OpenList 是由 OpenList Team 独立维护的开源项目，遵循
+[AGPL-3.0](https://github.com/OpenListTeam/OpenList/blob/main/LICENSE)。本项目
+**不包含、不修改也不分发 OpenList 的任何代码**，仅通过其公开的 HTTP API 进行通信，
+因此两者相互独立、各自适用自己的许可。若你修改并对外提供 OpenList 服务，
+请自行遵守 AGPL-3.0 的要求。
