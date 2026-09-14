@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.npm-cache/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Runtime data (notes, sessions, settings)
+data/
+server/data/
+tmp/
+
+# Environment
+.env
+.env.local
+.env.*.local
+.npmrc
+
+# Reference clone of OpenList (read-only, never modified, never committed)
+openlist/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+
+# Test / coverage
+coverage/
+.nyc_output/

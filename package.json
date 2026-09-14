@@ -1,0 +1,24 @@
+{
+  "name": "notes-manager-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Note manager web app integrated with OpenList",
+  "type": "module",
+  "engines": {
+    "node": ">=20.10.0"
+  },
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace web && npm run build --workspace server",
+    "build:web": "npm run build --workspace web",
+    "build:server": "npm run build --workspace server",
+    "dev:server": "npm run dev --workspace server",
+    "dev:web": "npm run dev --workspace web",
+    "start": "node server/dist/index.js",
+    "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
+    "smoke": "node scripts/smoke-test.mjs"
+  }
+}
