@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronRight, FileText, Folder, FolderInput, FolderPlus, Pencil, Pin, Star, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { cn } from '../lib/cn';
 import { relativeTime } from '../lib/format';
 import type { FolderCount, NoteSummary } from '../lib/types';
+import { useAppStore } from '../store/useAppStore';
 import { Tooltip } from './ui/primitives';
 
 export interface NoteTreeActions {
@@ -68,31 +69,37 @@ export function NoteTree({
   }, [notes]);
 
   const tree = useMemo(() => childrenOf(folders), [folders]);
-  const [open, setOpen] = useState<Set<string>>(new Set());
+
+  // Held in the store, not here: hiding the note list unmounts this component,
+  // and the tree should not forget where you were because you looked at a note.
+  const expandedFolders = useAppStore((s) => s.expandedFolders);
+  const setExpandedFolders = useAppStore((s) => s.setExpandedFolders);
+  const open = useMemo(() => new Set(expandedFolders), [expandedFolders]);
 
   // Whatever is being looked at has to be reachable, so opening a folder from
   // elsewhere in the app unfolds the path down to it.
   useEffect(() => {
     if (!activeFolder) return;
-    setOpen((current) => {
-      const next = new Set(current);
-      let path = activeFolder.replace(/^\//, '');
-      while (path) {
+    const next = new Set(expandedFolders);
+    let path = activeFolder.replace(/^\//, '');
+    let changed = false;
+    while (path) {
+      if (!next.has(path)) {
         next.add(path);
-        const cut = path.lastIndexOf('/');
-        path = cut < 0 ? '' : path.slice(0, cut);
+        changed = true;
       }
-      return next;
-    });
-  }, [activeFolder]);
+      const cut = path.lastIndexOf('/');
+      path = cut < 0 ? '' : path.slice(0, cut);
+    }
+    if (changed) setExpandedFolders([...next]);
+  }, [activeFolder, expandedFolders, setExpandedFolders]);
 
-  const toggle = (path: string) =>
-    setOpen((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
+  const toggle = (path: string) => {
+    const next = new Set(expandedFolders);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    setExpandedFolders([...next]);
+  };
 
   const renderFolders = (parent: string, depth: number) => {
     const list = tree.get(parent) ?? [];

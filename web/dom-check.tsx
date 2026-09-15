@@ -29,6 +29,11 @@ function define(name: string, value: unknown) {
 define('window', w);
 define('document', w.document);
 define('navigator', w.navigator);
+// Without these the store's persistence caught a ReferenceError on every read
+// and fell back to its defaults, so anything it remembers between sessions was
+// silently untested.
+define('localStorage', w.localStorage);
+define('sessionStorage', w.sessionStorage);
 define('HTMLElement', w.HTMLElement);
 define('Element', w.Element);
 define('Node', w.Node);
@@ -943,6 +948,7 @@ console.log('\nnote list (jsdom)');
     pinnedOnly: false,
     searchScope: { title: true, content: true, tags: true },
     view: 'tree',
+    expandedFolders: [],
     loadingNotes: false,
     notesError: null,
   });
@@ -991,6 +997,46 @@ console.log('\nnote list (jsdom)');
   check('and can be aimed at tags alone', tagsOnly.includes('收藏笔记'), false);
   check('which the panel says it is doing', tagsOnly.includes('已筛选'), true);
   appStore.setState({ query: '', searchScope: { title: true, content: true, tags: true } });
+
+  // Opening a folder has to outlive the component. Hiding the note list
+  // unmounts the whole panel, so state kept inside the tree would be lost every
+  // time you glanced at a note.
+  window.localStorage.removeItem('notes-manager-expanded-folders');
+  appStore.setState({ expandedFolders: ['proj'], activeFolder: null });
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const treeRoot = createRoot(host);
+  await act(async () => {
+    treeRoot.render(React.createElement(NotesPanel));
+  });
+  await flush();
+  check('a folder the store says is open is open', host.innerHTML.includes('项目笔记'), true);
+
+  const expander = host.querySelector('[aria-label="收起"]');
+  check('and offers to close', Boolean(expander), true);
+  await act(async () => {
+    expander?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  // Asserted on the store rather than the DOM: the collapsing subtree is
+  // wrapped in AnimatePresence, and jsdom has no animation frames to finish
+  // the exit with, so the markup lingers a beat behind the state.
+  check('clicking it closes the folder', appStore.getState().expandedFolders.includes('proj'), false);
+
+  // Reopen, then take the panel away entirely, as hiding the list does.
+  await act(async () => {
+    expander?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  await act(async () => {
+    treeRoot.unmount();
+  });
+  host.remove();
+
+  const remounted = await renderOnce(React.createElement(NotesPanel));
+  check('the tree remembers across a remount', remounted.includes('项目笔记'), true);
+  check('and the choice is written down', window.localStorage.getItem('notes-manager-expanded-folders'), '["proj"]');
+  appStore.setState({ expandedFolders: [] });
 
   // The tree is for navigating, so selecting a folder must not hide its siblings.
   const focused = await renderOnce(React.createElement(NotesPanel));

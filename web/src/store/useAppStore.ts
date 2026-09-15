@@ -102,6 +102,9 @@ interface AppState {
   pinnedOnly: boolean;
   searchScope: SearchScope;
   setPinnedOnly: (value: boolean) => void;
+  /** Folder paths the tree has open. */
+  expandedFolders: string[];
+  setExpandedFolders: (paths: string[]) => void;
   setSearchScope: (scope: SearchScope) => void;
   sort: SortKey;
   view: ViewMode;
@@ -223,6 +226,7 @@ interface AppState {
 
 const THEME_KEY = 'notes-manager-theme';
 const VIEW_KEY = 'notes-manager-view';
+const EXPANDED_KEY = 'notes-manager-expanded-folders';
 const MODE_KEY = 'notes-manager-editor-mode';
 const SPLIT_KEY = 'notes-manager-split-ratio';
 
@@ -240,6 +244,32 @@ function readLocal<T extends string>(key: string, fallback: T): T {
 function writeLocal(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Which folders the tree has open.
+ *
+ * Kept outside the component because hiding the note list unmounts it, and a
+ * tree that forgets where you were every time you glance at a note is worse
+ * than no tree.
+ */
+function readExpanded(): string[] {
+  try {
+    const raw = localStorage.getItem(EXPANDED_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeExpanded(paths: string[]): void {
+  try {
+    localStorage.setItem(EXPANDED_KEY, JSON.stringify(paths));
   } catch {
     /* ignore */
   }
@@ -337,6 +367,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   favoriteOnly: false,
   pinnedOnly: false,
   searchScope: { ...DEFAULT_SEARCH_SCOPE },
+  expandedFolders: readExpanded(),
   sort: 'updated',
   // A stored 'compact' predates the tree view; fall back rather than render
   // a mode that no longer exists.
@@ -1006,6 +1037,15 @@ export const appStore = createStore<AppState>((set, get) => ({
   setActiveFolder: (folder) => set({ activeFolder: folder }),
   setFavoriteOnly: (value) => set({ favoriteOnly: value }),
   setPinnedOnly: (value) => set({ pinnedOnly: value }),
+
+  setExpandedFolders: (paths) => {
+    // The tree recalculates this on every render; only a real change should
+    // reach the store, or the effect that opens a folder would loop.
+    const current = get().expandedFolders;
+    if (current.length === paths.length && current.every((p, i) => p === paths[i])) return;
+    writeExpanded(paths);
+    set({ expandedFolders: paths });
+  },
   setSearchScope: (scope) => set({ searchScope: scope }),
   setSort: (sort) => set({ sort }),
   setView: (view) => {
