@@ -32,6 +32,7 @@ const playStage = $('play-stage');
 const playLog = $('play-log');
 const playNote = $('play-note');
 const reloadButton = $<HTMLButtonElement>('reload');
+const layersButton = $<HTMLButtonElement>('layers');
 
 let pkg: { name: string; bytes: ArrayBuffer } | null = null;
 let player: ScenePlayer | null = null;
@@ -135,6 +136,53 @@ stillButton.addEventListener('click', () => {
   })();
 });
 
+
+/* ------------------------------- layers --------------------------------- */
+
+/**
+ * What the loader kept, what it dropped, and why.
+ *
+ * A white rectangle in the picture is caused by a layer that should not have
+ * been drawn, so the layer responsible is by definition missing from the
+ * visible set. Listing the dropped ones with their reasons turns that from a
+ * guess into an answer - and the average colour of each kept layer's texture
+ * catches the other case, a layer drawn with a texture that is itself blank.
+ */
+layersButton.addEventListener('click', () => {
+  if (!pkg) return;
+  reset(stillLog, '正在解析图层…');
+  void (async () => {
+    try {
+      const { parsePkg } = await import('../lib/we-scene/src/pkg/container.js');
+      const { parseScene } = await import('../lib/we-scene/src/scene/parse.js');
+      const { loadSceneAssets } = await import('../lib/scene/load-browser');
+
+      const container = parsePkg(new Uint8Array(pkg!.bytes.slice(0)));
+      const entry = container.entries.find((e: { name: string }) => e.name === 'scene.json');
+      if (!entry) throw new Error('scene.json 不在容器里');
+      const data = new TextDecoder().decode(
+        container.buf.subarray(container.dataStart + entry.offset, container.dataStart + entry.offset + entry.size),
+      );
+      const scene = parseScene(JSON.parse(data));
+      const { textures, hidden, drawn, resolved } = await loadSceneAssets(container, scene);
+
+      reset(stillLog, `共 ${scene.layers.length} 层 · 绘制 ${drawn.length} · 隐藏 ${hidden.length} · 纹理解析 ${resolved}/${textures.size}`);
+      say(stillLog, '');
+      say(stillLog, '── 保留（会画出来） ─────────────────────────', 'ok');
+      for (const d of drawn) {
+        say(stillLog, `  #${String(d.index).padStart(2, '0')} ${d.name}`, 'ok');
+        say(stillLog, `        纹理=${d.texture ?? '（无）'}  平均色=${d.average ?? '—'}`);
+      }
+      say(stillLog, '');
+      say(stillLog, '── 隐藏（不画） ─────────────────────────────', 'bad');
+      for (const h of hidden) {
+        say(stillLog, `  #${String(h.index).padStart(2, '0')} ${h.name}  ← ${h.reason}`, 'bad');
+      }
+    } catch (err) {
+      say(stillLog, `解析失败：${(err as Error).message}`, 'bad');
+    }
+  })();
+});
 
 /* --------------------------------- live --------------------------------- */
 
