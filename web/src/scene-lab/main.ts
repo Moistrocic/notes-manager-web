@@ -72,6 +72,9 @@ function usePkg(name: string, bytes: ArrayBuffer) {
   reset(stillLog, '已载入，等待合成…');
   reset(playLog, '已载入，等待渲染…');
   ready();
+  // Listed straight away: choosing what to draw is the point of the page, and
+  // having to press a button to discover that is a step in the way.
+  void inspectLayers();
 }
 
 /* ------------------------------- loading -------------------------------- */
@@ -119,6 +122,7 @@ stillButton.addEventListener('click', () => {
         // Always render. A cached frame would hide the effect of the very
         // change being tested, and look exactly like a fix that did nothing.
         useCache: false,
+        overrides,
       });
       const elapsed = Math.round(performance.now() - started);
       if (stillUrl.current) URL.revokeObjectURL(stillUrl.current);
@@ -151,41 +155,156 @@ stillButton.addEventListener('click', () => {
  * guess into an answer - and the average colour of each kept layer's texture
  * catches the other case, a layer drawn with a texture that is itself blank.
  */
-layersButton.addEventListener('click', () => {
+const layerList = $('layer-list');
+
+/**
+ * Which layers the person has decided about, by index, kept between visits.
+ *
+ * The loader's rules are a guess about what Wallpaper Engine would have drawn,
+ * and a wrong guess is indistinguishable from a rendering bug. This is the
+ * escape hatch: say what you want and see it.
+ */
+const OVERRIDE_KEY = 'scene-lab-layer-overrides';
+const overrides: Record<number, boolean> = (() => {
+  try {
+    return JSON.parse(localStorage.getItem(OVERRIDE_KEY) ?? '{}') as Record<number, boolean>;
+  } catch {
+    return {};
+  }
+})();
+
+function saveOverrides(): void {
+  try {
+    localStorage.setItem(OVERRIDE_KEY, JSON.stringify(overrides));
+  } catch {
+    /* ignore */
+  }
+}
+
+function setOverride(index: number, value: boolean | null): void {
+  if (value === null) delete overrides[index];
+  else overrides[index] = value;
+  saveOverrides();
+  // Redrawn from what is already known rather than re-inspected: asking the
+  // loader again would re-parse a 45 MB container and decode its textures for
+  // every checkbox, which is a second of work per click.
+  if (lastRows) renderLayerList(lastRows);
+}
+
+interface LayerRow {
+  index: number;
+  name: string;
+  /** What the rules alone decided, before any manual choice. */
+  ruleDrawn: boolean;
+  reason: string | null;
+}
+
+let lastRows: LayerRow[] | null = null;
+
+async function inspectLayers(): Promise<void> {
   if (!pkg) return;
   reset(stillLog, '正在解析图层…');
-  void (async () => {
-    try {
-      const { parsePkg } = await import('../lib/we-scene/src/pkg/container.js');
-      const { parseScene } = await import('../lib/we-scene/src/scene/parse.js');
-      const { loadSceneAssets } = await import('../lib/scene/load-browser');
+  try {
+    const { parsePkg } = await import('../lib/we-scene/src/pkg/container.js');
+    const { parseScene } = await import('../lib/we-scene/src/scene/parse.js');
+    const { loadSceneAssets } = await import('../lib/scene/load-browser');
 
-      const container = parsePkg(new Uint8Array(pkg!.bytes.slice(0)));
-      const entry = container.entries.find((e: { name: string }) => e.name === 'scene.json');
-      if (!entry) throw new Error('scene.json 不在容器里');
-      const data = new TextDecoder().decode(
-        container.buf.subarray(container.dataStart + entry.offset, container.dataStart + entry.offset + entry.size),
-      );
-      const scene = parseScene(JSON.parse(data));
-      const { textures, hidden, drawn, resolved } = await loadSceneAssets(container, scene);
+    const container = parsePkg(new Uint8Array(pkg.bytes.slice(0)));
+    const entry = container.entries.find((e: { name: string }) => e.name === 'scene.json');
+    if (!entry) throw new Error('scene.json 不在容器里');
+    const data = new TextDecoder().decode(
+      container.buf.subarray(container.dataStart + entry.offset, container.dataStart + entry.offset + entry.size),
+    );
+    const scene = parseScene(JSON.parse(data));
+    // Asked with no overrides, so the list shows what the rules decided and
+    // the manual choices are layered on top of that rather than baked in.
+    const { hidden, drawn, textures } = await loadSceneAssets(container, scene, {});
 
-      reset(stillLog, `共 ${scene.layers.length} 层 · 绘制 ${drawn.length} · 隐藏 ${hidden.length} · 纹理解析 ${resolved}/${textures.size}`);
-      say(stillLog, '');
-      say(stillLog, '── 保留（会画出来） ─────────────────────────', 'ok');
-      for (const d of drawn) {
-        say(stillLog, `  #${String(d.index).padStart(2, '0')} ${d.name}`, 'ok');
-        say(stillLog, `        纹理=${d.texture ?? '（无）'}  平均色=${d.average ?? '—'}`);
-      }
-      say(stillLog, '');
-      say(stillLog, '── 隐藏（不画） ─────────────────────────────', 'bad');
-      for (const h of hidden) {
-        say(stillLog, `  #${String(h.index).padStart(2, '0')} ${h.name}  ← ${h.reason}`, 'bad');
-      }
-    } catch (err) {
-      say(stillLog, `解析失败：${(err as Error).message}`, 'bad');
+    const byIndex = new Map<number, string>();
+    for (const h of hidden) byIndex.set(h.index, h.reason);
+    const drawnIndex = new Set(drawn.map((d) => d.index));
+
+    const rows: LayerRow[] = scene.layers.map((layer: { name?: string }, index: number) => ({
+      index,
+      name: String(layer.name ?? ''),
+      ruleDrawn: drawnIndex.has(index),
+      reason: byIndex.get(index) ?? null,
+    }));
+
+    lastRows = rows;
+    const willDraw = rows.filter((r) => overrides[r.index] ?? r.ruleDrawn).length;
+    reset(stillLog, `共 ${rows.length} 层 · 规则会画 ${drawn.length} · 不画 ${hidden.length} · 纹理 ${textures.size}`);
+    say(stillLog, `按当前选择会画 ${willDraw} 层`);
+    renderLayerList(rows);
+  } catch (err) {
+    say(stillLog, `解析失败：${(err as Error).message}`, 'bad');
+  }
+}
+
+function renderLayerList(rows: LayerRow[]): void {
+  layerList.replaceChildren();
+
+  const title = document.createElement('h3');
+  title.textContent = '图层（勾选 = 画出来）';
+  layerList.append(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent =
+    '改动会记住，并在下次「取第一帧」或「开始渲染」时生效。带「手动」的图层是你自己决定的，点「自动」还给规则。';
+  layerList.append(hint);
+
+  const reset_ = document.createElement('button');
+  reset_.type = 'button';
+  reset_.textContent = '全部交回规则';
+  reset_.style.marginBottom = '8px';
+  reset_.addEventListener('click', () => {
+    for (const key of Object.keys(overrides)) delete overrides[Number(key)];
+    saveOverrides();
+    void inspectLayers();
+  });
+  layerList.append(reset_);
+
+  for (const row of rows) {
+    const item = document.createElement('label');
+    const manual = overrides[row.index] !== undefined;
+    const willDraw = overrides[row.index] ?? row.ruleDrawn;
+    item.className = 'layer ' + (willDraw ? 'on' : 'off') + (manual ? ' manual' : '');
+
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = willDraw;
+    box.addEventListener('change', () => setOverride(row.index, box.checked));
+    item.append(box);
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = `#${String(row.index).padStart(2, '0')} ${row.name}`;
+    meta.append(name);
+    const why = document.createElement('span');
+    why.className = 'why';
+    why.textContent = manual ? '手动' : (row.reason ?? '（规则允许，会画出来）');
+    meta.append(document.createElement('br'), why);
+    item.append(meta);
+
+    if (manual) {
+      const auto = document.createElement('button');
+      auto.type = 'button';
+      auto.textContent = '自动';
+      auto.style.flex = 'none';
+      auto.addEventListener('click', (event) => {
+        event.preventDefault();
+        setOverride(row.index, null);
+      });
+      item.append(auto);
     }
-  })();
-});
+    layerList.append(item);
+  }
+}
+
+layersButton.addEventListener('click', () => void inspectLayers());
 
 /* --------------------------------- live --------------------------------- */
 
@@ -215,6 +334,7 @@ playButton.addEventListener('click', () => {
       const started2 = await playScene(canvas, pkg!.bytes.slice(0), {
         maxWidth: 1920,
         fps: 30,
+        overrides,
         onError: (message) => say(playLog, `渲染中途失败：${message}`, 'bad'),
       });
       player = started2;

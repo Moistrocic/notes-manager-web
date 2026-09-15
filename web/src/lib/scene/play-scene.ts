@@ -11,7 +11,7 @@
  */
 
 import { getSceneWorker, nextRequestId, send } from './worker';
-import type { PlayRequest, PlayResponse } from './protocol';
+import type { LayerOverrides, PlayRequest, PlayResponse } from './protocol';
 
 export interface ScenePlayer {
   stop(): void;
@@ -43,6 +43,8 @@ export interface PlayOptions {
    * canvas would simply freeze on its last frame and look like a still.
    */
   onError?: (message: string) => void;
+  /** Per-layer draw decisions, overriding the loader's rules. */
+  overrides?: LayerOverrides;
 }
 
 export async function playScene(
@@ -95,6 +97,7 @@ export async function playScene(
     bytes: pkgBytes,
     maxWidth: options.maxWidth ?? 1920,
     fps: options.fps ?? 30,
+    overrides: options.overrides,
   };
   send(request, [offscreen, pkgBytes]);
 

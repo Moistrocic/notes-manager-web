@@ -23,7 +23,7 @@
 import { getEntry, parsePkg } from '../we-scene/src/pkg/container.js';
 import { parseScene } from '../we-scene/src/scene/parse.js';
 import { loadSceneAssets } from './load-browser';
-import type { PlayRequest, SceneRequest, SceneResponse, StillRequest } from './protocol';
+import type { LayerOverrides, PlayRequest, SceneRequest, SceneResponse, StillRequest } from './protocol';
 import type { Pkg, Scene } from './we-types';
 
 interface Loop {
@@ -63,7 +63,7 @@ function post(message: SceneResponse): void {
 }
 
 /** Reads the scene and its asset table out of a container. */
-async function openScene(pkg: Pkg): Promise<{
+async function openScene(pkg: Pkg, overrides: LayerOverrides = {}): Promise<{
   scene: Scene;
   textures: Awaited<ReturnType<typeof loadSceneAssets>>['textures'];
   resolved: number;
@@ -76,7 +76,7 @@ async function openScene(pkg: Pkg): Promise<{
   const scene = parseScene(JSON.parse(new TextDecoder().decode(sceneEntry)), null);
 
   const projection = scene.general?.orthogonalprojection as { width?: number; height?: number } | undefined;
-  const { textures, resolved, skipped } = await loadSceneAssets(pkg, scene);
+  const { textures, resolved, skipped } = await loadSceneAssets(pkg, scene, overrides);
   return {
     scene,
     textures,
@@ -93,8 +93,13 @@ async function openScene(pkg: Pkg): Promise<{
  * Shared by both modes so they cannot drift apart again, which is exactly what
  * went wrong when the still had a rasteriser of its own.
  */
-async function openRenderer(pkg: Pkg, canvas: OffscreenCanvas, maxWidth: number) {
-  const opened = await openScene(pkg);
+async function openRenderer(
+  pkg: Pkg,
+  canvas: OffscreenCanvas,
+  maxWidth: number,
+  overrides: LayerOverrides = {},
+) {
+  const opened = await openScene(pkg, overrides);
   const scale = Math.min(1, maxWidth / opened.width);
   const width = Math.max(1, Math.round(opened.width * scale));
   const height = Math.max(1, Math.round(opened.height * scale));
@@ -125,7 +130,7 @@ async function renderStill(request: StillRequest): Promise<void> {
   try {
     const pkg = parsePkg(new Uint8Array(bytes));
     const canvas = new OffscreenCanvas(1, 1);
-    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth);
+    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth, request.overrides);
 
     // Two frames rather than one: the first can land before an effect has
     // anything to sample, and the second costs nothing.
@@ -150,7 +155,7 @@ async function playScene(request: PlayRequest): Promise<void> {
 
   try {
     const pkg = parsePkg(new Uint8Array(bytes));
-    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth);
+    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth, request.overrides);
     if (loop.stop) return;
 
     const frameBudget = 1000 / Math.max(1, Math.min(60, fps));

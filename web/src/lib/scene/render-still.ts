@@ -11,7 +11,7 @@
  */
 
 import { idbGet, idbPut } from '../wallpaper';
-import type { StillRequest, StillResponse } from './protocol';
+import type { LayerOverrides, StillRequest, StillResponse } from './protocol';
 import { awaitReply, getSceneWorker, nextRequestId } from './worker';
 
 export interface SceneStill {
@@ -59,6 +59,8 @@ export interface RenderOptions {
    * - and where a cache hit is indistinguishable from a fix that did nothing.
    */
   useCache?: boolean;
+  /** Per-layer draw decisions, overriding the loader's rules. */
+  overrides?: LayerOverrides;
 }
 
 export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOptions): Promise<SceneStill> {
@@ -78,6 +80,7 @@ export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOpt
     bytes: pkgBytes,
     maxWidth: options.maxWidth ?? 2560,
     quality: options.quality ?? 0.92,
+    overrides: options.overrides,
   };
   // The buffer is transferred, so the caller's copy is gone afterwards.
   worker.postMessage(request, [pkgBytes]);

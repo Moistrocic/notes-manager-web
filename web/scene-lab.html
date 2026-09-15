@@ -52,6 +52,21 @@
         background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); border-radius: 8px;
         font: 11.5px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
       }
+      .layers { margin-top: 10px; }
+      .layers h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+      .layers .hint { margin: 0 0 8px; font-size: 11px; color: var(--faint); line-height: 1.5; }
+      .layer {
+        display: flex; align-items: flex-start; gap: 8px;
+        padding: 5px 7px; border-radius: 8px; border: 1px solid transparent;
+      }
+      .layer:hover { border-color: var(--line); background: rgba(255, 255, 255, 0.03); }
+      .layer input { margin-top: 3px; flex: none; accent-color: var(--accent); }
+      .layer .meta { min-width: 0; flex: 1; }
+      .layer .name { font-size: 12px; }
+      .layer .why { font-size: 10.5px; color: var(--faint); }
+      .layer.on .name { color: var(--ok); }
+      .layer.off .name { color: var(--muted); }
+      .layer.manual .why { color: var(--accent); }
       .ok { color: var(--ok); }
       .bad { color: var(--bad); }
       .muted { color: var(--muted); }
@@ -85,6 +100,7 @@
         </div>
         <div class="stage"><img id="still-img" alt="" /></div>
         <pre id="still-log">等待操作…</pre>
+        <div id="layer-list" class="layers"></div>
       </section>
 
       <section class="pane">

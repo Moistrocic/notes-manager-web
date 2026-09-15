@@ -1,5 +1,11 @@
 /** Messages between the page and the scene worker. */
 
+/**
+ * Per-layer draw decisions, by index, overriding the loader's own rules.
+ * Absent means "decide for yourself".
+ */
+export type LayerOverrides = Record<number, boolean>;
+
 export interface StillRequest {
   kind: 'still';
   id: number;
@@ -8,6 +14,7 @@ export interface StillRequest {
   /** Cap on the rendered width; the frame is scaled down to fit. */
   maxWidth: number;
   quality: number;
+  overrides?: LayerOverrides;
 }
 
 export interface PlayRequest {
@@ -20,6 +27,7 @@ export interface PlayRequest {
   maxWidth: number;
   /** Upper bound on frames per second; a wallpaper does not need more. */
   fps: number;
+  overrides?: LayerOverrides;
 }
 
 export interface StopRequest {

@@ -14,6 +14,7 @@ import { getEntry } from '../we-scene/src/pkg/container.js';
 import { decodeMip0, decodeMips, FIF, parseTex } from '../we-scene/src/pkg/texture.js';
 import { generateNoiseTexture } from '../we-scene/src/render/noise.js';
 import { resolveMaterial } from '../we-scene/src/scene/parse.js';
+import type { LayerOverrides } from './protocol';
 import type { Pkg, Scene, Texture } from './we-types';
 
 const WHITE: Texture = { width: 1, height: 1, rgba: new Uint8Array([255, 255, 255, 255]) };
@@ -133,7 +134,21 @@ function averageColour(texture: Texture): string | null {
   return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
-export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAssets> {
+/**
+ * A per-layer decision that overrides the loader's own.
+ *
+ * The rules here can only ever be a guess about what Wallpaper Engine would
+ * have drawn, and a wrong guess looks like a rendering bug. This lets a person
+ * say what they want instead: index -> draw it or not. Absent means "decide for
+ * yourself", which is what the application uses.
+ */
+export type { LayerOverrides };
+
+export async function loadSceneAssets(
+  pkg: Pkg,
+  scene: Scene,
+  overrides: LayerOverrides = {},
+): Promise<LoadedAssets> {
   const textures = new Map<string, Texture>();
   textures.set('util/white', WHITE);
   textures.set('util/noflow', NOFLOW);
@@ -194,26 +209,38 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
   };
 
   for (const [index, layer] of scene.layers.entries()) {
-    /** Records the decision, so the bench can say what happened to every layer. */
-    const hide = (reason: string) => {
+    /**
+     * Records the decision and reports whether the layer is now out of play.
+     *
+     * An explicit choice wins over every rule, but it only decides visibility -
+     * it never skips loading. A layer forced on still goes through texture
+     * resolution, because the alternative is drawing the white fallback for a
+     * layer whose real picture was available all along.
+     */
+    const forced = overrides[index];
+    const hide = (reason: string): boolean => {
+      if (forced === true) return false;
       layer.visible = false;
       hidden.push({ index, name: String(layer.name ?? ''), reason });
+      return true;
     };
+    if (forced === false) {
+      hide('手动关闭');
+      continue;
+    }
 
     const raw = rawLayers[index] ?? {};
-    if (classify(raw) !== null) {
+    if (classify(raw) !== null && hide('可见性或透明度由 WE 脚本在运行时决定，无法计算')) {
       // The music card is the clearest case: its alpha comes from
       // shared.sAIS_opacity, which is 0 when nothing is playing, so the card is
       // meant to be invisible. Scripts cannot run here, so the placeholder
       // value of 1 would draw the whole plate - which is the white box.
-      hide('可见性或透明度由 WE 脚本在运行时决定，无法计算');
       continue;
     }
-    if (raw.visible === false) {
-      hide('场景里本来就是关闭的');
+    if (raw.visible === false && hide('场景里本来就是关闭的')) {
       continue;
     }
-    if (layer.solid) {
+    if (layer.solid && hide('solid 图层（WE 组件或纯色填充）')) {
       // Solid layers are Wallpaper Engine's own widgets - the clock, the audio
       // info card, album art, buttons - or plain colour fills. The rasteriser
       // paints every one of them 1x1 white, which shows up as white rectangles
@@ -221,7 +248,6 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
       // components are on we-scene's unsupported list, so they are hidden.
       // In Wallpaper Engine an empty layer is transparent; the rasteriser
       // paints it white instead, and that is the whole of the box problem.
-      hide('solid 图层（WE 组件或纯色填充）');
       continue;
     }
     if (!layer.image) {
@@ -245,25 +271,28 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
       const material = resolveMaterial(model);
       if (!material) {
         // No material means no texture means no picture.
-        hide('模型没有可解析的材质');
-        continue;
+        if (hide('模型没有可解析的材质')) continue;
       }
+      // Forced on, but there is still nothing to load; leave it to draw as
+      // it would have, which for a model with no material means the fallback.
+      if (!material) continue;
 
       const materialEntry = getEntry(pkg, material.materialPath);
       if (!materialEntry) {
         skipped.push(layer.name + ': material ' + material.materialPath + ' missing');
-        hide('材质文件缺失：' + material.materialPath);
-        continue;
+        if (hide('材质文件缺失：' + material.materialPath)) continue;
+      }
+      if (!materialEntry) continue;
+      {
       }
       const parsed = JSON.parse(utf8.decode(materialEntry).replace(/^\uFEFF/, '')) as {
         passes?: { textures?: string[] }[];
       };
       const texName = parsed.passes?.[0]?.textures?.[0];
       const tex = texName ? await load(texName) : null;
-      if (tex && isUniform(tex)) {
+      if (tex && isUniform(tex) && hide('纹理是单一颜色（WE 运行时染色的填充层）')) {
         // A flat fill standing in for something Wallpaper Engine would have
         // coloured at run time. Drawing it puts an opaque block on the picture.
-        hide('纹理是单一颜色（WE 运行时染色的填充层）');
         continue;
       }
       if (texName && tex) {
@@ -273,8 +302,7 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
         // The rasteriser falls back to a 1x1 white texture for a layer with no
         // texture, which paints a solid white rectangle. In Wallpaper Engine an
         // empty layer is transparent, so hide it instead of drawing a box.
-        hide(texName ? '纹理解码失败：' + texName : '材质没有指定纹理');
-        continue;
+        if (hide(texName ? '纹理解码失败：' + texName : '材质没有指定纹理')) continue;
       }
 
       // Textures the effects need: shake flow maps, water masks, pulse noise.
