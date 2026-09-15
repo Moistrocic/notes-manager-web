@@ -28,6 +28,14 @@ export default defineConfig({
       },
     },
   },
+  // The scene worker pulls the WebGL renderer and the HLSL translator in
+  // through a dynamic import, so only people who turn dynamic scenes on pay for
+  // them. That makes the worker a code-splitting build, which the default
+  // "iife" worker format cannot express - hence module workers. Every browser
+  // this app supports has them.
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: 'dist',
     sourcemap: false,

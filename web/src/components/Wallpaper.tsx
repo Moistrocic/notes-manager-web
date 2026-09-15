@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { canPlayScenes, playScene, type ScenePlayer } from '../lib/scene/play-scene';
 import { useAppStore } from '../store/useAppStore';
 
 /**
@@ -11,6 +12,8 @@ export function Wallpaper() {
   const wallpaper = useAppStore((s) => s.wallpaper);
   const url = useAppStore((s) => s.wallpaperUrl);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const playerRef = useRef<ScenePlayer | null>(null);
   const [failed, setFailed] = useState(false);
   const [viewport, setViewport] = useState(() => ({
     w: typeof window === 'undefined' ? 1280 : window.innerWidth,
@@ -39,6 +42,51 @@ export function Wallpaper() {
     }
   }, [url, wallpaper.kind]);
 
+  // A live scene: the canvas is handed to the worker, which owns it from then
+  // on - parsing, decoding textures, translating shaders and drawing all happen
+  // off the main thread, which is what keeps the page smooth behind it.
+  useEffect(() => {
+    if (wallpaper.kind !== 'scene' || !url) return undefined;
+    const canvas = canvasRef.current;
+    if (!canvas || !canPlayScenes()) return undefined;
+
+    let cancelled = false;
+    let player: ScenePlayer | null = null;
+    void (async () => {
+      try {
+        const bytes = await (await fetch(url)).arrayBuffer();
+        if (cancelled) return;
+        player = await playScene(canvas, bytes, { maxWidth: 1920, fps: 30 });
+        if (cancelled) {
+          player.stop();
+          return;
+        }
+        playerRef.current = player;
+        if (document.hidden) player.pause();
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      playerRef.current = null;
+      player?.stop();
+    };
+  }, [wallpaper.kind, url]);
+
+  // Nothing should animate in a tab nobody is looking at.
+  useEffect(() => {
+    const onVisibility = () => {
+      const player = playerRef.current;
+      if (!player) return;
+      if (document.hidden) player.pause();
+      else player.resume();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, []);
+
   if (wallpaper.kind === 'none' || !url || failed) return null;
 
   // A blur samples past the element's edges, so the outer band fades to
@@ -59,7 +107,9 @@ export function Wallpaper() {
 
   return (
     <div className="wallpaper-layer" aria-hidden>
-      {wallpaper.kind === 'video' ? (
+      {wallpaper.kind === 'scene' ? (
+        <canvas ref={canvasRef} className="wallpaper-media" style={mediaStyle} />
+      ) : wallpaper.kind === 'video' ? (
         <video
           ref={videoRef}
           key={url}

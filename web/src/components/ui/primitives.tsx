@@ -104,18 +104,27 @@ export function Switch({
   checked,
   onChange,
   label,
+  disabled,
+  className,
 }: {
   checked: boolean;
   onChange: (value: boolean) => void;
   label?: string;
+  disabled?: boolean;
+  className?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="focus-ring group inline-flex items-center gap-2.5 rounded-xl py-1 text-sm text-[var(--text)]"
+      className={cn(
+        'focus-ring group inline-flex items-center gap-2.5 rounded-xl py-1 text-sm text-[var(--text)]',
+        disabled && 'cursor-not-allowed opacity-50',
+        className,
+      )}
     >
       <span
         className={cn(

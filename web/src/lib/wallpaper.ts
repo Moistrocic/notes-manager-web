@@ -6,7 +6,11 @@
  * learns about either, which is also why this works for every account.
  */
 
-export type WallpaperKind = 'none' | 'image' | 'video';
+/**
+ * "scene" is a Wallpaper Engine scene.pkg kept as-is and rendered live, rather
+ * than a picture: the file stored is the container, not an image.
+ */
+export type WallpaperKind = 'none' | 'image' | 'video' | 'scene';
 /** Where the current wallpaper came from. "library" means a local folder. */
 export type WallpaperSource = 'url' | 'file' | 'library';
 
@@ -28,6 +32,12 @@ export interface WallpaperSettings {
    */
   focusX: number;
   focusY: number;
+  /**
+   * Render scene wallpapers live instead of compositing one frame. Off by
+   * default: the still costs nothing to keep on screen, a live scene holds a
+   * GPU context and draws continuously.
+   */
+  dynamicScene: boolean;
 }
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
@@ -39,6 +49,7 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   scale: 1,
   focusX: 50,
   focusY: 50,
+  dynamicScene: false,
 };
 
 /** The nine positions most people pick from, top-left to bottom-right. */
@@ -74,6 +85,7 @@ export function loadWallpaperSettings(): WallpaperSettings {
       // centred is the right default for those.
       focusX: clamp(Number(parsed.focusX ?? 50), 0, 100),
       focusY: clamp(Number(parsed.focusY ?? 50), 0, 100),
+      dynamicScene: parsed.dynamicScene === true,
     };
   } catch {
     return { ...DEFAULT_WALLPAPER };
@@ -192,6 +204,7 @@ export const WALLPAPER_VIDEO_EXTENSIONS = ['mp4', 'webm', 'm4v', 'mov', 'ogv'];
 
 /** image, video, or null when the file is not something a browser can show. */
 export function wallpaperKindOf(name: string): 'image' | 'video' | null {
+  if (name.toLowerCase().endsWith('.pkg')) return null;
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   if (WALLPAPER_IMAGE_EXTENSIONS.includes(ext)) return 'image';
   if (WALLPAPER_VIDEO_EXTENSIONS.includes(ext)) return 'video';

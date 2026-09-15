@@ -18,10 +18,11 @@ import {
   type WallpaperEntry,
   type WallpaperLibrary,
 } from '../lib/local-wallpapers';
+import { canPlayScenes } from '../lib/scene/play-scene';
 import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
 import { acceptFor, FOCUS_PRESETS, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
-import { Button, Field, Input, Modal } from './ui/primitives';
+import { Button, Field, Input, Modal, Switch } from './ui/primitives';
 
 const KINDS: { value: WallpaperKind; label: string; icon: typeof ImageIcon; hint: string }[] = [
   { value: 'none', label: '无', icon: X, hint: '使用主题自带的极光背景' },
@@ -124,8 +125,16 @@ export function AppearanceDialog() {
   const useFromLibrary = async (entry: WallpaperEntry) => {
     setApplying(entry.path);
     try {
+      const isLive = Boolean(entry.scene) && wallpaper.dynamicScene && canPlayScenes();
       const file = (await renderSceneEntry(entry)) ?? (await readEntry(entry));
-      await setWallpaperFile(file, 'library');
+      await setWallpaperFile(file, 'library', isLive ? 'scene' : undefined);
+      if (isLive) {
+        pushToast({
+          title: '动态场景已启用',
+          message: '实时渲染，比较耗电；在下面关掉开关并重新选择即可换回静态背景图',
+          tone: 'info',
+        });
+      }
       if (entry.still && !entry.scene) {
         pushToast({ title: '已使用静态预览图', message: entry.note ?? '这个壁纸无法在浏览器中播放', tone: 'info' });
       }
@@ -147,6 +156,19 @@ export function AppearanceDialog() {
    */
   const renderSceneEntry = async (entry: WallpaperEntry): Promise<File | null> => {
     if (!entry.scene || !canRenderScenes()) return null;
+
+    // Live scene: keep the container itself and let the worker animate it.
+    if (wallpaper.dynamicScene && canPlayScenes()) {
+      setBusyNote('正在载入动态场景…');
+      try {
+        const pkg = await readLibraryFile(entry.scene);
+        return new File([await pkg.arrayBuffer()], entry.scene.split('/').pop() ?? 'scene.pkg');
+      } catch (err) {
+        pushToast({ title: '动态场景载入失败', message: (err as Error).message, tone: 'error' });
+        return null;
+      }
+    }
+
     setBusyNote('正在合成场景背景图…（首次较慢，之后会缓存）');
     try {
       const pkg = await readLibraryFile(entry.scene);
@@ -360,6 +382,25 @@ export function AppearanceDialog() {
                   />
                 </label>
               ))}
+            </section>
+
+            {/* Scenes can either be composited once or run live. The still is the
+                default because it costs nothing to keep on screen. */}
+            <section className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] p-2.5">
+              <div className="min-w-0">
+                <div className="text-[12px] text-[var(--muted)]">动态场景壁纸</div>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                  {canPlayScenes()
+                    ? '开启后场景壁纸实时渲染（有动画，较耗电）；关闭则合成一张静态背景图。切换后重新点一次壁纸生效。'
+                    : '当前浏览器不支持（需要 WebGL2 与 OffscreenCanvas），场景壁纸会合成静态背景图。'}
+                </p>
+              </div>
+              <Switch
+                checked={wallpaper.dynamicScene}
+                disabled={!canPlayScenes()}
+                onChange={(value) => setWallpaper({ dynamicScene: value })}
+                className="mt-0.5 shrink-0"
+              />
             </section>
 
             {/* Where the picture sits inside the frame. object-fit: cover always

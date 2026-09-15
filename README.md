@@ -60,8 +60,9 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
 - 壁纸：图片链接 / 本地图片或视频 / 本地壁纸库三种来源，可调模糊、暗度、缩放
   - 壁纸库会从你授权的目录里自动定位 Wallpaper Engine 的壁纸总文件夹，
     按每个壁纸一格展示预览图
-  - 场景壁纸（`scene.pkg`）浏览器无法播放，会改用它的 `preview.jpg` /
-    `preview.gif` 作静态背景（GIF 会动），并在格子上标注「静态」
+  - 场景壁纸（`scene.pkg`）默认**合成一张完整背景图**：它旁边的 `preview.jpg` 只是方形
+    缩略图，真正的宽幅画面在容器里，由各图层合成得到（在后台线程完成，结果会缓存）
+  - 也可以打开「动态场景壁纸」，让场景在浏览器里**实时渲染**（有动画，较耗电）
 - 壁纸只存在浏览器本地，不上传服务器
 
 **与 OpenList 的联动**

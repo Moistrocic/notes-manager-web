@@ -473,7 +473,7 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
         dim: 0.35,
         scale,
         focusX: 50,
-        focusY: 50,
+        focusY: 50, dynamicScene: false,
       },
       wallpaperUrl: 'https://cdn.example.com/a.png',
     });
@@ -504,7 +504,7 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
       dim: 0.35,
       scale: 1,
       focusX: 50,
-      focusY: 50,
+      focusY: 50, dynamicScene: false,
     },
   });
   check('a centred wallpaper says so', /object-position:\s*50% 50%/.test(await render(React.createElement(Wallpaper))), true);
@@ -518,6 +518,7 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
       scale: 1,
       focusX: 0,
       focusY: 100,
+      dynamicScene: false,
     },
   });
   const framed = await render(React.createElement(Wallpaper));
@@ -663,11 +664,22 @@ console.log('\nappearance dialog (jsdom)');
   closeLibrary();
   appStore.setState({
     appearanceOpen: true,
-    wallpaper: { kind: 'image', source: 'library', url: '', blur: 0, dim: 0.35, scale: 1, focusX: 50, focusY: 50 },
+    wallpaper: {
+      kind: 'image',
+      source: 'library',
+      url: '',
+      blur: 0,
+      dim: 0.35,
+      scale: 1,
+      focusX: 50,
+      focusY: 50,
+      dynamicScene: false,
+    },
     wallpaperUrl: null,
   });
   let markup = await renderDialog();
   check('the library source renders', markup.includes('检测壁纸文件夹'), true);
+  check('and offers the dynamic scene toggle', markup.includes('动态场景壁纸'), true);
   check('and explains that a path cannot be read directly', markup.includes('steamapps'), true);
   check('and offers the standard Steam locations', markup.includes('431960'), true);
 
@@ -693,6 +705,45 @@ console.log('\nappearance dialog (jsdom)');
   appStore.setState(hold);
   closeLibrary();
   void entry;
+}
+
+/* --- a live scene wallpaper draws into a canvas ---------------------------- */
+const { canPlayScenes } = await import('./src/lib/scene/play-scene');
+const { DEFAULT_WALLPAPER } = await import('./src/lib/wallpaper');
+
+console.log('\nlive scene wallpaper (jsdom)');
+{
+  const renderWallpaper = async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(React.createElement(Wallpaper));
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const hold = appStore.getState();
+
+  // Still by default: a live scene holds a GPU context and draws forever.
+  check('dynamic scenes are off by default', DEFAULT_WALLPAPER.dynamicScene, false);
+  check('and the browser check is honest here', canPlayScenes(), false);
+
+  appStore.setState({
+    wallpaper: { ...DEFAULT_WALLPAPER, kind: 'scene', source: 'library', dynamicScene: true },
+    wallpaperUrl: 'blob:scene',
+  });
+  const markup = await renderWallpaper();
+  check('a live scene uses a canvas, not an image', markup.includes('<canvas'), true);
+  check('and not an img', markup.includes('<img'), false);
+
+  appStore.setState(hold);
 }
 
 /* --- the running version is visible in the page ---------------------------- */

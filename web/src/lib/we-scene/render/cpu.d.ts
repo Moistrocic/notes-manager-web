@@ -8,6 +8,8 @@ export interface Texture {
   rg88?: boolean;
   video?: boolean;
   mips?: { width: number; height: number; rgba: Uint8Array }[];
+  /** Set by the live renderer once the pixels are on the GPU. */
+  glTex?: WebGLTexture;
 }
 
 /** Composes one frame at `time` seconds into a bottom-up RGBA buffer. */
