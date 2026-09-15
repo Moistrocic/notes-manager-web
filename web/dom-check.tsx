@@ -1003,6 +1003,57 @@ console.log('\nnote list (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- a tooltip wrapper does not fight the placement it is given ------------ */
+const { Tooltip } = await import('./src/components/ui/primitives');
+
+console.log('\ntooltip placement (jsdom)');
+{
+  const renderTip = async (node: React.ReactElement) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(node);
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const wrapperClass = (html: string) => (html.match(/^<span class="([^"]*)"/) ?? [])[1] ?? '';
+
+  const plain = await renderTip(
+    React.createElement(Tooltip, { label: '提示', children: React.createElement('button', null, 'x') }),
+  );
+  check('a tooltip anchors itself when nothing else does', /\brelative\b/.test(wrapperClass(plain)), true);
+
+  // cn() is clsx, which does not merge: emitting both would let Tailwind's
+  // later "relative" win and drop the wrapper back into the flow.
+  const placed = await renderTip(
+    React.createElement(Tooltip, {
+      label: '提示',
+      className: 'absolute right-9 top-1/2 -translate-y-1/2',
+      children: React.createElement('button', null, 'x'),
+    }),
+  );
+  const cls = wrapperClass(placed);
+  check('a placed tooltip keeps the placement it was given', /\babsolute\b/.test(cls), true);
+  check('and does not also claim to be relative', /\brelative\b/.test(cls), false);
+
+  // The control the fix was for, and the general rule behind it.
+  const { NotesPanel: Panel } = await import('./src/components/NoteList');
+  const panel = await renderTip(React.createElement(Panel));
+  check('the search-scope control carries its placement', panel.includes('absolute right-9'), true);
+  // Nothing anywhere may hold two position classes: whichever Tailwind emits
+  // last wins, and that is not the one the author asked for.
+  const doubled = panel.match(/class="[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*"/g) ?? [];
+  check('and no element carries two position classes at once', doubled, []);
+}
+
 /* --- asking for a name before making a folder ------------------------------ */
 console.log('\nfolder prompts (jsdom)');
 {

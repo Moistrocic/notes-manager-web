@@ -295,6 +295,9 @@ export function Badge({
  * clipped by that panel (and by the bottom of the window). Rows that sit
  * against such an edge ask for "top" instead.
  */
+/** Any class that takes an element out of the normal flow. */
+const POSITION_CLASS = /\b(?:static|fixed|absolute|relative|sticky)\b/;
+
 /**
  * A label that appears on hover.
  *
@@ -317,6 +320,12 @@ export function Tooltip({
    * Goes on the wrapper. The wrapper is a positioned element, so a child that
    * wants to be absolutely placed has to say so here instead - otherwise its
    * offsets resolve against this span rather than the box it meant.
+   *
+   * Supplying a position class replaces the default rather than joining it:
+   * cn() is clsx and does not merge, so "relative" and "absolute" would both be
+   * emitted and the one later in Tailwind's output would win - which is
+   * "relative", putting the wrapper back in the flow and pushing its siblings
+   * out of place.
    */
   className?: string;
 }) {
@@ -344,7 +353,7 @@ export function Tooltip({
   return (
     <span
       ref={anchor}
-      className={cn('relative inline-flex', className)}
+      className={cn(POSITION_CLASS.test(className ?? '') ? 'inline-flex' : 'relative inline-flex', className)}
       onPointerEnter={show}
       onPointerLeave={() => setAt(null)}
       onPointerDown={() => setAt(null)}
