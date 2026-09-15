@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>场景壁纸测试台</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0f1c;
+        --panel: #131a2c;
+        --line: rgba(255, 255, 255, 0.12);
+        --text: #e9edff;
+        --muted: #97a3c4;
+        --accent: #8b6cff;
+        --ok: #34d399;
+        --bad: #f87171;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 20px 24px 40px;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.6 ui-sans-serif, system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+      h1 { margin: 0 0 4px; font-size: 17px; }
+      h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; }
+      .lede { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+      .bar {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+        padding: 12px 14px; margin-bottom: 16px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+      }
+      button {
+        font: inherit; color: var(--text); cursor: pointer;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+      .panes { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+      .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+      .stage {
+        position: relative; width: 100%; aspect-ratio: 16 / 9; margin-bottom: 10px;
+        background: #05070f; border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+      }
+      .stage img, .stage canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+      pre {
+        margin: 0; padding: 10px; max-height: 260px; overflow: auto;
+        background: rgba(0, 0, 0, 0.35); border: 1px solid var(--line); border-radius: 8px;
+        font: 11.5px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+      }
+      .ok { color: var(--ok); }
+      .bad { color: var(--bad); }
+      .muted { color: var(--muted); }
+      kbd {
+        padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px;
+        font: 11px ui-monospace, monospace; color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>场景壁纸测试台</h1>
+    <p class="lede">
+      走应用里同一套模块（<code>render-still</code> / <code>play-scene</code> 与同一个 worker），
+      所以这里看到的行为就是应用里的行为。把 <code>scene.pkg</code> 拖进来，或放到
+      <code>web/public/scene.pkg</code> 后刷新自动载入。
+    </p>
+
+    <div class="bar">
+      <input id="file" type="file" accept=".pkg" />
+      <span id="source" class="muted">尚未选择文件</span>
+      <button id="reload" title="重新读取 web/public/scene.pkg">重新载入 scene.pkg</button>
+    </div>
+
+    <div class="panes">
+      <section class="pane">
+        <h2>静态壁纸（CPU 合成一张）</h2>
+        <div class="bar" style="margin-bottom: 10px">
+          <button id="still" class="primary" disabled>合成静态图</button>
+          <span id="still-note" class="muted"></span>
+        </div>
+        <div class="stage"><img id="still-img" alt="" /></div>
+        <pre id="still-log">等待操作…</pre>
+      </section>
+
+      <section class="pane">
+        <h2>动态壁纸（WebGL 实时渲染）</h2>
+        <div class="bar" style="margin-bottom: 10px">
+          <button id="play" class="primary" disabled>开始渲染</button>
+          <button id="stop" disabled>停止</button>
+          <span id="play-note" class="muted"></span>
+        </div>
+        <div class="stage" id="play-stage"><canvas id="play-canvas"></canvas></div>
+        <pre id="play-log">等待操作…</pre>
+      </section>
+    </div>
+
+    <script type="module" src="/src/scene-lab/main.ts"></script>
+  </body>
+</html>

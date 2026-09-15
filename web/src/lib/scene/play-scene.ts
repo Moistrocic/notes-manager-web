@@ -93,9 +93,15 @@ export async function playScene(
   send(request, [offscreen, pkgBytes]);
 
   const response = await first;
-  stopWatching();
-  if (!response.ok) throw new Error(response.error ?? '场景渲染失败');
+  if (!response.ok) {
+    stopWatching();
+    throw new Error(response.error ?? '场景渲染失败');
+  }
 
+  // The listener stays. It is what keeps the frame count current and what turns
+  // a failure in the tenth second into something the caller can report - the
+  // reason this was written at all. Removing it here left status() frozen at
+  // whatever the handshake said and made a working renderer look dead.
   return {
     info: {
       width: response.width ?? 0,
@@ -104,7 +110,10 @@ export async function playScene(
       skipped: response.skipped ?? 0,
     },
     status: () => ({ frames, error }),
-    stop: () => send({ kind: 'stop', id }),
+    stop: () => {
+      stopWatching();
+      send({ kind: 'stop', id });
+    },
     pause: () => send({ kind: 'pause', id }),
     resume: () => send({ kind: 'resume', id }),
   };

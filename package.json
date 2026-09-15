@@ -18,6 +18,7 @@
     "build:server": "npm run build --workspace server",
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
+    "scene-lab": "node scripts/scene-lab.mjs",
     "start": "node server/dist/index.js",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
     "check:web": "npm run check:web --workspace web",
