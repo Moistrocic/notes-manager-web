@@ -162,12 +162,57 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
     }
   };
 
+  /**
+   * The raw layer definitions, read straight from scene.json.
+   *
+   * The parsed scene keeps the values but not the form they were written in,
+   * and the form is the whole point: a property can be a plain number or an
+   * object carrying a Wallpaper Engine script. Only the second kind is
+   * unknowable here.
+   */
+  const rawLayers: Record<string, unknown>[] = await (async () => {
+    try {
+      const entry = getEntry(pkg, 'scene.json');
+      if (!entry) return [];
+      const parsed: unknown = JSON.parse(utf8.decode(entry).replace(/^\uFEFF/, ''));
+      const objects = (parsed as { objects?: unknown }).objects;
+      return Array.isArray(objects) ? (objects as Record<string, unknown>[]) : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  /** True when Wallpaper Engine would have computed this property at run time. */
+  const scripted = (value: unknown): boolean =>
+    Boolean(value) && typeof value === 'object' && 'script' in (value as Record<string, unknown>);
+
+  /** Why the raw definition cannot be drawn as written, if it cannot. */
+  const classify = (raw: Record<string, unknown>): 'scripted-visible' | 'scripted-alpha' | null => {
+    if (scripted(raw.visible)) return 'scripted-visible';
+    if (scripted(raw.alpha)) return 'scripted-alpha';
+    return null;
+  };
+
   for (const [index, layer] of scene.layers.entries()) {
     /** Records the decision, so the bench can say what happened to every layer. */
     const hide = (reason: string) => {
       layer.visible = false;
       hidden.push({ index, name: String(layer.name ?? ''), reason });
     };
+
+    const raw = rawLayers[index] ?? {};
+    if (classify(raw) !== null) {
+      // The music card is the clearest case: its alpha comes from
+      // shared.sAIS_opacity, which is 0 when nothing is playing, so the card is
+      // meant to be invisible. Scripts cannot run here, so the placeholder
+      // value of 1 would draw the whole plate - which is the white box.
+      hide('可见性或透明度由 WE 脚本在运行时决定，无法计算');
+      continue;
+    }
+    if (raw.visible === false) {
+      hide('场景里本来就是关闭的');
+      continue;
+    }
     if (layer.solid) {
       // Solid layers are Wallpaper Engine's own widgets - the clock, the audio
       // info card, album art, buttons - or plain colour fills. The rasteriser

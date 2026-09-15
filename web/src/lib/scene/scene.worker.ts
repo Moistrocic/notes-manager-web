@@ -2,13 +2,18 @@
 /**
  * Composes Wallpaper Engine scenes, off the main thread.
  *
- * Two modes, one parser:
+ * Two modes, one renderer:
  *
- *  - "still": rasterise a single frame on the CPU and hand back a JPEG. This is
- *    the default, because it costs nothing to keep on screen.
- *  - "play": run the scene live through WebGL on an OffscreenCanvas the page
- *    transferred. Costlier, so the page only asks for it when the user turned
- *    dynamic scenes on.
+ *  - "still": draw through WebGL into a canvas the worker owns, then hand the
+ *    frame back as a JPEG. This is the default, because it costs nothing to
+ *    keep on screen.
+ *  - "play": keep drawing, on an OffscreenCanvas the page transferred. Costlier,
+ *    so the page only asks for it when the user turned dynamic scenes on.
+ *
+ * The still used to be rasterised on the CPU by a second implementation, and
+ * the two disagreed: different textures resolved, different layers hidden,
+ * different white boxes. Whatever the live renderer produces is by definition
+ * what the live wallpaper shows, so the still is now its first frame.
  *
  * Both are here because both have to parse a container that can be 45 MB and
  * decode hundreds of textures; doing either on the main thread would freeze the
@@ -16,7 +21,6 @@
  */
 
 import { getEntry, parsePkg } from '../we-scene/src/pkg/container.js';
-import { renderScene } from '../we-scene/src/render/cpu.js';
 import { parseScene } from '../we-scene/src/scene/parse.js';
 import { loadSceneAssets } from './load-browser';
 import type { PlayRequest, SceneRequest, SceneResponse, StillRequest } from './protocol';
@@ -59,25 +63,54 @@ async function openScene(pkg: Pkg): Promise<{
   };
 }
 
+/**
+ * Opens a container and gets a renderer ready on the given canvas.
+ *
+ * Shared by both modes so they cannot drift apart again, which is exactly what
+ * went wrong when the still had a rasteriser of its own.
+ */
+async function openRenderer(pkg: Pkg, canvas: OffscreenCanvas, maxWidth: number) {
+  const opened = await openScene(pkg);
+  const scale = Math.min(1, maxWidth / opened.width);
+  const width = Math.max(1, Math.round(opened.width * scale));
+  const height = Math.max(1, Math.round(opened.height * scale));
+  canvas.width = width;
+  canvas.height = height;
+
+  // Loaded on demand: this is the only thing that pulls in the WebGL renderer
+  // and the HLSL translator, so nobody pays for them unless they ask.
+  const { createRenderer, makeTexture } = await import('../we-scene/src/render/renderer.js');
+  const renderer = createRenderer(canvas, {
+    shaderResolver: async (relative: string) => {
+      const entry = getEntry(pkg, relative);
+      return entry ? new TextDecoder().decode(entry) : '';
+    },
+  });
+
+  // The renderer samples texture objects that already carry a GL texture.
+  for (const texture of opened.textures.values()) {
+    if (texture.video || !texture.rgba) continue;
+    texture.glTex = makeTexture(renderer.gl, texture.rgba, texture.width, texture.height);
+  }
+
+  return { ...opened, renderer, width, height };
+}
+
 async function renderStill(request: StillRequest): Promise<void> {
   const { id, bytes, maxWidth, quality } = request;
   try {
     const pkg = parsePkg(new Uint8Array(bytes));
-    const { scene, textures, resolved, skipped, width: fullWidth, height: fullHeight } = await openScene(pkg);
+    const canvas = new OffscreenCanvas(1, 1);
+    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth);
 
-    const scale = Math.min(1, maxWidth / fullWidth);
-    const width = Math.max(1, Math.round(fullWidth * scale));
-    const height = Math.max(1, Math.round(fullHeight * scale));
+    // Two frames rather than one: the first can land before an effect has
+    // anything to sample, and the second costs nothing.
+    await renderer.render(scene, textures, width, height, 0);
+    await renderer.render(scene, textures, width, height, 1 / 30);
 
-    const frame = renderScene(scene, textures, width, height, 0);
-
-    const canvas = new OffscreenCanvas(width, height);
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('no 2d context');
-    ctx.putImageData(new ImageData(new Uint8ClampedArray(frame.rgba), width, height), 0, 0);
     const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
-
-    post({ kind: 'still', id, ok: true, blob, width, height, drawn: frame.drawn, resolved, skipped });
+    const drawn = scene.layers.filter((layer) => layer.visible).length;
+    post({ kind: 'still', id, ok: true, blob, width, height, drawn, resolved, skipped });
   } catch (err) {
     post({ kind: 'still', id, ok: false, error: (err as Error).message || String(err) });
   }
@@ -93,32 +126,8 @@ async function playScene(request: PlayRequest): Promise<void> {
 
   try {
     const pkg = parsePkg(new Uint8Array(bytes));
-    const { scene, textures, resolved, skipped, width: fullWidth, height: fullHeight } = await openScene(pkg);
+    const { renderer, scene, textures, resolved, skipped, width, height } = await openRenderer(pkg, canvas, maxWidth);
     if (loop.stop) return;
-
-    const scale = Math.min(1, maxWidth / fullWidth);
-    const width = Math.max(1, Math.round(fullWidth * scale));
-    const height = Math.max(1, Math.round(fullHeight * scale));
-    canvas.width = width;
-    canvas.height = height;
-
-    // Loaded on demand: this is the only thing that pulls in the WebGL renderer
-    // and the HLSL translator, so nobody pays for them unless they ask.
-    const { createRenderer, makeTexture } = await import('../we-scene/src/render/renderer.js');
-    if (loop.stop) return;
-
-    const renderer = createRenderer(canvas, {
-      shaderResolver: async (relative: string) => {
-        const entry = getEntry(pkg, relative);
-        return entry ? new TextDecoder().decode(entry) : '';
-      },
-    });
-
-    // The renderer samples texture objects that already carry a GL texture.
-    for (const texture of textures.values()) {
-      if (texture.video || !texture.rgba) continue;
-      texture.glTex = makeTexture(renderer.gl, texture.rgba, texture.width, texture.height);
-    }
 
     const frameBudget = 1000 / Math.max(1, Math.min(60, fps));
     const started = performance.now();

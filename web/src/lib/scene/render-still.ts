@@ -1,5 +1,10 @@
 /**
- * Composites a scene wallpaper into a still and remembers it.
+ * Gets one frame of a scene wallpaper and remembers it.
+ *
+ * The frame comes from the same WebGL renderer the live wallpaper uses - see
+ * scene.worker.ts. It used to come from a second, CPU rasteriser, and the two
+ * disagreed about which textures resolved and which layers to hide, so a scene
+ * could look one way as a still and another way once it was animated.
  *
  * This is the default: one frame, cached, no ongoing cost. The live version
  * lives in play-scene.ts.
