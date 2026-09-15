@@ -24,7 +24,11 @@ export default function App() {
   const boot = useAppStore((s) => s.boot);
   const wallpaper = useAppStore((s) => s.wallpaper);
   const accent = useAppStore((s) => s.accent);
-  const wallpaperActive = wallpaper.kind !== 'none' && Boolean(useAppStore((s) => s.wallpaperUrl));
+  // Every hook is called on every render. Reading the url inside the && would
+  // call useAppStore only when a wallpaper is set, so the hook count would
+  // change the moment boot() loads one and React would unmount the whole tree.
+  const wallpaperUrl = useAppStore((s) => s.wallpaperUrl);
+  const wallpaperActive = wallpaper.kind !== 'none' && Boolean(wallpaperUrl);
   useHotkeys();
 
   // One place decides the interface colour: the wallpaper's own when that is

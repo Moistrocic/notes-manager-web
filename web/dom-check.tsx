@@ -35,11 +35,19 @@ define('Node', w.Node);
 define('getComputedStyle', w.getComputedStyle.bind(w));
 define('requestAnimationFrame', (cb: FrameRequestCallback) => w.setTimeout(() => cb(Date.now()), 0));
 define('cancelAnimationFrame', (id: number) => w.clearTimeout(id));
-define('matchMedia', () => ({
+const matchMediaStub = () => ({
   matches: true,
+  media: '',
+  onchange: null,
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
-}));
+  addListener: () => undefined,
+  removeListener: () => undefined,
+  dispatchEvent: () => false,
+});
+define('matchMedia', matchMediaStub);
+// Components call window.matchMedia, which jsdom does not implement.
+(w as unknown as { matchMedia: unknown }).matchMedia = matchMediaStub;
 define('MutationObserver', w.MutationObserver);
 define('ResizeObserver', w.ResizeObserver ?? class { observe() {} unobserve() {} disconnect() {} });
 define('IntersectionObserver', class {
@@ -698,6 +706,50 @@ console.log('\nappearance dialog (jsdom)');
   appStore.setState(hold);
   closeLibrary();
   void entry;
+}
+
+/* --- the whole app survives its own boot ----------------------------------- */
+const { default: App } = await import('./src/App');
+
+console.log('\napp shell (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({ wallpaper: { ...DEFAULT_WALLPAPER }, wallpaperUrl: null });
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const shell = createRoot(host);
+  let failure: unknown = null;
+
+  try {
+    await act(async () => {
+      shell.render(React.createElement(App));
+    });
+
+    // Exactly what boot() does when a wallpaper is stored: the wallpaper goes
+    // from none to image. Any hook called conditionally changes the hook count
+    // here, and React responds by unmounting the entire tree - a blank page
+    // with nothing but the body colour, which is a hard failure to trace back.
+    await act(async () => {
+      appStore.setState({
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'image', source: 'url', url: 'https://example.com/w.png' },
+        wallpaperUrl: 'https://example.com/w.png',
+      });
+    });
+    await flush();
+  } catch (err) {
+    failure = err;
+  }
+
+  if (failure !== null) console.log('        app shell error:', String(failure).slice(0, 400));
+  check('the app survives a wallpaper appearing mid-session', failure === null, true);
+  check('and is still on screen afterwards', host.innerHTML.length > 200, true);
+
+  await act(async () => {
+    shell.unmount();
+  });
+  host.remove();
+  appStore.setState(hold);
 }
 
 /* --- the interface colour taken from the wallpaper ------------------------- */
