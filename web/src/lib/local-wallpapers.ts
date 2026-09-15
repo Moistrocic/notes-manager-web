@@ -102,6 +102,12 @@ export interface WallpaperEntry {
   still?: boolean;
   /** Why it is a still, or why there is nothing to use at all. */
   note?: string;
+  /**
+   * Path of the scene.pkg, relative to the root, when this is a Wallpaper
+   * Engine scene. Compositing it gives the real background; the preview is only
+   * a square workshop thumbnail.
+   */
+  scene?: string;
 }
 
 export interface WallpaperLibrary {
@@ -123,6 +129,8 @@ const MAX_DEPTH = 3;
 /** More than this and the grid stops being useful. */
 const MAX_ENTRIES = 240;
 
+/** The packed scene of a Wallpaper Engine scene wallpaper. */
+export const SCENE_PACK = 'scene.pkg';
 /** Names Wallpaper Engine uses for the still that represents a wallpaper. */
 const PREVIEW_NAMES = ['preview.jpg', 'preview.gif', 'preview.png', 'preview.jpeg', 'preview.webp'];
 /** Names it uses for the artwork itself. */
@@ -174,6 +182,40 @@ interface ResolvedRoot {
   engine: boolean;
 }
 
+/** How deep to hunt for the library, and how many folders to open doing it. */
+const MAX_SEARCH_DEPTH = 5;
+const MAX_SEARCH_FOLDERS = 600;
+
+/**
+ * Looks for a folder called 431960 at any depth.
+ *
+ * The conventions cover the usual layouts, but Steam is regularly somewhere
+ * else entirely - `C:\Games\Steam`, a second drive, a library folder with a
+ * custom name - and a page cannot read the registry or ask the browser where
+ * Steam lives. So when the conventional paths come up empty and the user has
+ * granted something broad, the tree is searched instead. The budget keeps that
+ * from turning into a full disk scan.
+ */
+async function findLibrary(
+  dir: DirHandleLike,
+  depth: number,
+  budget: { folders: number },
+): Promise<string[] | null> {
+  if (depth > MAX_SEARCH_DEPTH || budget.folders <= 0) return null;
+  let seen = 0;
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind !== 'directory' || name.startsWith('.')) continue;
+    if (budget.folders-- <= 0) return null;
+    if (name === WALLPAPER_ENGINE_APP_ID) return [name];
+    // Only descend into folders that could plausibly contain a Steam library,
+    // so a directory of holiday photos does not eat the whole budget.
+    if (++seen > 40 || !/^(steam|steamapps|steamlibrary|games|program files.*|workshop|content)$/i.test(name)) continue;
+    const found = await findLibrary(handle, depth + 1, budget);
+    if (found) return [name, ...found];
+  }
+  return null;
+}
+
 /**
  * Works out which folder the wallpapers are actually in.
  *
@@ -190,6 +232,14 @@ async function resolveRoot(picked: DirHandleLike): Promise<ResolvedRoot> {
   for (const segments of STEAM_LIBRARY_PATHS) {
     const found = await descend(picked, segments);
     if (found) return { handle: found, trail: [picked.name, ...segments], detected: true, engine: true };
+  }
+
+  // Not where the conventions say. Search, in case the user granted a drive or
+  // a parent folder and Steam is installed somewhere unexpected.
+  const trail = await findLibrary(picked, 1, { folders: MAX_SEARCH_FOLDERS });
+  if (trail) {
+    const found = await descend(picked, trail);
+    if (found) return { handle: found, trail: [picked.name, ...trail], detected: true, engine: true };
   }
 
   const files = await listFiles(picked);
@@ -268,6 +318,8 @@ async function readEngineWallpaper(
 
   const previewName = PREVIEW_NAMES.find((name) => byName.has(name));
   const preview = previewName ? register(previewName) : undefined;
+  const sceneName = byName.has(SCENE_PACK) ? SCENE_PACK : undefined;
+  const scene = sceneName ? register(sceneName) : undefined;
 
   // project.json names the artwork. Fall back to the conventional names, then
   // to anything in the folder a browser can actually open.
@@ -293,12 +345,15 @@ async function readEngineWallpaper(
     file,
     kind: playable ? (kind ?? undefined) : fallback ? 'image' : undefined,
     preview,
+    scene,
     still: Boolean(fallback),
     note: playable
       ? undefined
-      : fallback
-        ? `${unplayableReason(project.type)}，这里改用它的静态预览图`
-        : `${unplayableReason(project.type)}，而且它没有预览图`,
+      : scene
+        ? '场景壁纸：由 scene.pkg 合成完整背景图（预览图只是方形缩略图）'
+        : fallback
+          ? `${unplayableReason(project.type)}，这里改用它的静态预览图`
+          : `${unplayableReason(project.type)}，而且它没有预览图`,
   };
 }
 
@@ -402,6 +457,11 @@ export async function readEntry(entry: WallpaperEntry): Promise<File> {
 /** The preview image, read on demand. Falls back to the wallpaper itself. */
 export async function readPreview(entry: WallpaperEntry): Promise<File> {
   return readPath(entry.preview ?? entry.file ?? entry.path);
+}
+
+/** Any path inside the open library, for files the entry does not point at. */
+export async function readLibraryFile(path: string): Promise<File> {
+  return readPath(path);
 }
 
 /* -------------------------------------------------------------------------- */

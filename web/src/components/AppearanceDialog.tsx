@@ -10,6 +10,7 @@ import {
   libraryFromFiles,
   pickLibrary,
   readEntry,
+  readLibraryFile,
   readPreview,
   restoreLibrary,
   STEAM_LIBRARY_PATHS,
@@ -17,6 +18,7 @@ import {
   type WallpaperEntry,
   type WallpaperLibrary,
 } from '../lib/local-wallpapers';
+import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
 import { acceptFor, FOCUS_PRESETS, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Field, Input, Modal } from './ui/primitives';
@@ -62,6 +64,7 @@ export function AppearanceDialog() {
   const [scanning, setScanning] = useState(false);
   const [askPermission, setAskPermission] = useState(false);
   const [applying, setApplying] = useState<string | null>(null);
+  const [busyNote, setBusyNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -121,15 +124,43 @@ export function AppearanceDialog() {
   const useFromLibrary = async (entry: WallpaperEntry) => {
     setApplying(entry.path);
     try {
-      const file = await readEntry(entry);
+      const file = (await renderSceneEntry(entry)) ?? (await readEntry(entry));
       await setWallpaperFile(file, 'library');
-      if (entry.still) {
+      if (entry.still && !entry.scene) {
         pushToast({ title: '已使用静态预览图', message: entry.note ?? '这个壁纸无法在浏览器中播放', tone: 'info' });
       }
     } catch (err) {
       pushToast({ title: '壁纸载入失败', message: (err as Error).message, tone: 'error' });
     } finally {
       setApplying(null);
+      setBusyNote(null);
+    }
+  };
+
+  /**
+   * Composites a scene wallpaper out of its scene.pkg.
+   *
+   * The preview.jpg beside it is a square workshop thumbnail, not the picture -
+   * for a wide scene it is usually a close crop of one character. Rendering the
+   * real thing takes a few seconds the first time and is cached afterwards, so
+   * the fallback is always the preview rather than nothing.
+   */
+  const renderSceneEntry = async (entry: WallpaperEntry): Promise<File | null> => {
+    if (!entry.scene || !canRenderScenes()) return null;
+    setBusyNote('正在合成场景背景图…（首次较慢，之后会缓存）');
+    try {
+      const pkg = await readLibraryFile(entry.scene);
+      const still = await renderSceneStill(await pkg.arrayBuffer(), {
+        cacheKey: `${entry.scene}:${pkg.size}`,
+      });
+      return new File([still.blob], `${entry.title || 'scene'}.jpg`, { type: 'image/jpeg' });
+    } catch (err) {
+      pushToast({
+        title: '场景合成失败，改用预览图',
+        message: (err as Error).message,
+        tone: 'info',
+      });
+      return null;
     }
   };
 
@@ -277,19 +308,27 @@ export function AppearanceDialog() {
                   </p>
                 </div>
               ) : (
-                <WallpaperLibraryPanel
-                  library={library}
-                  scanning={scanning}
-                  askPermission={askPermission}
-                  applying={applying}
-                  activePath={wallpaper.source === 'library' ? wallpaperUrl : null}
-                  onChooseFolder={() => void chooseFolder()}
-                  onReGrant={() => void reGrant()}
-                  onForget={() => {
-                    void forgetAndReset();
-                  }}
-                  onUse={(entry) => void useFromLibrary(entry)}
-                />
+                <div className="space-y-2.5">
+                  <WallpaperLibraryPanel
+                    library={library}
+                    scanning={scanning}
+                    askPermission={askPermission}
+                    applying={applying}
+                    activePath={wallpaper.source === 'library' ? wallpaperUrl : null}
+                    onChooseFolder={() => void chooseFolder()}
+                    onReGrant={() => void reGrant()}
+                    onForget={() => {
+                      void forgetAndReset();
+                    }}
+                    onUse={(entry) => void useFromLibrary(entry)}
+                  />
+                  {busyNote ? (
+                    <p className="flex items-center gap-1.5 text-[11px] text-[var(--accent)]">
+                      <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                      {busyNote}
+                    </p>
+                  ) : null}
+                </div>
               )}
             </section>
 

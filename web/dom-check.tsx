@@ -317,6 +317,9 @@ console.log('\nSteam wallpaper detection (jsdom)');
     fakeDir('.cache', [fakeFile('junk.jpg')]),
   ]);
   const steam = fakeDir('Steam', [fakeDir('steamapps', [fakeDir('workshop', [fakeDir('content', [engine])])])]);
+  // Steam is not always where the conventions say: C:\Games\Steam is a real
+  // example, and a page cannot read the registry to find that out.
+  const gamesRoot = fakeDir('Games', [steam]);
   const loose = fakeDir('Pictures', [fakeFile('a.jpg'), fakeFile('b.mp4'), fakeFile('notes.txt')]);
   const barren = fakeDir('431960', [
     fakeDir('hollow', [project({ title: '空场景', type: 'scene', file: 'scene.pkg' }), fakeFile('scene.pkg')]),
@@ -353,6 +356,8 @@ console.log('\nSteam wallpaper detection (jsdom)');
   check('and is marked as a still', scene?.still, true);
   check('and explains why', Boolean(scene?.note), true);
   check('the still is drawn as an image', scene?.kind, 'image');
+  // The whole point of the fallback: the real background is in the pkg.
+  check('and the scene.pkg is offered for compositing', scene?.scene, 'aurora/scene.pkg');
 
   const video = byTitle.get('雨夜东京');
   check('a video wallpaper plays its own file', video?.file, 'rain/wallpaper.mp4');
@@ -380,6 +385,18 @@ console.log('\nSteam wallpaper detection (jsdom)');
   check('a scene without a preview has no file', only?.file, undefined);
   check('and is not marked as a still', Boolean(only?.still), false);
   check('and says there is nothing to use', Boolean(only?.note), true);
+
+  // Handed a folder above Steam rather than Steam itself, the library is
+  // searched for instead of being given up on.
+  (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => gamesRoot;
+  const searched = await pickLibrary();
+  check('a parent folder still finds the library', searched.status === 'ok' ? searched.library.entries.length : -1, 3);
+  check(
+    'and reports the path it walked',
+    searched.status === 'ok' ? searched.library.trail.join('/') : '',
+    'Games/Steam/steamapps/workshop/content/431960',
+  );
+  check('marked as detected', searched.status === 'ok' ? searched.library.detected : null, true);
 
   // An ordinary folder of pictures keeps the flat listing.
   (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => loose;
