@@ -139,6 +139,15 @@ interface AppState {
   /** The interface colour taken from the wallpaper, when that is turned on. */
   accent: string | null;
   setAccent: (colour: string | null) => void;
+  /**
+   * A frame of a live scene, as a data URL.
+   *
+   * A scene wallpaper is stored as its scene.pkg, which no img can show, so the
+   * crop editor had nothing to draw. The layer captures one frame from the
+   * canvas it is already running and keeps it here for the dialog.
+   */
+  scenePreview: string | null;
+  setScenePreview: (preview: string | null) => void;
   setWallpaper: (patch: Partial<WallpaperSettings>) => void;
   setWallpaperFile: (file: File, source?: WallpaperSource, kind?: WallpaperKind) => Promise<void>;
   clearWallpaper: () => Promise<void>;
@@ -314,6 +323,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   wallpaper: DEFAULT_WALLPAPER,
   wallpaperUrl: null,
   accent: null,
+  scenePreview: null,
   appearanceOpen: false,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
@@ -871,6 +881,10 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   setAccent: (colour) => {
     if (get().accent !== colour) set({ accent: colour });
+  },
+
+  setScenePreview: (preview) => {
+    if (get().scenePreview !== preview) set({ scenePreview: preview });
   },
 
   setWallpaper: (patch) => {

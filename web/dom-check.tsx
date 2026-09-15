@@ -455,7 +455,7 @@ console.log('\nSteam wallpaper detection (jsdom)');
 const { Wallpaper } = await import('./src/components/Wallpaper');
 const { SessionFooter } = await import('./src/components/Sidebar');
 
-const { clampCrop, cropForRatio, DEFAULT_WALLPAPER, MIN_CROP } = await import('./src/lib/wallpaper');
+const { clampCrop, cropForRatio, DEFAULT_WALLPAPER, MIN_CROP, resizeCrop } = await import('./src/lib/wallpaper');
 
 console.log('\nwallpaper framing and hover labels (jsdom)');
 {
@@ -525,6 +525,37 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
   const bounded = clampCrop({ x: -1, y: 2, w: 0.5, h: 0.5 });
   check('a selection cannot leave the picture', [bounded.x, bounded.y, bounded.w, bounded.h], [0, 0.5, 0.5, 0.5]);
   check('nor shrink below the minimum', clampCrop({ x: 0, y: 0, w: 0.001, h: 0.001 }).w, MIN_CROP);
+
+  // Resizing: an edge moves one side, a corner scales both. That split is the
+  // whole point - corners alone cannot widen a selection without heightening it.
+  const box: CropRect = { x: 0.2, y: 0.2, w: 0.4, h: 0.2 };
+  const round4 = (n: number) => Number(n.toFixed(4));
+  const ratio = (r: CropRect) => round4(r.w / r.h);
+
+  const south = resizeCrop(box, 's', 0, 0.1);
+  check('the bottom edge makes it taller', [round4(south.h), round4(south.w), round4(south.y)], [0.3, 0.4, 0.2]);
+  const east = resizeCrop(box, 'e', 0.1, 0);
+  check('the right edge makes it wider', [round4(east.w), round4(east.h), round4(east.x)], [0.5, 0.2, 0.2]);
+  const north = resizeCrop(box, 'n', 0, -0.1);
+  check('the top edge moves the top and grows it', [round4(north.y), round4(north.h), round4(north.w)], [0.1, 0.3, 0.4]);
+  const west = resizeCrop(box, 'w', 0.1, 0);
+  check('the left edge moves the left and shrinks it', [round4(west.x), round4(west.w), round4(west.h)], [0.3, 0.3, 0.2]);
+
+  const corner = resizeCrop(box, 'se', 0.2, 0);
+  check('a corner keeps the shape', ratio(corner), ratio(box));
+  check('and grows both axes', [corner.w > box.w, corner.h > box.h], [true, true]);
+  check('while the opposite corner stays put', [corner.x, corner.y], [box.x, box.y]);
+
+  const nw = resizeCrop(box, 'nw', -0.2, 0);
+  check('the opposite corner scales about its own corner', ratio(nw), ratio(box));
+  check('and its far edge stays put', [Number((nw.x + nw.w).toFixed(4)), Number((nw.y + nw.h).toFixed(4))], [0.6, 0.4]);
+
+  const squashed = resizeCrop(box, 'w', 5, 0);
+  check('an edge dragged past the far side stops at the minimum', squashed.w, MIN_CROP);
+  check('and does not turn inside out', squashed.x + squashed.w <= box.x + box.w + 0.0001, true);
+  const tiny = resizeCrop(box, 'se', -5, -5);
+  check('a corner shrunk past the minimum keeps the shape', ratio(tiny), ratio(box));
+  check('and respects the minimum', tiny.w >= MIN_CROP - 0.0001 && tiny.h >= MIN_CROP - 0.0001, true);
 
   // The window can change shape after a wallpaper is set, so a selection that
   // was right on one screen still has to cover another.
@@ -681,6 +712,11 @@ console.log('\nappearance dialog (jsdom)');
   let markup = await renderDialog();
   check('the library source renders', markup.includes('检测壁纸文件夹'), true);
   check('and offers the dynamic scene toggle', markup.includes('动态场景壁纸'), true);
+  // Fonts belong with the theme and the wallpaper, not in the server settings.
+  check('fonts are part of the appearance dialog', markup.includes('界面字体'), true);
+  check('with both role pickers', markup.includes('代码 / 编辑器字体'), true);
+  // The little thumbnail at the bottom repeated what the crop editor shows.
+  check('the redundant preview at the bottom is gone', markup.includes('效果已实时应用'), false);
   check('and explains that a path cannot be read directly', markup.includes('steamapps'), true);
   check('and offers the standard Steam locations', markup.includes('431960'), true);
 
@@ -696,6 +732,15 @@ console.log('\nappearance dialog (jsdom)');
   );
   markup = await renderDialog();
   check('the detected library is announced', markup.includes('已自动定位壁纸库'), true);
+
+  // With a wallpaper showing, the crop editor offers its shapes.
+  appStore.setState({ wallpaperUrl: 'https://cdn.example.com/a.png' });
+  const withPicture = await renderDialog();
+  check('the crop editor appears once there is a picture', withPicture.includes('取景区'), true);
+  check('with the shape presets', withPicture.includes('16:9') && withPicture.includes('整张'), true);
+  check('and says how the handles behave', withPicture.includes('边改单边'), true);
+  appStore.setState({ wallpaperUrl: null });
+
   check('the path that was walked is shown', markup.includes('431960'), true);
   check('both wallpapers are listed', markup.includes('Rain') && markup.includes('Aurora'), true);
   check('the video is settable', markup.includes('2 个可设置'), true);

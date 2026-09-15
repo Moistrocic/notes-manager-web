@@ -95,6 +95,66 @@ export function cropMediaStyle(crop: CropRect): {
   };
 }
 
+export type CropHandle = 'move' | 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+/**
+ * The rectangle after dragging one handle, given the movement in picture units.
+ *
+ * The two families behave differently on purpose. An edge moves one side and
+ * leaves the other axis alone, so a selection can be made wider without also
+ * becoming taller. A corner scales both axes by the same factor, anchored at the
+ * opposite corner, so the shape survives being made bigger or smaller - with
+ * edges alone there would be no way to resize without drifting the aspect ratio.
+ *
+ * Kept here rather than in the component so it can be reasoned about, and
+ * tested, without pointer events.
+ */
+export function resizeCrop(start: CropRect, handle: CropHandle, dx: number, dy: number): CropRect {
+  if (handle === 'move') return clampCrop({ ...start, x: start.x + dx, y: start.y + dy });
+
+  const west = handle.includes('w');
+  const east = handle.includes('e');
+  const north = handle.includes('n');
+  const south = handle.includes('s');
+
+  if ((west || east) && (north || south)) {
+    const wanted = west ? start.w - dx : start.w + dx;
+    // Never below the minimum in either axis, so the shape is always kept.
+    const factor = Math.max(MIN_CROP / start.w, MIN_CROP / start.h, wanted / start.w);
+    const w = start.w * factor;
+    const h = start.h * factor;
+    return clampCrop({
+      w,
+      h,
+      x: west ? start.x + (start.w - w) : start.x,
+      y: north ? start.y + (start.h - h) : start.y,
+    });
+  }
+
+  let { x, y, w, h } = start;
+  if (west) {
+    x = start.x + dx;
+    w = start.w - dx;
+  }
+  if (east) w = start.w + dx;
+  if (north) {
+    y = start.y + dy;
+    h = start.h - dy;
+  }
+  if (south) h = start.h + dy;
+  // A side dragged past the opposite one stops at the minimum instead of
+  // turning the rectangle inside out.
+  if (w < MIN_CROP) {
+    w = MIN_CROP;
+    if (west) x = start.x + start.w - MIN_CROP;
+  }
+  if (h < MIN_CROP) {
+    h = MIN_CROP;
+    if (north) y = start.y + start.h - MIN_CROP;
+  }
+  return clampCrop({ x, y, w, h });
+}
+
 /** Keeps a rectangle inside the picture and above the minimum size. */
 export function clampCrop(rect: CropRect): CropRect {
   const w = Math.min(1, Math.max(MIN_CROP, rect.w));

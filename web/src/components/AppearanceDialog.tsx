@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Eye, FolderOpen, Image as ImageIcon, Loader2, MonitorPlay, RotateCcw, Sparkles, Upload, X } from 'lucide-react';
+import { FolderOpen, Image as ImageIcon, Loader2, MonitorPlay, RotateCcw, Sparkles, Upload, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import {
@@ -20,7 +20,8 @@ import {
 } from '../lib/local-wallpapers';
 import { canPlayScenes } from '../lib/scene/play-scene';
 import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
-import { acceptFor, cropMediaStyle, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
+import { acceptFor, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
+import { FontSettings } from './FontSettings';
 import { WallpaperCrop } from './WallpaperCrop';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Field, Input, Modal, Switch } from './ui/primitives';
@@ -55,6 +56,7 @@ export function AppearanceDialog() {
   const clearWallpaper = useAppStore((s) => s.clearWallpaper);
   const pushToast = useAppStore((s) => s.pushToast);
   const accent = useAppStore((s) => s.accent);
+  const scenePreview = useAppStore((s) => s.scenePreview);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const folderRef = useRef<HTMLInputElement | null>(null);
@@ -413,10 +415,15 @@ export function AppearanceDialog() {
               </div>
               {wallpaperUrl ? (
                 <WallpaperCrop
-                  src={wallpaperUrl}
+                  // A live scene is stored as its scene.pkg, which no img can
+                  // render; the layer hands over a captured frame instead.
+                  src={wallpaper.kind === 'scene' ? scenePreview : wallpaperUrl}
                   kind={wallpaper.kind === 'video' ? 'video' : wallpaper.kind === 'scene' ? 'scene' : 'image'}
                   crop={wallpaper.crop}
                   onChange={(crop) => setWallpaper({ crop })}
+                  unavailable={
+                    wallpaper.kind === 'scene' ? '正在从场景里取一帧用于预览…' : '这张壁纸没有可以预览的图片。'
+                  }
                 />
               ) : (
                 <p className="text-[11px] text-[var(--faint)]">选择壁纸后可以在这里框选要显示的区域。</p>
@@ -474,40 +481,15 @@ export function AppearanceDialog() {
                 ) : null}
               </section>
             )}
-
-            <div className="flex items-center gap-2.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3">
-              <div className="h-14 w-24 shrink-0 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)]">
-                {wallpaperUrl ? (
-                  <div className="relative h-full w-full">
-                    {wallpaper.kind === 'video' ? (
-                      <video
-                        src={wallpaperUrl}
-                        className="wallpaper-media"
-                        style={cropMediaStyle(wallpaper.crop)}
-                        muted
-                        loop
-                        autoPlay
-                        playsInline
-                      />
-                    ) : (
-                      <img src={wallpaperUrl} alt="" className="wallpaper-media" style={cropMediaStyle(wallpaper.crop)} />
-                    )}
-                  </div>
-                ) : null}
-              </div>
-              <div className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-[var(--faint)]">
-                <Eye className="mb-1 h-3.5 w-3.5" />
-                {wallpaperUrl
-                  ? '效果已实时应用，关闭本窗口即可继续使用。'
-                  : wallpaper.source === 'url'
-                    ? '填写地址后点「应用」。'
-                    : wallpaper.source === 'library'
-                      ? '从下面的壁纸库里点一张图。'
-                      : '还没有选择文件。'}
-              </div>
-            </div>
           </>
         ) : null}
+
+        {/* Fonts live here rather than in the server settings: they are part of
+            how the app looks, alongside the theme and the wallpaper. */}
+        <section>
+          <h3 className="mb-2.5 text-[12.5px] font-semibold text-[var(--text)]">界面字体</h3>
+          <FontSettings />
+        </section>
       </div>
 
       {/* Fallback for browsers without showDirectoryPicker: the input is always
