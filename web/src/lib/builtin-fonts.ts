@@ -47,10 +47,6 @@ export function builtinFont(id: string): BuiltinFont | undefined {
   return BUILTIN_FONTS.find((font) => font.id === id);
 }
 
-export function builtinFontsFor(kind: 'sans' | 'mono'): BuiltinFont[] {
-  return BUILTIN_FONTS.filter((font) => font.kind === kind);
-}
-
 /** Public URL of a built-in font file. */
 export function builtinFontUrl(font: BuiltinFont): string {
   return `${BASE}/${font.file}`;

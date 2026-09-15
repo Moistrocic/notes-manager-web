@@ -329,11 +329,6 @@ export async function clearWallpaperFile(): Promise<void> {
 }
 
 /** A blob URL for the stored file, or null when there is none. */
-export async function wallpaperObjectUrl(): Promise<string | null> {
-  const blob = await loadWallpaperFile();
-  return blob ? URL.createObjectURL(blob) : null;
-}
-
 /**
  * Picks a wallpaper file, keeping only what the browser can actually render.
  * Animated GIFs and WebP work as images; everything else has to be a video.

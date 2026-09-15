@@ -28,11 +28,6 @@ function emit(level: LogLevel, scope: string, args: unknown[]): void {
   sink(`${ts} ${tag} [${scope}]`, ...args);
 }
 
-export function setLogLevel(level: string): void {
-  const l = level.toLowerCase() as LogLevel;
-  if (l in LEVELS) override = LEVELS[l];
-}
-
 export interface Logger {
   error(...args: unknown[]): void;
   warn(...args: unknown[]): void;

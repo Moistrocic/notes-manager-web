@@ -331,13 +331,19 @@ export function NotesPanel() {
           {/* Where the search looks, and which notes it considers. Folded away
               by default: most searches want the defaults, but a search aimed at
               tags alone is a different question and needs asking properly. */}
-          <Tooltip label="搜索范围与筛选" side="top">
+          <Tooltip
+            label="搜索范围与筛选"
+            side="top"
+            // The offsets have to sit on the wrapper: it is the positioned
+            // element, so an absolutely placed child would resolve against it.
+            className="absolute right-9 top-1/2 -translate-y-1/2"
+          >
             <button
               type="button"
               onClick={() => setScopeOpen((open) => !open)}
               aria-expanded={scopeOpen}
               className={cn(
-                'focus-ring absolute right-9 top-1/2 flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[10.5px] transition-colors',
+                'focus-ring flex h-6 items-center gap-1 rounded-md px-1.5 text-[10.5px] transition-colors',
                 scopeOpen || narrowed
                   ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
                   : 'text-[var(--faint)] hover:text-[var(--muted)]',

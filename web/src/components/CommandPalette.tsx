@@ -3,7 +3,6 @@ import {
   Columns2,
   Eye,
   FileText,
-  Folder,
   ListTree,
   LayoutGrid,
   List as ListIcon,
@@ -45,8 +44,6 @@ export function CommandPalette() {
   const canWrite = useCanWrite();
   const toggleMeta = useAppStore((s) => s.toggleMeta);
   const metaOpen = useAppStore((s) => s.metaOpen);
-  const toggleNav = useAppStore((s) => s.toggleNav);
-  const navOpen = useAppStore((s) => s.navOpen);
 
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -80,13 +77,6 @@ export function CommandPalette() {
         group: '操作',
         icon: ListTree,
         run: () => toggleMeta(),
-      },
-      {
-        id: 'nav',
-        label: navOpen ? '收起导航（文件夹 / 标签）' : '展开导航（文件夹 / 标签）',
-        group: '操作',
-        icon: Folder,
-        run: () => toggleNav(),
       },
       {
         id: 'theme',
@@ -139,7 +129,6 @@ export function CommandPalette() {
     canWrite,
     createNote,
     metaOpen,
-    navOpen,
     setEditorMode,
     setSettingsOpen,
     setTheme,
@@ -147,7 +136,6 @@ export function CommandPalette() {
     setView,
     theme,
     toggleMeta,
-    toggleNav,
     user?.role,
   ]);
 

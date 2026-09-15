@@ -327,5 +327,3 @@ export class StateStore {
     return file;
   }
 }
-
-export const settingsFile = (dataDir: string): string => path.join(dataDir, 'settings.json');

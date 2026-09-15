@@ -67,12 +67,6 @@ export function fontFamilyOf(fonts: FontRecord[], id: string): string {
  * used to produce "Name", , monospace, and an empty item makes the whole
  * font-family declaration invalid, which silently dropped the choice.
  */
-export function fontStack(fonts: FontRecord[], id: string, fallback: string): string {
-  const family = fontFamilyOf(fonts, id);
-  if (!family) return fallback;
-  return fallback ? `${family}, ${fallback}` : family;
-}
-
 const STYLE_ID = 'user-fonts';
 
 /** @font-face rules for the bundled fonts. They are static files, so this is cheap. */

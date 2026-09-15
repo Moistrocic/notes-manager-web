@@ -79,10 +79,3 @@ export function baseName(p: string): string {
   const idx = normalised.lastIndexOf('/');
   return idx === -1 ? normalised : normalised.slice(idx + 1);
 }
-
-export function isValidEntryName(name: string): boolean {
-  if (!name || name.length > 255) return false;
-  if (name === '.' || name === '..') return false;
-  // eslint-disable-next-line no-control-regex
-  return !/[\x00-\x1f<>:"/\\|?*]/.test(name);
-}

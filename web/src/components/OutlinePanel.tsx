@@ -51,20 +51,21 @@ export function OutlinePanel({ onNavigate }: { onNavigate: (heading: Heading, in
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: Math.min(index * 0.015, 0.18) }}
               >
-                <button
-                  type="button"
-                  onClick={() => onNavigate(heading, index)}
-                  title={heading.text}
-                  className={cn(
-                    'focus-ring flex w-full items-center gap-1.5 rounded-lg py-1 pr-1.5 text-left text-[12px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] hover:text-[var(--accent)]',
-                    heading.level === 1 && 'pl-2 font-medium text-[var(--text)]',
-                    heading.level === 2 && 'pl-3.5',
-                    heading.level === 3 && 'pl-5 text-[11.5px]',
-                    heading.level >= 4 && 'pl-6.5 text-[11px] text-[var(--faint)]',
-                  )}
-                >
-                  <span className="truncate">{heading.text}</span>
-                </button>
+                <Tooltip label={heading.text} side="top" className="block">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate(heading, index)}
+                    className={cn(
+                      'focus-ring flex w-full items-center gap-1.5 rounded-lg py-1 pr-1.5 text-left text-[12px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)] hover:text-[var(--accent)]',
+                      heading.level === 1 && 'pl-2 font-medium text-[var(--text)]',
+                      heading.level === 2 && 'pl-3.5',
+                      heading.level === 3 && 'pl-5 text-[11.5px]',
+                      heading.level >= 4 && 'pl-6.5 text-[11px] text-[var(--faint)]',
+                    )}
+                  >
+                    <span className="truncate">{heading.text}</span>
+                  </button>
+                </Tooltip>
               </motion.li>
             ))}
           </ul>

@@ -47,14 +47,3 @@ export function formatBytes(bytes: number): string {
   }
   return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-
-export function formatNumber(value: number): string {
-  return new Intl.NumberFormat('zh-CN').format(value);
-}
-
-export function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时`;
-  return `${Math.floor(seconds / 86400)} 天`;
-}

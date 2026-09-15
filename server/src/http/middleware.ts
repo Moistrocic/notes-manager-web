@@ -10,11 +10,6 @@ const log = createLogger('http');
 
 export const SESSION_COOKIE = 'nm_session';
 
-export interface ApiRequest extends Request {
-  session?: SessionRecord | null;
-  services: Services;
-}
-
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {

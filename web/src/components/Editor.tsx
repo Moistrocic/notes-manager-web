@@ -211,25 +211,26 @@ export function Editor() {
         const Icon = option.icon;
         const active = editorMode === option.value;
         return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => setEditorMode(option.value)}
-            title={option.label}
-            className={cn(
-              'focus-ring relative flex h-7 w-8 items-center justify-center rounded-lg transition-colors',
-              active ? 'text-[var(--text)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-            )}
-          >
-            {active ? (
-              <motion.span
-                layoutId={compactBar ? 'focus-mode-switch' : 'editor-mode'}
-                className="absolute inset-0 rounded-lg border border-[var(--line)] bg-[var(--elevated)] shadow-soft"
-                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-              />
-            ) : null}
-            <Icon className="relative h-3.5 w-3.5" />
-          </button>
+          <Tooltip key={option.value} label={option.label} side="top">
+            <button
+              type="button"
+              onClick={() => setEditorMode(option.value)}
+              aria-pressed={active}
+              className={cn(
+                'focus-ring relative flex h-7 w-8 items-center justify-center rounded-lg transition-colors',
+                active ? 'text-[var(--text)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
+              )}
+            >
+              {active ? (
+                <motion.span
+                  layoutId={compactBar ? 'focus-mode-switch' : 'editor-mode'}
+                  className="absolute inset-0 rounded-lg border border-[var(--line)] bg-[var(--elevated)] shadow-soft"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                />
+              ) : null}
+              <Icon className="relative h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
         );
       })}
     </div>

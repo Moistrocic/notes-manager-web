@@ -523,11 +523,6 @@ export async function grantLibrary(): Promise<RestoreResult> {
 }
 
 /** Forgets the folder. The wallpaper itself stays until it is replaced. */
-export async function forgetLibrary(): Promise<void> {
-  closeLibrary();
-  await idbDelete(HANDLE_KEY);
-}
-
 /* -------------------------------------------------------------------------- */
 /* Fallback: <input type="file" webkitdirectory>                              */
 /* -------------------------------------------------------------------------- */

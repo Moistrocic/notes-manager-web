@@ -1,13 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import type {
-  ButtonHTMLAttributes,
-  InputHTMLAttributes,
-  ReactNode,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
-} from 'react';
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactElement } from 'react';
 import { cn } from '../../lib/cn';
 
@@ -129,18 +123,6 @@ export function Select({
   );
 }
 
-export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...rest}
-      className={cn(
-        'focus-ring scroll-area w-full resize-none rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] p-3 text-sm text-[var(--text)] outline-none transition-all duration-200 placeholder:text-[var(--faint)] focus:border-[var(--accent)]',
-        className,
-      )}
-    />
-  );
-}
-
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
@@ -197,52 +179,6 @@ export function Switch({
       </span>
       {label ? <span>{label}</span> : null}
     </button>
-  );
-}
-
-export function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  className,
-}: {
-  value: T;
-  options: { value: T; label: ReactNode; title?: string }[];
-  onChange: (value: T) => void;
-  className?: string;
-}) {
-  return (
-    <div
-      className={cn(
-        'relative inline-flex items-center gap-1 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] p-1',
-        className,
-      )}
-    >
-      {options.map((option) => {
-        const active = option.value === value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            title={option.title}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              'focus-ring relative z-10 inline-flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium transition-colors duration-200',
-              active ? 'text-[var(--text)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-            )}
-          >
-            {active ? (
-              <motion.span
-                layoutId={`seg-${options.map((o) => o.value).join('')}`}
-                className="absolute inset-0 -z-10 rounded-lg border border-[var(--line)] bg-[var(--elevated)] shadow-soft"
-                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
-              />
-            ) : null}
-            {option.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -372,10 +308,17 @@ export function Tooltip({
   label,
   children,
   side = 'bottom',
+  className,
 }: {
   label: string;
   children: ReactNode;
   side?: 'top' | 'bottom';
+  /**
+   * Goes on the wrapper. The wrapper is a positioned element, so a child that
+   * wants to be absolutely placed has to say so here instead - otherwise its
+   * offsets resolve against this span rather than the box it meant.
+   */
+  className?: string;
 }) {
   const anchor = useRef<HTMLSpanElement | null>(null);
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
@@ -401,7 +344,7 @@ export function Tooltip({
   return (
     <span
       ref={anchor}
-      className="relative inline-flex"
+      className={cn('relative inline-flex', className)}
       onPointerEnter={show}
       onPointerLeave={() => setAt(null)}
       onPointerDown={() => setAt(null)}

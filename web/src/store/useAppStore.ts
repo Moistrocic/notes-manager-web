@@ -110,7 +110,7 @@ interface AppState {
   /** Outline pane on the right of the editor. */
   metaOpen: boolean;
   /** Collapsible navigation block inside the merged left column. */
-  navOpen: boolean;
+
   /** Editor/preview split, 0.2 - 0.8. */
   splitRatio: number;
   /** Focus mode hides the note list and every toolbar above the note. */
@@ -207,7 +207,7 @@ interface AppState {
   setEditorMode: (mode: EditorMode) => void;
   toggleSidebar: (value?: boolean) => void;
   toggleMeta: (value?: boolean) => void;
-  toggleNav: (value?: boolean) => void;
+
   toggleFocusMode: (value?: boolean) => void;
   setSplitRatio: (value: number) => void;
   /** OpenList guest session (no credentials). */
@@ -347,7 +347,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   editorMode: readLocal<EditorMode>(MODE_KEY, 'split'),
   sidebarOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1024,
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
-  navOpen: false,
+
   splitRatio: Number(readLocal(SPLIT_KEY, '0.5')) || 0.5,
   focusMode: false,
   focusRestore: null,
@@ -1018,7 +1018,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
   toggleSidebar: (value) => set((state) => ({ sidebarOpen: value ?? !state.sidebarOpen })),
   toggleMeta: (value) => set((state) => ({ metaOpen: value ?? !state.metaOpen })),
-  toggleNav: (value) => set((state) => ({ navOpen: value ?? !state.navOpen })),
+
   toggleFocusMode: (value) =>
     set((state) => {
       const next = value ?? !state.focusMode;
