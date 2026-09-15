@@ -1,27 +1,29 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  AlignJustify,
-  ChevronDown,
   Cloud,
   HardDrive,
+  Layers,
   ChevronLeft,
   FileText,
   LayoutGrid,
-  List as ListIcon,
   Pin,
   Plus,
   Search,
+  SlidersHorizontal,
   Upload,
   Sparkles,
   Star,
+  Trash2,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { relativeTime } from '../lib/format';
-import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey, type ViewMode } from '../store/useAppStore';
+import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey } from '../store/useAppStore';
 import type { NoteSummary } from '../lib/types';
-import { Badge, Button, Select, Skeleton, Tooltip } from './ui/primitives';
+import { DEFAULT_SEARCH_SCOPE } from '../store/useAppStore';
+import { NoteTree } from './NoteTree';
+import { Badge, Button, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
 import { NavSections, SessionFooter } from './Sidebar';
 
 const SORTS: { value: SortKey; label: string }[] = [
@@ -36,6 +38,45 @@ const SORTS: { value: SortKey; label: string }[] = [
  * It used to be two columns (a nav column plus a list column) which wasted
  * horizontal space on narrow screens.
  */
+/**
+ * Three boxes standing in a row, seen slightly from the side.
+ *
+ * The card list is a stack of cards, and a generic "rows" glyph said nothing
+ * about that; these are drawn to look like the cards they switch to.
+ */
+function CardsIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
+      {[0, 5.5, 11].map((x) => (
+        <g key={x}>
+          <rect x={x + 0.5} y={4} width={4} height={8.5} rx={0.6} stroke="currentColor" strokeWidth={1.1} />
+          <path d={`M${x + 0.5} 4 L${x + 2} 2.6 L${x + 6} 2.6 L${x + 4.5} 4`} stroke="currentColor" strokeWidth={1.1} strokeLinejoin="round" />
+          <path d={`M${x + 4.5} 4 L${x + 6} 2.6 L${x + 6} 11 L${x + 4.5} 12.5`} stroke="currentColor" strokeWidth={1.1} strokeLinejoin="round" />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+/** A folder with the levels below it - what the tree mode actually shows. */
+function TreeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
+      <path
+        d="M2.2 3.4a1 1 0 0 1 1-1h2l1.2 1.4h5.4a1 1 0 0 1 1 1v1.4"
+        stroke="currentColor"
+        strokeWidth={1.2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M6 8.2v-1h8" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" />
+      <rect x={1} y={3.2} width={6} height={4.4} rx={0.9} stroke="currentColor" strokeWidth={1.2} />
+      <rect x={9} y={10} width={6} height={4} rx={0.9} stroke="currentColor" strokeWidth={1.2} />
+      <path d="M6 12h3" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function NotesPanel() {
   const version = useAppStore((s) => s.status?.version);
   const notes = useAppStore((s) => s.notes);
@@ -45,6 +86,7 @@ export function NotesPanel() {
   const selectNote = useAppStore((s) => s.selectNote);
   const createNote = useAppStore((s) => s.createNote);
   const uploadNotes = useAppStore((s) => s.uploadNotes);
+  const setTrashOpen = useAppStore((s) => s.setTrashOpen);
   const query = useAppStore((s) => s.query);
   const setQuery = useAppStore((s) => s.setQuery);
   const sort = useAppStore((s) => s.sort);
@@ -56,6 +98,19 @@ export function NotesPanel() {
   const activeFolder = useAppStore((s) => s.activeFolder);
   const setActiveFolder = useAppStore((s) => s.setActiveFolder);
   const favoriteOnly = useAppStore((s) => s.favoriteOnly);
+  const pinnedOnly = useAppStore((s) => s.pinnedOnly);
+  const setPinnedOnly = useAppStore((s) => s.setPinnedOnly);
+  const searchScope = useAppStore((s) => s.searchScope);
+  const setSearchScope = useAppStore((s) => s.setSearchScope);
+  const folders = useAppStore((s) => s.folders);
+  const renameFolder = useAppStore((s) => s.renameFolder);
+  const moveNote = useAppStore((s) => s.moveNote);
+  const renameNote = useAppStore((s) => s.renameNote);
+  const createFolder = useAppStore((s) => s.createFolder);
+  const deleteFolder = useAppStore((s) => s.deleteFolder);
+  const deleteNote = useAppStore((s) => s.deleteNote);
+  const togglePinned = useAppStore((s) => s.togglePinned);
+  const toggleFavorite = useAppStore((s) => s.toggleFavorite);
   const setFavoriteOnly = useAppStore((s) => s.setFavoriteOnly);
   const navOpen = useAppStore((s) => s.navOpen);
   const toggleNav = useAppStore((s) => s.toggleNav);
@@ -68,6 +123,23 @@ export function NotesPanel() {
   const readOnlyReason = useReadOnlyReason();
   const searchRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
+  // Which inline prompt is open, if any. One piece of state rather than three,
+  // because only one can be up at a time.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const narrowed =
+    favoriteOnly || pinnedOnly || !searchScope.title || !searchScope.content || !searchScope.tags;
+  const scopePlaceholder =
+    !searchScope.content && !searchScope.tags && searchScope.title
+      ? '搜索标题…'
+      : searchScope.title && !searchScope.tags
+        ? '搜索标题与内容…'
+        : '搜索笔记、标签…';
+  const [dialog, setDialog] = useState<
+    | { kind: 'renameFolder'; path: string; value: string }
+    | { kind: 'renameNote'; id: string; value: string }
+    | { kind: 'moveNote'; id: string; value: string }
+    | null
+  >(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -85,18 +157,24 @@ export function NotesPanel() {
     const q = query.trim().toLowerCase();
     let list = notes;
     if (favoriteOnly) list = list.filter((n) => n.favorite);
+    if (pinnedOnly) list = list.filter((n) => n.pinned);
     if (activeTag) list = list.filter((n) => n.tags.includes(activeTag));
-    if (activeFolder !== null) {
+    // In the tree, the selected folder is highlighted rather than filtered to -
+    // narrowing a tree to one of its own branches removes the context that made
+    // it a tree.
+    if (activeFolder !== null && view !== 'tree') {
       const folder = activeFolder.replace(/^\//, '');
       list = list.filter((n) => n.folder === folder);
     }
     if (q) {
-      list = list.filter(
-        (n) =>
-          n.title.toLowerCase().includes(q) ||
-          n.excerpt.toLowerCase().includes(q) ||
-          n.tags.some((t) => t.toLowerCase().includes(q)),
-      );
+      // Only the fields the scope allows, so a search can be aimed at titles
+      // without every body match drowning the result.
+      const fields = [
+        searchScope.title ? (n: NoteSummary) => n.title.toLowerCase().includes(q) : null,
+        searchScope.content ? (n: NoteSummary) => n.excerpt.toLowerCase().includes(q) : null,
+        searchScope.tags ? (n: NoteSummary) => n.tags.some((t) => t.toLowerCase().includes(q)) : null,
+      ].filter((f): f is (n: NoteSummary) => boolean => f !== null);
+      list = fields.length === 0 ? [] : list.filter((n) => fields.some((match) => match(n)));
     }
     const sorted = [...list];
     sorted.sort((a, b) => {
@@ -114,7 +192,7 @@ export function NotesPanel() {
       }
     });
     return sorted;
-  }, [notes, query, sort, activeTag, activeFolder, favoriteOnly]);
+  }, [notes, query, sort, activeTag, activeFolder, favoriteOnly, view, searchScope, pinnedOnly]);
 
   const pinned = filtered.filter((n) => n.pinned);
   const rest = filtered.filter((n) => !n.pinned);
@@ -157,6 +235,17 @@ export function NotesPanel() {
             {capabilities && !capabilities.writable ? ' · 只读' : ''}
           </div>
         </div>
+        <Tooltip label={navOpen ? '收起导航' : '展开导航（文件夹 / 标签）'}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => toggleNav()}
+            className={cn(navOpen && 'text-[var(--accent)]')}
+            aria-pressed={navOpen}
+          >
+            <Layers className="h-4 w-4" />
+          </Button>
+        </Tooltip>
         <Tooltip label="隐藏列表">
           <Button variant="ghost" size="icon" className="hidden lg:inline-flex" onClick={() => toggleSidebar(false)}>
             <ChevronLeft className="h-4 w-4" />
@@ -201,20 +290,11 @@ export function NotesPanel() {
             <Upload className="h-4 w-4" />
           </Button>
         </Tooltip>
-        <button
-          type="button"
-          onClick={() => toggleNav()}
-          title={navOpen ? '收起导航' : '展开导航（文件夹 / 标签）'}
-          className={cn(
-            'focus-ring flex h-10 items-center gap-1 rounded-xl border px-2.5 text-[11.5px] transition-colors',
-            navOpen
-              ? 'border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] text-[var(--accent)]'
-              : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]',
-          )}
-        >
-          <ChevronDown className={cn('h-3.5 w-3.5 transition-transform duration-200', !navOpen && '-rotate-90')} />
-          导航
-        </button>
+        <Tooltip label="回收站">
+          <Button variant="outline" size="icon" className="h-10 w-10" onClick={() => setTrashOpen(true)}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </Tooltip>
       </div>
 
       {!canWrite ? (
@@ -248,8 +328,8 @@ export function NotesPanel() {
             ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="搜索笔记、标签…"
-            className="focus-ring h-9 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] pl-8 pr-16 text-[13px] text-[var(--text)] outline-none transition-all placeholder:text-[var(--faint)] focus:border-[var(--accent)]"
+            placeholder={scopePlaceholder}
+            className="focus-ring h-9 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] pl-8 pr-[4.5rem] text-[13px] text-[var(--text)] outline-none transition-all placeholder:text-[var(--faint)] focus:border-[var(--accent)]"
           />
           {query ? (
             <button
@@ -265,7 +345,90 @@ export function NotesPanel() {
               /
             </kbd>
           )}
+
+          {/* Where the search looks, and which notes it considers. Folded away
+              by default: most searches want the defaults, but a search aimed at
+              tags alone is a different question and needs asking properly. */}
+          <button
+            type="button"
+            onClick={() => setScopeOpen((open) => !open)}
+            aria-expanded={scopeOpen}
+            aria-label="搜索范围"
+            title="搜索范围与筛选"
+            className={cn(
+              'focus-ring absolute right-9 top-1/2 flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[10.5px] transition-colors',
+              scopeOpen || narrowed
+                ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                : 'text-[var(--faint)] hover:text-[var(--muted)]',
+            )}
+          >
+            <SlidersHorizontal className="h-3 w-3" />
+            {narrowed ? '已筛选' : ''}
+          </button>
         </div>
+
+        <AnimatePresence initial={false}>
+          {scopeOpen ? (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="overflow-hidden"
+            >
+              <div className="space-y-2 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-2.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 text-[11px] text-[var(--faint)]">搜索范围</span>
+                  {(
+                    [
+                      { key: 'title' as const, label: '标题 / 文件名' },
+                      { key: 'content' as const, label: '笔记内容' },
+                      { key: 'tags' as const, label: '标签' },
+                    ] as const
+                  ).map((field) => (
+                    <Chip
+                      key={field.key}
+                      active={searchScope[field.key]}
+                      onClick={() => setSearchScope({ ...searchScope, [field.key]: !searchScope[field.key] })}
+                    >
+                      {field.label}
+                    </Chip>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="mr-1 text-[11px] text-[var(--faint)]">只看</span>
+                  <Chip
+                    active={favoriteOnly}
+                    onClick={() => setFavoriteOnly(!favoriteOnly)}
+                    icon={<Star className="h-3 w-3" />}
+                  >
+                    收藏
+                  </Chip>
+                  <Chip
+                    active={pinnedOnly}
+                    onClick={() => setPinnedOnly(!pinnedOnly)}
+                    icon={<Pin className="h-3 w-3" />}
+                  >
+                    置顶
+                  </Chip>
+                  {narrowed ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchScope({ ...DEFAULT_SEARCH_SCOPE });
+                        setFavoriteOnly(false);
+                        setPinnedOnly(false);
+                      }}
+                      className="focus-ring ml-auto rounded-full px-2 py-0.5 text-[11px] text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+                    >
+                      重置
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         <div className="flex items-center gap-2">
           <span className="truncate text-[12px] font-medium text-[var(--muted)]">{filterLabel}</span>
@@ -285,61 +448,35 @@ export function NotesPanel() {
               ))}
             </Select>
             <div className="flex items-center gap-0.5 rounded-lg border border-[var(--line)] p-0.5">
-              <button
-                type="button"
-                onClick={() => setView('compact')}
-                className={cn(
-                  'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-                  view === 'compact' ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-                )}
-                aria-label="紧凑视图（仅标题）"
-                title="紧凑视图（仅标题）"
-              >
-                {view === 'compact' ? (
-                  <motion.span
-                    layoutId="view-toggle"
-                    className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                  />
-                ) : null}
-                <AlignJustify className="relative h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('list')}
-                className={cn(
-                  'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-                  view === 'list' ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-                )}
-                aria-label="列表视图"
-              >
-                {view === 'list' ? (
-                  <motion.span
-                    layoutId="view-toggle"
-                    className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                  />
-                ) : null}
-                <ListIcon className="relative h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setView('grid')}
-                className={cn(
-                  'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-                  view === 'grid' ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-                )}
-                aria-label="网格视图"
-              >
-                {view === 'grid' ? (
-                  <motion.span
-                    layoutId="view-toggle"
-                    className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                  />
-                ) : null}
-                <LayoutGrid className="relative h-3.5 w-3.5" />
-              </button>
+              {(
+                [
+                  { mode: 'tree' as const, label: '目录树（文件夹与笔记）', Icon: TreeIcon },
+                  { mode: 'list' as const, label: '卡片列表', Icon: CardsIcon },
+                  { mode: 'grid' as const, label: '网格视图', Icon: LayoutGrid },
+                ] as const
+              ).map(({ mode, label, Icon }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setView(mode)}
+                  className={cn(
+                    'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
+                    view === mode ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
+                  )}
+                  aria-label={label}
+                  aria-pressed={view === mode}
+                  title={label}
+                >
+                  {view === mode ? (
+                    <motion.span
+                      layoutId="view-toggle"
+                      className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
+                      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                    />
+                  ) : null}
+                  <Icon className="relative h-3.5 w-3.5" />
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -384,6 +521,33 @@ export function NotesPanel() {
             canCreate={canWrite}
             onCreate={() => void createNote()}
           />
+        ) : view === 'tree' ? (
+          <NoteTree
+            folders={folders}
+            notes={filtered}
+            activeFolder={activeFolder}
+            activeId={activeId}
+            canWrite={canWrite}
+            actions={{
+              onSelectFolder: (path) => setActiveFolder(activeFolder === path ? null : path),
+              onSelectNote: (id) => void selectNote(id),
+              onCreateChild: (path) => void createFolder(`${path}/新文件夹`),
+              onRenameFolder: (path) =>
+                setDialog({ kind: 'renameFolder', path, value: path.split('/').pop() ?? path }),
+              onDeleteFolder: (path) => void deleteFolder(path),
+              onRenameNote: (id) => {
+                const note = notes.find((n) => n.id === id);
+                if (note) setDialog({ kind: 'renameNote', id, value: note.title });
+              },
+              onMoveNote: (id) => {
+                const note = notes.find((n) => n.id === id);
+                if (note) setDialog({ kind: 'moveNote', id, value: note.folder });
+              },
+              onDeleteNote: (id) => void deleteNote(id),
+              onTogglePin: (id) => void togglePinned(id),
+              onToggleFavorite: (id) => void toggleFavorite(id),
+            }}
+          />
         ) : (
           <div className="space-y-4">
             {pinned.length ? (
@@ -398,6 +562,19 @@ export function NotesPanel() {
             ) : null}
           </div>
         )}
+
+        <PromptDialog
+          state={dialog}
+          folders={folders.map((f) => f.path)}
+          onClose={() => setDialog(null)}
+          onConfirm={(value) => {
+            if (!dialog) return;
+            if (dialog.kind === 'renameFolder') void renameFolder(dialog.path, value);
+            if (dialog.kind === 'renameNote') void renameNote(dialog.id, value);
+            if (dialog.kind === 'moveNote') void moveNote(dialog.id, value);
+            setDialog(null);
+          }}
+        />
       </div>
 
       <div className="border-t border-[var(--line)] p-3">
@@ -421,6 +598,116 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
+/**
+ * The inline prompts for renaming and moving.
+ *
+ * One small dialog rather than three, since they differ only in their label and
+ * whether the value is typed or picked from the folder list.
+ */
+/** A small on/off pill, used for the search scope and the filters. */
+function Chip({
+  active,
+  onClick,
+  icon,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        'focus-ring inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+        active
+          ? 'border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] text-[var(--accent)]'
+          : 'border-[var(--line)] text-[var(--muted)] hover:border-[var(--line-strong)] hover:text-[var(--text)]',
+      )}
+    >
+      {icon}
+      {children}
+    </button>
+  );
+}
+
+function PromptDialog({
+  state,
+  folders,
+  onClose,
+  onConfirm,
+}: {
+  state:
+    | { kind: 'renameFolder'; path: string; value: string }
+    | { kind: 'renameNote'; id: string; value: string }
+    | { kind: 'moveNote'; id: string; value: string }
+    | null;
+  folders: string[];
+  onClose: () => void;
+  onConfirm: (value: string) => void;
+}) {
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    setValue(state?.value ?? '');
+  }, [state]);
+
+  if (!state) return null;
+
+  const title =
+    state.kind === 'renameFolder' ? '重命名文件夹' : state.kind === 'renameNote' ? '重命名笔记' : '移动笔记';
+  const hint =
+    state.kind === 'renameFolder'
+      ? state.path
+      : state.kind === 'moveNote'
+        ? '选择目标文件夹，空选项表示根目录'
+        : '留空则取消';
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={title}
+      subtitle={hint}
+      width="max-w-md"
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            取消
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => onConfirm(value)} disabled={state.kind !== 'moveNote' && !value.trim()}>
+            确定
+          </Button>
+        </div>
+      }
+    >
+      {state.kind === 'moveNote' ? (
+        <Select value={value} onChange={(e) => setValue(e.target.value)} aria-label="目标文件夹">
+          <option value="">根目录</option>
+          {folders.map((folder) => (
+            <option key={folder} value={folder}>
+              {folder}
+            </option>
+          ))}
+        </Select>
+      ) : (
+        <Input
+          value={value}
+          autoFocus
+          aria-label={title}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && value.trim()) onConfirm(value);
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
 function NoteGrid({
   notes,
   view,
@@ -429,28 +716,12 @@ function NoteGrid({
   canWrite,
 }: {
   notes: NoteSummary[];
-  view: ViewMode;
+  /** The two card modes; the tree is its own component. */
+  view: 'list' | 'grid';
   activeId: string | null;
   onSelect: (id: string) => void | Promise<void>;
   canWrite: boolean;
 }) {
-  if (view === 'compact') {
-    return (
-      <motion.div layout className="flex flex-col gap-0.5">
-        <AnimatePresence initial={false} mode="popLayout">
-          {notes.map((note, index) => (
-            <CompactRow
-              key={note.id}
-              note={note}
-              active={note.id === activeId}
-              index={index}
-              onSelect={() => void onSelect(note.id)}
-            />
-          ))}
-        </AnimatePresence>
-      </motion.div>
-    );
-  }
   return (
     <motion.div layout className={cn('gap-2', view === 'grid' ? 'grid grid-cols-2' : 'flex flex-col')}>
       <AnimatePresence initial={false} mode="popLayout">
@@ -467,46 +738,6 @@ function NoteGrid({
         ))}
       </AnimatePresence>
     </motion.div>
-  );
-}
-
-/** Title only row, for scanning a long list quickly. */
-function CompactRow({
-  note,
-  active,
-  index,
-  onSelect,
-}: {
-  note: NoteSummary;
-  active: boolean;
-  index: number;
-  onSelect: () => void;
-}) {
-  return (
-    <motion.button
-      layout
-      type="button"
-      initial={{ opacity: 0, x: -6 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: -6, transition: { duration: 0.12 } }}
-      transition={{ duration: 0.16, delay: Math.min(index * 0.012, 0.15) }}
-      onClick={onSelect}
-      title={note.title}
-      className={cn(
-        'focus-ring flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors',
-        active
-          ? 'bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] text-[var(--text)]'
-          : 'text-[var(--muted)] hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-[var(--text)]',
-      )}
-    >
-      <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{ background: note.color ?? (active ? 'var(--accent)' : 'transparent') }}
-      />
-      {note.pinned ? <Pin className="h-3 w-3 shrink-0 fill-current text-[var(--accent)]" /> : null}
-      <span className="truncate">{note.title || '未命名笔记'}</span>
-      {note.favorite ? <Star className="ml-auto h-3 w-3 shrink-0 fill-current text-[var(--warn)]" /> : null}
-    </motion.button>
   );
 }
 

@@ -176,6 +176,12 @@ export const api = {
   restoreNote: (id: string) => request<{ note: Note }>(`/notes/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
   emptyTrash: () => request<{ ok: boolean; removed: number }>('/notes/trash/empty', { method: 'POST' }),
   tags: () => request<{ tags: TagCount[] }>('/notes/tags'),
+  renameFolder: (path: string, name: string) =>
+    request<{ ok: boolean; path: string; folders: FolderCount[] }>('/notes/folders/rename', {
+      method: 'POST',
+      body: JSON.stringify({ path, name }),
+    }),
+
   createFolder: (path: string) =>
     request<{ folder: string; folders: FolderCount[] }>('/notes/folders', {
       method: 'POST',

@@ -142,6 +142,16 @@ export function notesRoutes(services: Services): Router {
     }),
   );
 
+  router.post(
+    '/folders/rename',
+    handler(async (req, res) => {
+      const body = (req.body ?? {}) as { path?: string; name?: string };
+      const path = await services.notes.renameFolder(req.session, String(body.path ?? ''), String(body.name ?? ''));
+      log.info(`folder renamed: ${body.path} -> ${path}`);
+      res.json({ ok: true, path, folders: await services.notes.folders(req.session) });
+    }),
+  );
+
   router.delete(
     '/folders',
     handler(async (req, res) => {

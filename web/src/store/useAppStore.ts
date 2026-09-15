@@ -34,7 +34,21 @@ import type {
 
 export type Theme = 'dark' | 'light';
 export type SortKey = 'updated' | 'created' | 'title' | 'words';
-export type ViewMode = 'list' | 'grid' | 'compact';
+/**
+ * How the note list is arranged. `tree` is the only one that shows folders:
+ * the other two are flat lists of notes, because a card grid with folders
+ * mixed in reads as neither.
+ */
+export type ViewMode = 'tree' | 'list' | 'grid';
+
+/** Which fields the search box looks at. All of them unless narrowed. */
+export interface SearchScope {
+  title: boolean;
+  content: boolean;
+  tags: boolean;
+}
+
+export const DEFAULT_SEARCH_SCOPE: SearchScope = { title: true, content: true, tags: true };
 export type EditorMode = 'edit' | 'split' | 'preview';
 
 export interface Toast {
@@ -85,6 +99,10 @@ interface AppState {
   activeTag: string | null;
   activeFolder: string | null;
   favoriteOnly: boolean;
+  pinnedOnly: boolean;
+  searchScope: SearchScope;
+  setPinnedOnly: (value: boolean) => void;
+  setSearchScope: (scope: SearchScope) => void;
   sort: SortKey;
   view: ViewMode;
   editorMode: EditorMode;
@@ -174,6 +192,10 @@ interface AppState {
   refreshWallpaperUrl: () => Promise<void>;
   createFolder: (path: string) => Promise<void>;
   deleteFolder: (path: string) => Promise<void>;
+  renameFolder: (path: string, name: string) => Promise<void>;
+  /** Moves a note to another folder. An empty string means the root. */
+  moveNote: (id: string, folder: string) => Promise<void>;
+  renameNote: (id: string, title: string) => Promise<void>;
 
   setQuery: (value: string) => void;
   setActiveTag: (tag: string | null) => void;
@@ -312,8 +334,15 @@ export const appStore = createStore<AppState>((set, get) => ({
   activeTag: null,
   activeFolder: null,
   favoriteOnly: false,
+  pinnedOnly: false,
+  searchScope: { ...DEFAULT_SEARCH_SCOPE },
   sort: 'updated',
-  view: readLocal<ViewMode>(VIEW_KEY, 'list'),
+  // A stored 'compact' predates the tree view; fall back rather than render
+  // a mode that no longer exists.
+  view: (() => {
+    const stored = readLocal<ViewMode>(VIEW_KEY, 'list');
+    return stored === 'tree' || stored === 'list' || stored === 'grid' ? stored : 'list';
+  })(),
   editorMode: readLocal<EditorMode>(MODE_KEY, 'split'),
   sidebarOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1024,
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
@@ -838,6 +867,54 @@ export const appStore = createStore<AppState>((set, get) => ({
     }
   },
 
+  renameFolder: async (path, name) => {
+    try {
+      const result = await api.renameFolder(path, name);
+      set({ folders: result.folders });
+      // The old path is gone, so anything pointing at it has to follow.
+      const state = get();
+      if (state.activeFolder === path) set({ activeFolder: result.path });
+      else if (state.activeFolder?.startsWith(`${path}/`)) {
+        set({ activeFolder: `${result.path}${state.activeFolder.slice(path.length)}` });
+      }
+      await get().refreshNotes({ silent: true });
+      get().pushToast({ title: '文件夹已重命名', message: result.path, tone: 'success' });
+    } catch (err) {
+      get().pushToast({ title: '重命名失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
+  renameNote: async (id, title) => {
+    const next = title.trim();
+    if (!next) return;
+    try {
+      const { note } = await api.updateNote(id, { title: next });
+      const summary = toSummary(note);
+      set((state) => ({
+        notes: state.notes.map((n) => (n.id === id ? summary : n)),
+        activeNote: state.activeNote?.id === id ? note : state.activeNote,
+      }));
+      get().pushToast({ title: '笔记已重命名', message: next, tone: 'success' });
+    } catch (err) {
+      get().pushToast({ title: '重命名失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
+  moveNote: async (id, folder) => {
+    try {
+      const { note } = await api.updateNote(id, { folder });
+      const summary = toSummary(note);
+      set((state) => ({
+        notes: state.notes.map((n) => (n.id === id ? summary : n)),
+        activeNote: state.activeNote?.id === id ? note : state.activeNote,
+      }));
+      await get().refreshMeta();
+      get().pushToast({ title: '笔记已移动', message: folder || '根目录', tone: 'success' });
+    } catch (err) {
+      get().pushToast({ title: '移动失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
   deleteFolder: async (path) => {
     try {
       const result = await api.deleteFolder(path);
@@ -927,6 +1004,8 @@ export const appStore = createStore<AppState>((set, get) => ({
   setActiveTag: (tag) => set({ activeTag: tag }),
   setActiveFolder: (folder) => set({ activeFolder: folder }),
   setFavoriteOnly: (value) => set({ favoriteOnly: value }),
+  setPinnedOnly: (value) => set({ pinnedOnly: value }),
+  setSearchScope: (scope) => set({ searchScope: scope }),
   setSort: (sort) => set({ sort }),
   setView: (view) => {
     writeLocal(VIEW_KEY, view);

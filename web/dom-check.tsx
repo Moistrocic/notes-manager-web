@@ -881,8 +881,117 @@ console.log('\nlive scene wallpaper (jsdom)');
   appStore.setState(hold);
 }
 
-/* --- the running version is visible in the page ---------------------------- */
+/* --- the redesigned note list --------------------------------------------- */
 const { NotesPanel } = await import('./src/components/NoteList');
+
+console.log('\nnote list (jsdom)');
+{
+  const renderOnce = async (node: React.ReactElement) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(node);
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const hold = appStore.getState();
+  const note = (id: string, title: string, folder: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title,
+    tags: [],
+    pinned: false,
+    favorite: false,
+    color: null,
+    folder,
+    path: folder ? `${folder}/${id}.md` : `${id}.md`,
+    created: new Date().toISOString(),
+    updated: new Date().toISOString(),
+    excerpt: '正文内容',
+    wordCount: 4,
+    size: 10,
+    hasFrontMatter: true,
+    ...extra,
+  });
+
+  appStore.setState({
+    notes: [
+      note('a', '根目录笔记', ''),
+      note('b', '项目笔记', 'proj'),
+      note('c', '子目录笔记', 'proj/deep'),
+      note('d', '收藏笔记', 'proj', { favorite: true }),
+      note('e', '置顶笔记', '', { pinned: true }),
+    ],
+    folders: [
+      { path: 'proj', name: 'proj', count: 2, depth: 0 },
+      { path: 'proj/deep', name: 'deep', count: 1, depth: 1 },
+    ],
+    query: '',
+    activeFolder: null,
+    activeTag: null,
+    favoriteOnly: false,
+    pinnedOnly: false,
+    searchScope: { title: true, content: true, tags: true },
+    view: 'tree',
+    loadingNotes: false,
+    notesError: null,
+  });
+
+  const tree = await renderOnce(React.createElement(NotesPanel));
+
+  check('the tree shows its folders', tree.includes('proj'), true);
+  check('and the notes at the root', tree.includes('根目录笔记'), true);
+  // A collapsed folder hides its contents; that is the point of a tree.
+  check('a collapsed folder keeps its notes out of sight', tree.includes('项目笔记'), false);
+  check('with a control to make a subfolder', tree.includes('新建子文件夹'), true);
+  check('and to rename a folder', tree.includes('重命名文件夹'), true);
+  check('and to delete one, saying it can be recovered', tree.includes('移入回收站，可恢复'), true);
+  check('notes can be renamed', tree.includes('重命名笔记'), true);
+  check('moved', tree.includes('移动到文件夹'), true);
+  // Required even here: state is not a property of how the list is arranged.
+  check('and pinned or favourited from the tree too', tree.includes('取消置顶') || tree.includes('置顶'), true);
+
+  // Selecting a folder elsewhere has to make it reachable, so the path down to
+  // it unfolds on its own.
+  appStore.setState({ activeFolder: 'proj' });
+  const opened = await renderOnce(React.createElement(NotesPanel));
+  check('opening a folder shows its notes', opened.includes('项目笔记'), true);
+  check('and its nested folders', opened.includes('deep'), true);
+  check('a favourited note offers to unfavourite it', opened.includes('取消收藏'), true);
+  appStore.setState({ activeFolder: null });
+
+  // The three actions the design asks for, in order.
+  check('the panel offers exactly the three primary actions', ['新建笔记', '上传笔记（.md）', '回收站'].every((label) => tree.includes(label)), true);
+
+  // Narrowing the search must actually narrow, not just look different.
+  // Opened, so the note the query matches is actually on screen.
+  appStore.setState({ query: '收藏', activeFolder: 'proj' });
+  check('a search looks at titles by default', (await renderOnce(React.createElement(NotesPanel))).includes('收藏笔记'), true);
+  appStore.setState({ searchScope: { title: false, content: false, tags: true } });
+  const tagsOnly = await renderOnce(React.createElement(NotesPanel));
+  check('and can be aimed at tags alone', tagsOnly.includes('收藏笔记'), false);
+  check('which the panel says it is doing', tagsOnly.includes('已筛选'), true);
+  appStore.setState({ query: '', searchScope: { title: true, content: true, tags: true } });
+
+  // The tree is for navigating, so selecting a folder must not hide its siblings.
+  const focused = await renderOnce(React.createElement(NotesPanel));
+  check('selecting a folder in the tree keeps the rest of the tree', focused.includes('根目录笔记'), true);
+  check('while still marking it', focused.includes('proj'), true);
+  appStore.setState({ activeFolder: null, view: 'list' });
+  const cards = await renderOnce(React.createElement(NotesPanel));
+  check('the card modes still narrow to the folder', cards.includes('项目笔记'), true);
+
+  appStore.setState(hold);
+}
+
+/* --- the running version is visible in the page ---------------------------- */
 const { SettingsDialog } = await import('./src/components/SettingsDialog');
 const { LoginScreen } = await import('./src/components/LoginScreen');
 

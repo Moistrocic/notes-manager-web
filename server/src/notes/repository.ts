@@ -570,6 +570,41 @@ export class NotesRepository {
       .sort((a, b) => a.path.localeCompare(b.path, 'zh-Hans-CN'));
   }
 
+  /**
+   * Renames a folder in place.
+   *
+   * Only the directory entry changes. Every note's folder is derived from its
+   * path on each scan, so the contents follow the rename without being
+   * touched - which also means nested folders come along for free.
+   */
+  async renameFolder(user: SessionUser | null | undefined, folder: string, name: string): Promise<string> {
+    const storage = await this.storageManager.resolve(user);
+    const driver = storage.driver;
+    const clean = normaliseFolder(folder);
+    if (!clean) throw new StorageError('Folder name must not be empty', 400, 'invalid_folder');
+
+    // Same rules as any other entry: one path segment, no leading dot, no slash.
+    const next = normaliseFolder(name);
+    if (!next || next.includes('/')) {
+      throw new StorageError('Folder name must be a single name', 400, 'invalid_folder');
+    }
+
+    const path = `/${clean}`;
+    if (!(await driver.exists(path))) {
+      throw new StorageError('Folder not found', 404, 'folder_not_found');
+    }
+    const parent = parentPath(path);
+    const target = joinPath(parent, next);
+    if (target !== path && (await driver.exists(target))) {
+      throw new StorageError(`已存在名为 ${next} 的文件夹`, 409, 'folder_exists');
+    }
+
+    if (target !== path) await driver.rename(path, next);
+    this.invalidate(this.namespace(storage, user));
+    log.info(`renamed folder ${clean} -> ${next}`);
+    return `${parent === '/' ? '' : parent.slice(1)}/${next}`;
+  }
+
   async createFolder(user: SessionUser | null | undefined, folder: string): Promise<string> {
     const storage = await this.storageManager.resolve(user);
     const clean = normaliseFolder(folder);
