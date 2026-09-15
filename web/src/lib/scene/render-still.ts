@@ -18,7 +18,14 @@ export interface SceneStill {
   skipped: number;
 }
 
-const CACHE_PREFIX = 'scene-still:';
+/**
+ * Bumped whenever the renderer's output changes - the layer loader, the
+ * rasteriser, the vendored code. Without it a wallpaper keeps showing the frame
+ * an older build produced, which is how white boxes survived the fix that
+ * removed them.
+ */
+const RENDER_VERSION = 'v2';
+const CACHE_PREFIX = `scene-still:${RENDER_VERSION}:`;
 
 /** The browser can do this here and now? */
 export function canRenderScenes(): boolean {

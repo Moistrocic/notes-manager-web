@@ -11,6 +11,7 @@ import { useAppStore } from '../store/useAppStore';
 export function Wallpaper() {
   const wallpaper = useAppStore((s) => s.wallpaper);
   const url = useAppStore((s) => s.wallpaperUrl);
+  const pushToast = useAppStore((s) => s.pushToast);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
@@ -52,19 +53,37 @@ export function Wallpaper() {
 
     let cancelled = false;
     let player: ScenePlayer | null = null;
+
+    // A failure after the first frame used to be invisible: the worker reported
+    // it, nothing was listening, and the canvas simply froze on its last frame
+    // looking like a still. Say so instead.
+    const report = (message: string) => {
+      if (cancelled) return;
+      setFailed(true);
+      pushToast({ title: '动态场景已停止', message, tone: 'error' });
+    };
+
     void (async () => {
       try {
         const bytes = await (await fetch(url)).arrayBuffer();
         if (cancelled) return;
-        player = await playScene(canvas, bytes, { maxWidth: 1920, fps: 30 });
+        player = await playScene(canvas, bytes, { maxWidth: 1920, fps: 30, onError: report });
         if (cancelled) {
           player.stop();
           return;
         }
         playerRef.current = player;
         if (document.hidden) player.pause();
-      } catch {
-        if (!cancelled) setFailed(true);
+        const info = player.info;
+        if (info.skipped > 0) {
+          pushToast({
+            title: '动态场景已渲染',
+            message: `${info.resolved} 个图层已解析，${info.skipped} 个未能解析`,
+            tone: 'info',
+          });
+        }
+      } catch (err) {
+        report((err as Error).message);
       }
     })();
 
@@ -73,7 +92,7 @@ export function Wallpaper() {
       playerRef.current = null;
       player?.stop();
     };
-  }, [wallpaper.kind, url]);
+  }, [wallpaper.kind, url, pushToast]);
 
   // Nothing should animate in a tab nobody is looking at.
   useEffect(() => {
@@ -108,7 +127,9 @@ export function Wallpaper() {
   return (
     <div className="wallpaper-layer" aria-hidden>
       {wallpaper.kind === 'scene' ? (
-        <canvas ref={canvasRef} className="wallpaper-media" style={mediaStyle} />
+        // Keyed by url: a canvas can only be handed to a worker once, ever, so
+        // each source needs its own element.
+        <canvas key={url} ref={canvasRef} className="wallpaper-media" style={mediaStyle} />
       ) : wallpaper.kind === 'video' ? (
         <video
           ref={videoRef}

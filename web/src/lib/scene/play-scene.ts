@@ -10,7 +10,7 @@
  * continuously, which on a laptop means battery and heat.
  */
 
-import { awaitReply, getSceneWorker, nextRequestId, send } from './worker';
+import { getSceneWorker, nextRequestId, send } from './worker';
 import type { PlayRequest, PlayResponse } from './protocol';
 
 export interface ScenePlayer {
@@ -19,6 +19,8 @@ export interface ScenePlayer {
   resume(): void;
   /** What the worker reported when the first frame went up. */
   info: { width: number; height: number; resolved: number; skipped: number };
+  /** Frames drawn so far, and the error if the worker gave up. */
+  status(): { frames: number; error?: string };
 }
 
 /** Everything the live path needs beyond the still path. */
@@ -32,6 +34,11 @@ export interface PlayOptions {
   /** Cap on the render target. A background does not need native resolution. */
   maxWidth?: number;
   fps?: number;
+  /**
+   * Called when the worker gives up after the first frame. Without this the
+   * canvas would simply freeze on its last frame and look like a still.
+   */
+  onError?: (message: string) => void;
 }
 
 export async function playScene(
@@ -41,7 +48,36 @@ export async function playScene(
 ): Promise<ScenePlayer> {
   const id = nextRequestId();
   const worker = getSceneWorker();
-  const reply = awaitReply<PlayResponse>(id, worker);
+
+  let frames = 0;
+  let error: string | undefined;
+  let settled = false;
+  let stopWatching = () => {};
+
+  const first = new Promise<PlayResponse>((resolve) => {
+    const onMessage = (event: MessageEvent<PlayResponse>) => {
+      const reply = event.data;
+      if (reply?.kind !== 'play' || reply.id !== id) return;
+      if (!reply.ok) {
+        error = reply.error ?? '场景渲染失败';
+        if (!settled) {
+          settled = true;
+          resolve(reply);
+        } else {
+          options.onError?.(error);
+        }
+        stopWatching();
+        return;
+      }
+      frames = reply.frames ?? frames;
+      if (!settled) {
+        settled = true;
+        resolve(reply);
+      }
+    };
+    worker.addEventListener('message', onMessage as EventListener);
+    stopWatching = () => worker.removeEventListener('message', onMessage as EventListener);
+  });
 
   // One canvas can only be handed over once, so the caller must keep it for the
   // lifetime of the player.
@@ -56,7 +92,8 @@ export async function playScene(
   };
   send(request, [offscreen, pkgBytes]);
 
-  const response = await reply;
+  const response = await first;
+  stopWatching();
   if (!response.ok) throw new Error(response.error ?? '场景渲染失败');
 
   return {
@@ -66,6 +103,7 @@ export async function playScene(
       resolved: response.resolved ?? 0,
       skipped: response.skipped ?? 0,
     },
+    status: () => ({ frames, error }),
     stop: () => send({ kind: 'stop', id }),
     pause: () => send({ kind: 'pause', id }),
     resume: () => send({ kind: 'resume', id }),
