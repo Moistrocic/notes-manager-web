@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { cn } from '../lib/cn';
 import { extractHeadings, type Heading } from '../lib/outline';
 import { useAppStore } from '../store/useAppStore';
+import { Tooltip } from './ui/primitives';
 
 /**
  * Document outline. It shares the editor's content row so it lines up with the
@@ -25,14 +26,15 @@ export function OutlinePanel({ onNavigate }: { onNavigate: (heading: Heading, in
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--line)] px-3">
         <ListTree className="h-3.5 w-3.5 text-[var(--accent)]" />
         <span className="flex-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--faint)]">大纲</span>
-        <button
-          type="button"
-          onClick={() => toggleMeta(false)}
-          title="隐藏大纲"
-          className="focus-ring flex h-6 w-6 items-center justify-center rounded-lg text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
-        >
-          <PanelRightClose className="h-3.5 w-3.5" />
-        </button>
+        <Tooltip label="隐藏大纲" side="top">
+          <button
+            type="button"
+            onClick={() => toggleMeta(false)}
+            className="focus-ring flex h-6 w-6 items-center justify-center rounded-lg text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
       </div>
 
       <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-2 py-2">

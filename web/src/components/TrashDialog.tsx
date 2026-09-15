@@ -30,7 +30,7 @@ export function TrashDialog() {
             variant="outline"
             size="sm"
             disabled={trash.length + trashFolders.length === 0 || !canWrite}
-            title={canWrite ? '清空回收站' : '没有删除权限'}
+            hint={canWrite ? '清空回收站' : '没有删除权限'}
             onClick={() => void emptyTrash()}
             className="hover:border-[var(--danger)] hover:text-[var(--danger)]"
           >
@@ -77,7 +77,7 @@ export function TrashDialog() {
                   size="sm"
                   disabled={!canWrite}
                   aria-label={`彻底删除文件夹 ${folder.name}`}
-                  title="彻底删除（不可恢复）"
+                  hint="彻底删除（不可恢复）"
                   onClick={() => void deleteTrashFolder(folder.path)}
                   className="text-[var(--faint)] hover:text-[var(--danger)]"
                 >

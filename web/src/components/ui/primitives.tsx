@@ -39,8 +39,24 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean;
 }
 
-export function Button({ variant = 'soft', size = 'md', loading, className, children, disabled, ...rest }: ButtonProps) {
-  return (
+export function Button({
+  variant = 'soft',
+  size = 'md',
+  loading,
+  className,
+  children,
+  disabled,
+  hint,
+  ...rest
+}: ButtonProps & {
+  /**
+   * The hover label. A button's hint belongs in a Tooltip like every other one
+   * in the app; the native title attribute draws an unstyleable box that looks
+   * nothing like the rest.
+   */
+  hint?: string;
+}) {
+  const button = (
     <button
       {...rest}
       disabled={disabled || loading}
@@ -55,6 +71,7 @@ export function Button({ variant = 'soft', size = 'md', loading, className, chil
       {children}
     </button>
   );
+  return hint ? <Tooltip label={hint}>{button}</Tooltip> : button;
 }
 
 export function Spinner({ className }: { className?: string }) {

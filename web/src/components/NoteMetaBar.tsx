@@ -122,7 +122,7 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
           size="sm"
           disabled={readOnly}
           onClick={() => patchActive({ pinned: !activeNote.pinned })}
-          title="置顶"
+          hint="置顶"
         >
           <Pin className={cn('h-3.5 w-3.5', activeNote.pinned && 'fill-current')} />
           <span className="hidden sm:inline">置顶</span>
@@ -132,14 +132,14 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
           size="sm"
           disabled={readOnly}
           onClick={() => patchActive({ favorite: !activeNote.favorite })}
-          title="收藏"
+          hint="收藏"
         >
           <Star className={cn('h-3.5 w-3.5', activeNote.favorite && 'fill-current')} />
           <span className="hidden sm:inline">收藏</span>
         </Button>
 
         <div className="relative">
-          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowColors((v) => !v)} title="强调色">
+          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowColors((v) => !v)} hint="强调色">
             <Palette className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">颜色</span>
           </Button>
@@ -182,7 +182,7 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
         </div>
 
         <div className="relative">
-          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowFolders((v) => !v)} title="移动到文件夹">
+          <Button variant="ghost" size="sm" disabled={readOnly} onClick={() => setShowFolders((v) => !v)} hint="移动到文件夹">
             <FolderInput className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">移动</span>
           </Button>

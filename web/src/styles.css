@@ -206,6 +206,16 @@ body {
   overflow: hidden;
   pointer-events: none;
 }
+/* The dropdown list a <select> opens is drawn by the platform, not by us, and
+   on Windows it comes out light whatever the page looks like - so the entries
+   were white on white. These two properties are honoured by Chrome and Firefox;
+   the accent colour for the highlighted entry is left to the browser. */
+select option,
+select optgroup {
+  background-color: var(--panel-solid);
+  color: var(--text);
+}
+
 .wallpaper-media {
   /* Size and offset come from the crop rectangle, set inline by the component:
      the selection is what fills the layer. Nothing here may impose a size, or

@@ -395,10 +395,9 @@ export function Editor() {
             {group.map((item) => {
               const Icon = item.icon;
               return (
+                <Tooltip key={item.label} label={canWrite ? item.label : '没有编辑权限'} side="top">
                 <button
-                  key={item.label}
                   type="button"
-                  title={canWrite ? item.label : '没有编辑权限'}
                   disabled={!canWrite}
                   onClick={() => {
                     if (!canWrite) return;
@@ -421,6 +420,7 @@ export function Editor() {
                 >
                   <Icon className="h-4 w-4" />
                 </button>
+                </Tooltip>
               );
             })}
             {groupIndex < TOOLBAR_GROUPS.length - 1 ? <span className="mx-1 h-5 w-px bg-[var(--line)]" /> : null}
@@ -465,19 +465,21 @@ export function Editor() {
           </AnimatePresence>
 
           {editorMode === 'split' ? (
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              onPointerDown={startResize}
-              onDoubleClick={() => setSplitRatio(0.5)}
-              title="拖动调整分栏宽度，双击恢复居中"
-              className={cn(
-                'group relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors',
-                dragging ? 'bg-[var(--accent)]' : 'hover:bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]',
-              )}
-            >
-              <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--line)] group-hover:bg-transparent" />
-            </div>
+            <Tooltip label="拖动调整分栏宽度，双击恢复居中" side="top">
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整分栏宽度"
+                onPointerDown={startResize}
+                onDoubleClick={() => setSplitRatio(0.5)}
+                className={cn(
+                  'group relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors',
+                  dragging ? 'bg-[var(--accent)]' : 'hover:bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]',
+                )}
+              >
+                <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--line)] group-hover:bg-transparent" />
+              </div>
+            </Tooltip>
           ) : null}
 
           <AnimatePresence initial={false} mode="popLayout">

@@ -258,7 +258,7 @@ export function NotesPanel() {
           className="flex-1 justify-center"
           disabled={!canWrite}
           onClick={() => void createNote({ folder: activeFolder ?? undefined })}
-          title={canWrite ? '新建笔记' : (readOnlyReason ?? '没有写入权限')}
+          hint={canWrite ? '新建笔记' : (readOnlyReason ?? '没有写入权限')}
         >
           <Plus className="h-4 w-4" />
           新建笔记
@@ -331,22 +331,22 @@ export function NotesPanel() {
           {/* Where the search looks, and which notes it considers. Folded away
               by default: most searches want the defaults, but a search aimed at
               tags alone is a different question and needs asking properly. */}
-          <button
-            type="button"
-            onClick={() => setScopeOpen((open) => !open)}
-            aria-expanded={scopeOpen}
-            aria-label="搜索范围"
-            title="搜索范围与筛选"
-            className={cn(
-              'focus-ring absolute right-9 top-1/2 flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[10.5px] transition-colors',
-              scopeOpen || narrowed
-                ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                : 'text-[var(--faint)] hover:text-[var(--muted)]',
-            )}
-          >
-            <SlidersHorizontal className="h-3 w-3" />
-            {narrowed ? '已筛选' : ''}
-          </button>
+          <Tooltip label="搜索范围与筛选" side="top">
+            <button
+              type="button"
+              onClick={() => setScopeOpen((open) => !open)}
+              aria-expanded={scopeOpen}
+              className={cn(
+                'focus-ring absolute right-9 top-1/2 flex h-6 -translate-y-1/2 items-center gap-1 rounded-md px-1.5 text-[10.5px] transition-colors',
+                scopeOpen || narrowed
+                  ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                  : 'text-[var(--faint)] hover:text-[var(--muted)]',
+              )}
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              {narrowed ? '已筛选' : ''}
+            </button>
+          </Tooltip>
         </div>
 
         <AnimatePresence initial={false}>
@@ -437,27 +437,26 @@ export function NotesPanel() {
                   { mode: 'grid' as const, label: '网格视图', Icon: LayoutGrid },
                 ] as const
               ).map(({ mode, label, Icon }) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setView(mode)}
-                  className={cn(
-                    'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-                    view === mode ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
-                  )}
-                  aria-label={label}
-                  aria-pressed={view === mode}
-                  title={label}
-                >
-                  {view === mode ? (
-                    <motion.span
-                      layoutId="view-toggle"
-                      className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
-                      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                    />
-                  ) : null}
-                  <Icon className="relative h-3.5 w-3.5" />
-                </button>
+                <Tooltip key={mode} label={label} side="top">
+                  <button
+                    type="button"
+                    onClick={() => setView(mode)}
+                    className={cn(
+                      'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
+                      view === mode ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
+                    )}
+                    aria-pressed={view === mode}
+                  >
+                    {view === mode ? (
+                      <motion.span
+                        layoutId="view-toggle"
+                        className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
+                        transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                      />
+                    ) : null}
+                    <Icon className="relative h-3.5 w-3.5" />
+                  </button>
+                </Tooltip>
               ))}
             </div>
           </div>
