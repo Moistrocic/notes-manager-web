@@ -10,7 +10,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
+      # we-scene is a git submodule, so the checkout has to bring it along or
+      # the scene wallpaper code has nothing to import.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - uses: actions/setup-node@v4
         with:

@@ -310,6 +310,7 @@ server/src/notes/repository.ts
 web/src/main.tsx
 web/src/App.tsx
 web/package.json
+web/src/lib/we-scene/src/pkg/container.js
 "
 
 # verify_tree <directory> <label>
@@ -542,6 +543,20 @@ copy_application() {
   # builds or filesystems that drop the bit.
   chmod +x "$dst"/scripts/*.sh 2>/dev/null || true
 }
+
+# we-scene is a git submodule. A clone made without --recursive - which is what
+# "git clone <url>" gives you - leaves that directory empty, so fetch it before
+# the copy. verify_tree() below then checks it really arrived, because the only
+# other symptom would be a bundle error naming a module nobody recognises.
+if [ -f "$SRC_DIR/.gitmodules" ] && command -v git >/dev/null 2>&1; then
+  step "fetching git submodules"
+  if git -C "$SRC_DIR" submodule update --init --recursive >/dev/null 2>&1; then
+    ok "submodules up to date"
+  else
+    warn "could not update submodules (offline?). If the build fails on a"
+    warn "we-scene import, run: git -C $SRC_DIR submodule update --init --recursive"
+  fi
+fi
 
 step "copying the application to $INSTALL_DIR"
 copy_application "$SRC_DIR" "$INSTALL_DIR"

@@ -121,3 +121,27 @@ sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次�
 本项目**没有使用 OpenList 的代码**：不包含它的源码、不修改它、不链接也不内嵌它，
 只通过 HTTP 调用它的公开接口。仓库里的 `openlist/` 目录只是开发期用于阅读其 API 实现的
 只读参考，已被 `.gitignore` 忽略，不随本仓库分发。
+
+### 第三方项目
+
+场景壁纸（`scene.pkg`）的容器解析、纹理解码与渲染使用了
+[**we-scene**](https://github.com/wangkaxds/we-scene)（MIT 许可，著作权归其作者）。
+
+它通过 **git 子模块**引入到 `web/src/lib/we-scene`，**父仓库记录的是确切的提交**，
+所以用的是哪个版本一目了然，而不是散落一份无法追溯的复制文件：
+
+```bash
+git submodule status                       # 当前签出的提交
+git ls-tree HEAD web/src/lib/we-scene      # 本仓库钉住的提交
+```
+
+因此克隆时必须带上子模块：
+
+```bash
+git clone --recursive https://github.com/Moistrocic/notes-manager-web.git
+```
+
+已经克隆过的、或从 GitHub 下载 ZIP 的，需要补一条
+`git submodule update --init --recursive`（安装脚本会自动执行，构建时若仍缺失会直接报错说明）。
+
+本项目的其余部分均为自有实现。

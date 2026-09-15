@@ -15,11 +15,12 @@
  * page for seconds.
  */
 
-import { getEntry, parsePkg, type Pkg } from '../we-scene/pkg/container.js';
-import { renderScene } from '../we-scene/render/cpu.js';
-import { parseScene, type Scene } from '../we-scene/scene/parse.js';
+import { getEntry, parsePkg } from '../we-scene/src/pkg/container.js';
+import { renderScene } from '../we-scene/src/render/cpu.js';
+import { parseScene } from '../we-scene/src/scene/parse.js';
 import { loadSceneAssets } from './load-browser';
 import type { PlayRequest, SceneRequest, SceneResponse, StillRequest } from './protocol';
+import type { Pkg, Scene } from './we-types';
 
 interface Loop {
   id: number;
@@ -103,7 +104,7 @@ async function playScene(request: PlayRequest): Promise<void> {
 
     // Loaded on demand: this is the only thing that pulls in the WebGL renderer
     // and the HLSL translator, so nobody pays for them unless they ask.
-    const { createRenderer, makeTexture } = await import('../we-scene/render/renderer.js');
+    const { createRenderer, makeTexture } = await import('../we-scene/src/render/renderer.js');
     if (loop.stop) return;
 
     const renderer = createRenderer(canvas, {

@@ -1,0 +1,3 @@
+[submodule "web/src/lib/we-scene"]
+	path = web/src/lib/we-scene
+	url = https://github.com/wangkaxds/we-scene.git

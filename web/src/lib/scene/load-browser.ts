@@ -10,11 +10,11 @@
  * would otherwise lock up the page for seconds.
  */
 
-import { getEntry, type Pkg } from '../we-scene/pkg/container.js';
-import { decodeMip0, decodeMips, FIF, parseTex } from '../we-scene/pkg/texture.js';
-import { generateNoiseTexture } from '../we-scene/render/noise.js';
-import { resolveMaterial, type Scene } from '../we-scene/scene/parse.js';
-import type { Texture } from '../we-scene/render/cpu.js';
+import { getEntry } from '../we-scene/src/pkg/container.js';
+import { decodeMip0, decodeMips, FIF, parseTex } from '../we-scene/src/pkg/texture.js';
+import { generateNoiseTexture } from '../we-scene/src/render/noise.js';
+import { resolveMaterial } from '../we-scene/src/scene/parse.js';
+import type { Pkg, Scene, Texture } from './we-types';
 
 const WHITE: Texture = { width: 1, height: 1, rgba: new Uint8Array([255, 255, 255, 255]) };
 /** WE util/noflow: a neutral flow map, 127/255 ≈ 0.498, meaning "no displacement". */
@@ -57,14 +57,16 @@ async function decodeTexture(pkg: Pkg, name: string): Promise<Texture | null> {
     return { ...(await imageToRgba(mip.image, MIME[mip.fif] ?? 'image/png')), rg88: tex.format === 8 };
   }
 
-  const mips = decodeMips(tex);
+  const mips = decodeMips(tex) as { width: number; height: number; rgba?: Uint8Array }[];
   const first = mips[0];
-  if (!first || !('rgba' in first)) return null;
+  if (!first?.rgba) return null;
   return {
     width: first.width,
     height: first.height,
     rgba: first.rgba,
-    mips: mips.filter((m) => 'rgba' in m).map((m) => ({ width: m.width, height: m.height, rgba: (m as { rgba: Uint8Array }).rgba })),
+    mips: mips
+      .filter((m): m is { width: number; height: number; rgba: Uint8Array } => Boolean(m.rgba))
+      .map((m) => ({ width: m.width, height: m.height, rgba: m.rgba })),
     rg88: tex.format === 8,
   };
 }

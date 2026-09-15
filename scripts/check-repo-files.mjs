@@ -27,6 +27,15 @@ const SKIP_TOP = new Set(['openlist']);
 /** Local-only files that are intentionally not committed (see .gitignore). */
 const SKIP_FILES = new Set(['.npmrc', '.env', '.env.local']);
 
+/**
+ * A working tree of its own: a git submodule, or any repository nested in this
+ * one. Its files belong to the other repository and are recorded here as a
+ * single gitlink, so they are never "missing from this repo".
+ */
+function isSubmodule(dir) {
+  return fs.existsSync(path.join(dir, '.git'));
+}
+
 function walk(dir, rel = '') {
   const out = [];
   for (const entry of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
@@ -34,6 +43,12 @@ function walk(dir, rel = '') {
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       if (!rel && SKIP_TOP.has(entry.name)) continue;
+      if (isSubmodule(path.join(dir, childRel))) {
+        // Recorded by the parent as a single gitlink, so the path itself is
+        // what has to line up - its contents belong to the other repository.
+        out.push(childRel);
+        continue;
+      }
       out.push(...walk(dir, childRel));
     } else if (entry.isFile()) {
       out.push(childRel);

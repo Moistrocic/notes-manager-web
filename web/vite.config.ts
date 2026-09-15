@@ -1,6 +1,26 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+
+/**
+ * we-scene is a git submodule, so a clone made without --recursive, or a ZIP
+ * downloaded from the repository page, leaves that directory empty and every
+ * import from it unresolved. Say so plainly here instead of letting the bundler
+ * produce a wall of resolution errors.
+ */
+const WE_SCENE_ENTRY = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'src/lib/we-scene/src/pkg/container.js',
+);
+if (!fs.existsSync(WE_SCENE_ENTRY)) {
+  throw new Error(
+    `we-scene submodule is missing (${WE_SCENE_ENTRY} not found).\n` +
+      'Run:  git submodule update --init --recursive',
+  );
+}
 
 const API_TARGET = process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8080';
 

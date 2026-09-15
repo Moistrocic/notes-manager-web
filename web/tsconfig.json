@@ -10,6 +10,10 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
+    // we-scene is a submodule of plain ES modules with no types of their own.
+    // allowJs lets TypeScript read them; checkJs stays off, so their internals
+    // are inferred rather than reported on.
+    "allowJs": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
