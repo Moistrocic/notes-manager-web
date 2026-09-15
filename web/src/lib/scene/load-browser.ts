@@ -116,13 +116,30 @@ export async function loadSceneAssets(pkg: Pkg, scene: Scene): Promise<LoadedAss
       layer.visible = false;
       continue;
     }
-    if (!layer.image) continue;
+    if (!layer.image) {
+      // Nothing to draw from. Wallpaper Engine leaves such a layer transparent;
+      // the rasteriser paints it 1x1 white, which is where the clock digits and
+      // the audio card's labels were becoming white blocks. Same reasoning as
+      // every other branch here: if no texture can be supplied, do not draw it.
+      layer.visible = false;
+      continue;
+    }
     try {
       const modelEntry = getEntry(pkg, layer.image);
-      if (!modelEntry) continue; // a built-in model (util/solidlayer and friends)
+      if (!modelEntry) {
+        // A built-in model - util/solidlayer and friends. They are flat colour
+        // fills whose colour lives outside the container, so they can only be
+        // guessed at, and guessing white is what put rectangles on the picture.
+        layer.visible = false;
+        continue;
+      }
       const model = JSON.parse(utf8.decode(modelEntry).replace(/^\uFEFF/, ''));
       const material = resolveMaterial(model);
-      if (!material) continue;
+      if (!material) {
+        // No material means no texture means no picture.
+        layer.visible = false;
+        continue;
+      }
 
       const materialEntry = getEntry(pkg, material.materialPath);
       if (!materialEntry) {
