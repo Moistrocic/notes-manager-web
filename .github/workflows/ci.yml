@@ -53,10 +53,27 @@ jobs:
 
       # Pinned so CI runs exactly the version the scripts were verified with
       # (the distro package lags several releases behind).
+      #
+      # The download is retried, and the archive is tested before it is
+      # unpacked. A single CDN hiccup used to fail this step in under a second
+      # and turn an unrelated commit red, which says nothing about the scripts
+      # it is meant to be checking.
       - name: ShellCheck installer scripts
         run: |
-          curl -fsSL -o /tmp/shellcheck.tar.xz \
-            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          set -euo pipefail
+          url=https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+                -o /tmp/shellcheck.tar.xz "$url"; then
+              echo "downloaded on attempt $attempt"
+              break
+            fi
+            echo "download attempt $attempt failed"
+            sleep $((attempt * 3))
+          done
+          # -t reports a truncated download as exactly that, instead of letting
+          # tar fail with something that reads like a scripting error.
+          xz -t /tmp/shellcheck.tar.xz
           tar -xJf /tmp/shellcheck.tar.xz -C /tmp
           /tmp/shellcheck-v0.11.0/shellcheck --version
           /tmp/shellcheck-v0.11.0/shellcheck --severity=warning \
