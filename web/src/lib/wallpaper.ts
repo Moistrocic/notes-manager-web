@@ -21,6 +21,13 @@ export interface WallpaperSettings {
   dim: number;
   /** Extra zoom for cover fitting, 1 - 2. */
   scale: number;
+  /**
+   * Which part of the picture to keep when cover has to crop it, as a
+   * percentage of the leftover. 50/50 is centred; a square wallpaper on a wide
+   * screen needs this to choose its horizontal band.
+   */
+  focusX: number;
+  focusY: number;
 }
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
@@ -30,7 +37,22 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   blur: 0,
   dim: 0.35,
   scale: 1,
+  focusX: 50,
+  focusY: 50,
 };
+
+/** The nine positions most people pick from, top-left to bottom-right. */
+export const FOCUS_PRESETS: { x: number; y: number; label: string }[] = [
+  { x: 0, y: 0, label: '左上' },
+  { x: 50, y: 0, label: '上' },
+  { x: 100, y: 0, label: '右上' },
+  { x: 0, y: 50, label: '左' },
+  { x: 50, y: 50, label: '居中' },
+  { x: 100, y: 50, label: '右' },
+  { x: 0, y: 100, label: '左下' },
+  { x: 50, y: 100, label: '下' },
+  { x: 100, y: 100, label: '右下' },
+];
 
 const SETTINGS_KEY = 'notes-manager-wallpaper';
 const DB_NAME = 'notes-manager';
@@ -48,6 +70,10 @@ export function loadWallpaperSettings(): WallpaperSettings {
       blur: clamp(Number(parsed.blur ?? 0), 0, 40),
       dim: clamp(Number(parsed.dim ?? DEFAULT_WALLPAPER.dim), 0, 0.85),
       scale: clamp(Number(parsed.scale ?? 1), 1, 2),
+      // Missing on anything saved before the framing controls existed, and
+      // centred is the right default for those.
+      focusX: clamp(Number(parsed.focusX ?? 50), 0, 100),
+      focusY: clamp(Number(parsed.focusY ?? 50), 0, 100),
     };
   } catch {
     return { ...DEFAULT_WALLPAPER };

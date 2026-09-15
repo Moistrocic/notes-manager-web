@@ -448,7 +448,16 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
 
   const show = (blur: number, scale: number) =>
     appStore.setState({
-      wallpaper: { kind: 'image', source: 'url', url: 'https://cdn.example.com/a.png', blur, dim: 0.35, scale },
+      wallpaper: {
+        kind: 'image',
+        source: 'url',
+        url: 'https://cdn.example.com/a.png',
+        blur,
+        dim: 0.35,
+        scale,
+        focusX: 50,
+        focusY: 50,
+      },
       wallpaperUrl: 'https://cdn.example.com/a.png',
     });
 
@@ -465,6 +474,38 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
   check('a blurred wallpaper is blurred', /filter:\s*blur\(24px\)/.test(markup), true);
   const zoom = Number((markup.match(/scale\(([\d.]+)\)/) ?? [])[1] ?? '1');
   check('and zoomed enough to hide the faded edge', zoom > 1.1 && zoom < 1.3, true);
+
+  // Framing: a square wallpaper on a wide screen keeps a band of its height,
+  // and the focus picks which one.
+  show(0, 1);
+  appStore.setState({
+    wallpaper: {
+      kind: 'image',
+      source: 'url',
+      url: 'https://cdn.example.com/a.png',
+      blur: 0,
+      dim: 0.35,
+      scale: 1,
+      focusX: 50,
+      focusY: 50,
+    },
+  });
+  check('a centred wallpaper says so', /object-position:\s*50% 50%/.test(await render(React.createElement(Wallpaper))), true);
+  appStore.setState({
+    wallpaper: {
+      kind: 'image',
+      source: 'url',
+      url: 'https://cdn.example.com/a.png',
+      blur: 0,
+      dim: 0.35,
+      scale: 1,
+      focusX: 0,
+      focusY: 100,
+    },
+  });
+  const framed = await render(React.createElement(Wallpaper));
+  check('moving the focus moves the crop', /object-position:\s*0% 100%/.test(framed), true);
+  check('and framing alone adds no zoom', /transform:/.test(framed), false);
 
   // The user's own zoom multiplies on top of it rather than replacing it.
   show(24, 1.5);
@@ -605,7 +646,7 @@ console.log('\nappearance dialog (jsdom)');
   closeLibrary();
   appStore.setState({
     appearanceOpen: true,
-    wallpaper: { kind: 'image', source: 'library', url: '', blur: 0, dim: 0.35, scale: 1 },
+    wallpaper: { kind: 'image', source: 'library', url: '', blur: 0, dim: 0.35, scale: 1, focusX: 50, focusY: 50 },
     wallpaperUrl: null,
   });
   let markup = await renderDialog();

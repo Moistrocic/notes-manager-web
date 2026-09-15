@@ -53,6 +53,8 @@ export function Wallpaper() {
   const mediaStyle = {
     filter: wallpaper.blur > 0 ? `blur(${wallpaper.blur}px)` : undefined,
     transform: totalScale !== 1 ? `scale(${totalScale.toFixed(4)})` : undefined,
+    // Which slice of an over-tall or over-wide picture survives the crop.
+    objectPosition: `${wallpaper.focusX}% ${wallpaper.focusY}%`,
   } as CSSProperties;
 
   return (
