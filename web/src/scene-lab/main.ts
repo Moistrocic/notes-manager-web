@@ -238,7 +238,14 @@ playButton.addEventListener('click', () => {
           ticker = null;
           return;
         }
-        say(playLog, `已绘制 ${status.frames} 帧`);
+        // Two numbers, because one of them lies on its own: frames counts the
+        // loop turning, painted counts the picture actually changing.
+        say(
+          playLog,
+          `已绘制 ${status.frames} 帧 · 画面变化 ${status.painted} 次` +
+            (status.frames > 60 && status.painted === 0 ? '  ← 循环在跑但画面没变' : ''),
+          status.frames > 60 && status.painted === 0 ? 'bad' : 'plain',
+        );
       }, 2000);
     } catch (err) {
       say(playLog, `启动失败：${(err as Error).message}`, 'bad');

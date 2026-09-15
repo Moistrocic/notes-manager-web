@@ -19,8 +19,12 @@ export interface ScenePlayer {
   resume(): void;
   /** What the worker reported when the first frame went up. */
   info: { width: number; height: number; resolved: number; skipped: number };
-  /** Frames drawn so far, and the error if the worker gave up. */
-  status(): { frames: number; error?: string };
+  /**
+   * Frames drawn so far, how many times the pixels actually changed, and the
+   * error if the worker gave up. A rising frame count with a painted count of
+   * zero means the loop is turning but the picture is not.
+   */
+  status(): { frames: number; painted: number; error?: string };
 }
 
 /** Everything the live path needs beyond the still path. */
@@ -50,6 +54,7 @@ export async function playScene(
   const worker = getSceneWorker();
 
   let frames = 0;
+  let painted = 0;
   let error: string | undefined;
   let settled = false;
   let stopWatching = () => {};
@@ -70,6 +75,7 @@ export async function playScene(
         return;
       }
       frames = reply.frames ?? frames;
+      painted = reply.painted ?? painted;
       if (!settled) {
         settled = true;
         resolve(reply);
@@ -109,7 +115,7 @@ export async function playScene(
       resolved: response.resolved ?? 0,
       skipped: response.skipped ?? 0,
     },
-    status: () => ({ frames, error }),
+    status: () => ({ frames, painted, error }),
     stop: () => {
       stopWatching();
       send({ kind: 'stop', id });

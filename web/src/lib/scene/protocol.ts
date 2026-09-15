@@ -51,6 +51,15 @@ export interface PlayResponse {
   ok: boolean;
   /** Sent once the first frame is up, then every thirty frames or so. */
   frames?: number;
+  /**
+   * How many times the drawn pixels have actually changed.
+   *
+   * The frame count says the loop is turning; it does not say anything reached
+   * the canvas, and a renderer drawing the same picture every frame looks
+   * exactly like a working one from the outside. This is read back from the
+   * framebuffer, so it is the renderer's own answer to "is it moving".
+   */
+  painted?: number;
   width?: number;
   height?: number;
   resolved?: number;

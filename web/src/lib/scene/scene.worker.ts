@@ -32,6 +32,30 @@ interface Loop {
   paused: boolean;
 }
 
+/**
+ * A cheap fingerprint of what was just drawn.
+ *
+ * Read from the framebuffer with gl.readPixels rather than through the page:
+ * drawing a transferred canvas into a 2D one hands back the snapshot from the
+ * moment it was transferred, so the page cannot tell a moving scene from a
+ * still one. The renderer can.
+ */
+function fingerprint(gl: WebGL2RenderingContext, width: number, height: number): string {
+  // The whole frame, not a patch of it. A window onto the middle reports "no
+  // change" for a scene whose motion is in the corners, which is a false
+  // negative that reads exactly like the bug being looked for.
+  const pixels = new Uint8Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  // Strided: a sampled hash is as good at telling two frames apart as a
+  // complete one, and walking 8 MB a second for no reason is not free.
+  let hash = 2166136261;
+  for (let i = 0; i < pixels.length; i += 401) {
+    hash ^= pixels[i];
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 let current: Loop | null = null;
 
 function post(message: SceneResponse): void {
@@ -133,6 +157,8 @@ async function playScene(request: PlayRequest): Promise<void> {
     const started = performance.now();
     let frames = 0;
     let lastPost = started;
+    let painted = 0;
+    let lastPrint = '';
 
     const tick = async () => {
       if (loop.stop) return;
@@ -150,9 +176,17 @@ async function playScene(request: PlayRequest): Promise<void> {
         return;
       }
       frames += 1;
+
+      // Once a second at most: readPixels stalls the pipeline, and the question
+      // it answers does not need asking sixty times a second.
+      if (frameStart - lastPost > 1000) {
+        const print = fingerprint(renderer.gl, width, height);
+        if (lastPrint && print !== lastPrint) painted += 1;
+        lastPrint = print;
+      }
       if (frameStart - lastPost > 4000) {
         lastPost = frameStart;
-        post({ kind: 'play', id, ok: true, frames, width, height, resolved, skipped });
+        post({ kind: 'play', id, ok: true, frames, width, height, resolved, skipped, painted });
       }
       if (loop.stop) return;
       // Timer rather than requestAnimationFrame: workers have no rAF, and a
@@ -161,7 +195,7 @@ async function playScene(request: PlayRequest): Promise<void> {
       setTimeout(() => void tick(), Math.max(0, frameBudget - spent));
     };
 
-    post({ kind: 'play', id, ok: true, frames: 0, width, height, resolved, skipped });
+    post({ kind: 'play', id, ok: true, frames: 0, width, height, resolved, skipped, painted: 0 });
     void tick();
   } catch (err) {
     post({ kind: 'play', id, ok: false, error: (err as Error).message || String(err) });
