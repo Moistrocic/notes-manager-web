@@ -142,6 +142,14 @@ export interface FontSelection {
   mono: string;
 }
 
+/** A folder waiting in the trash, recoverable until the trash is emptied. */
+export interface TrashedFolder {
+  path: string;
+  name: string;
+  originalPath: string;
+  deletedAt: string;
+}
+
 export interface NoteCapabilities {
   driver: 'openlist' | 'local';
   root: string;

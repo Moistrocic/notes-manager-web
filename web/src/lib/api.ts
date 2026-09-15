@@ -11,6 +11,7 @@ import type {
   SystemStatus,
   TagCount,
   FolderCount,
+  TrashedFolder,
 } from './types';
 
 const BASE = (import.meta.env.BASE_URL ?? '/').replace(/\/$/, '');
@@ -166,7 +167,12 @@ export const api = {
       `/notes/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`,
       { method: 'DELETE' },
     ),
-  listTrash: () => request<{ notes: NoteSummary[] }>('/notes/trash'),
+  listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),
+  restoreTrashFolder: (path: string) =>
+    request<{ ok: boolean; path: string; folders: FolderCount[] }>('/notes/trash/folders/restore', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
   restoreNote: (id: string) => request<{ note: Note }>(`/notes/${encodeURIComponent(id)}/restore`, { method: 'POST' }),
   emptyTrash: () => request<{ ok: boolean; removed: number }>('/notes/trash/empty', { method: 'POST' }),
   tags: () => request<{ tags: TagCount[] }>('/notes/tags'),

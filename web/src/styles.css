@@ -14,8 +14,11 @@
   --line: rgba(17, 24, 45, 0.09);
   --line-strong: rgba(17, 24, 45, 0.16);
   --text: #111a30;
-  --muted: #5b6684;
-  --faint: #8b94ae;
+  /* Both were pale enough to fail contrast on the light surface - #8b94ae is
+     about 2.9:1 on white, where body text needs 4.5:1. Darkened, keeping the
+     three levels distinct rather than flattening them together. */
+  --muted: #4c5878;
+  --faint: #6b7694;
   --accent: #6d4cff;
   --accent-soft: rgba(109, 76, 255, 0.12);
   --accent-2: #0ea5e9;

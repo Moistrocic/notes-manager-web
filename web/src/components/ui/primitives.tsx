@@ -1,6 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { X } from 'lucide-react';
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react';
+import { ChevronDown, X } from 'lucide-react';
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from 'react';
 import { useEffect } from 'react';
 import { cn } from '../../lib/cn';
 
@@ -73,6 +79,35 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
         className,
       )}
     />
+  );
+}
+
+/**
+ * A dropdown.
+ *
+ * One component so every select in the app agrees on height, radius, border and
+ * colour; the arrow is ours rather than the platform's, which is what made a
+ * bare <select> look like it came from a different application.
+ */
+export function Select({
+  className,
+  containerClassName,
+  children,
+  ...rest
+}: SelectHTMLAttributes<HTMLSelectElement> & { containerClassName?: string }) {
+  return (
+    <div className={cn('relative', containerClassName)}>
+      <select
+        {...rest}
+        className={cn(
+          'focus-ring h-10 w-full cursor-pointer appearance-none rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] pl-3 pr-8 text-sm text-[var(--text)] outline-none transition-all duration-200 hover:border-[var(--line-strong)] focus:border-[var(--accent)]',
+          className,
+        )}
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--faint)]" />
+    </div>
   );
 }
 

@@ -135,7 +135,9 @@ const scenarios: Scenario[] = [
       sidebarOpen: true,
       navOpen: true,
     },
-    expect: ['笔记管理面板', '导航', '搜索笔记、标签', '全部笔记', '文件夹', 'OpenList 存储'],
+    // The storage card is gone; where notes live is a badge beside the version
+    // now, and the connection detail is in the server settings.
+    expect: ['笔记管理面板', '导航', '搜索笔记、标签', '全部笔记', '文件夹', 'OpenList'],
   },
   {
     name: 'workspace: read-only account',

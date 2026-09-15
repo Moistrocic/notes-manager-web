@@ -11,6 +11,11 @@ const log = createLogger('notes');
 
 export const TRASH_DIR = '_trash';
 /**
+ * Where trashed folders are recorded. Dot-prefixed, so every scan skips it and
+ * it never shows up as a note or a folder.
+ */
+const FOLDER_TRASH_FILE = '.trash-folders.json';
+/**
  * How deep the tree is walked. `MAX_FOLDER_DEPTH = 6` visits folders nested up
  * to five levels below the root - the previous value of 3 stopped after two
  * levels, so notes in `a/b/c/` were silently invisible.
@@ -503,6 +508,17 @@ export class NotesRepository {
       await driver.removePath(entry.path).catch(() => undefined);
       removed += 1;
     }
+
+    // Folders sit where they were, renamed, so emptying the trash has to find
+    // them through the manifest rather than by listing a directory.
+    const folders = await this.readFolderTrash(storage);
+    for (const folder of folders) {
+      // eslint-disable-next-line no-await-in-loop
+      await driver.removePath(folder.path).catch(() => undefined);
+      removed += 1;
+    }
+    if (folders.length > 0) await this.writeFolderTrash(storage, []);
+
     this.invalidate(`${this.namespace(storage, user)}:trash`);
     return removed;
   }
@@ -563,12 +579,112 @@ export class NotesRepository {
     return clean;
   }
 
-  async deleteFolder(user: SessionUser | null | undefined, folder: string): Promise<void> {
+  /**
+   * Moves a folder to the trash.
+   *
+   * The folder is renamed in place to a dotted name it can never collide with:
+   * every scan already skips dot-prefixed entries, so it leaves the tree
+   * without being moved anywhere, and no new driver primitive is needed -
+   * rename() works within a parent, which is exactly the operation required.
+   * The original path is written to a manifest at the notes root so it can be
+   * put back, and so an empty trash can find it again.
+   */
+  async deleteFolder(user: SessionUser | null | undefined, folder: string): Promise<{ trashPath: string }> {
     const storage = await this.storageManager.resolve(user);
+    const driver = storage.driver;
     const clean = normaliseFolder(folder);
     if (!clean) throw new StorageError('Folder name must not be empty', 400, 'invalid_folder');
-    await storage.driver.removePath(`/${clean}`);
+
+    const path = `/${clean}`;
+    const parent = parentPath(path);
+    const name = baseName(path);
+    const trashName = `.trashed-${slugify(name) || 'folder'}-${crypto.randomBytes(3).toString('hex')}`;
+
+    await driver.rename(path, trashName);
+    const trashPath = joinPath(parent, trashName);
+    const manifest = await this.readFolderTrash(storage);
+    manifest.push({ path: trashPath, originalPath: clean, name, deletedAt: new Date().toISOString() });
+    await this.writeFolderTrash(storage, manifest);
+
     this.invalidate(this.namespace(storage, user));
+    this.invalidate(`${this.namespace(storage, user)}:trash`);
+    log.info(`moved folder ${clean} to trash as ${trashPath}`);
+    return { trashPath };
+  }
+
+  /** Folders waiting in the trash, newest first. */
+  async listFolderTrash(
+    user: SessionUser | null | undefined,
+  ): Promise<{ path: string; name: string; originalPath: string; deletedAt: string }[]> {
+    const storage = await this.storageManager.resolve(user);
+    const manifest = await this.readFolderTrash(storage);
+    const alive: typeof manifest = [];
+    for (const entry of manifest) {
+      // A folder someone removed outside the app should not linger as a ghost.
+      // eslint-disable-next-line no-await-in-loop
+      if (await storage.driver.exists(entry.path).catch(() => false)) alive.push(entry);
+    }
+    if (alive.length !== manifest.length) await this.writeFolderTrash(storage, alive);
+    return alive.sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt));
+  }
+
+  /** Puts a trashed folder back, asking for a free name if the old one is taken. */
+  async restoreFolder(user: SessionUser | null | undefined, trashPath: string): Promise<string> {
+    const storage = await this.storageManager.resolve(user);
+    const driver = storage.driver;
+    const manifest = await this.readFolderTrash(storage);
+    const entry = manifest.find((item) => item.path === trashPath);
+    if (!entry) throw new StorageError('Folder is not in the trash', 404, 'folder_not_found');
+    if (!(await driver.exists(entry.path))) {
+      await this.writeFolderTrash(storage, manifest.filter((item) => item.path !== trashPath));
+      throw new StorageError('Folder is no longer in the trash', 404, 'folder_not_found');
+    }
+
+    const parent = parentPath(entry.path);
+    let name = slugify(entry.name) || 'folder';
+    if (await driver.exists(joinPath(parent, name))) {
+      name = `${name}-${crypto.randomBytes(2).toString('hex')}`;
+    }
+    await driver.rename(entry.path, name);
+    await this.writeFolderTrash(storage, manifest.filter((item) => item.path !== trashPath));
+
+    this.invalidate(this.namespace(storage, user));
+    this.invalidate(`${this.namespace(storage, user)}:trash`);
+    const restored = `${parent === '/' ? '' : parent.slice(1)}/${name}`;
+    log.info(`restored folder to ${restored}`);
+    return restored;
+  }
+
+  /** The folder manifest, which lives beside the notes and is dot-prefixed. */
+  private async readFolderTrash(
+    storage: ResolvedStorage,
+  ): Promise<{ path: string; name: string; originalPath: string; deletedAt: string }[]> {
+    try {
+      const raw = await storage.driver.readText(`/${FOLDER_TRASH_FILE}`);
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (item): item is { path: string; name: string; originalPath: string; deletedAt: string } =>
+          Boolean(item) && typeof (item as { path?: unknown }).path === 'string',
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeFolderTrash(
+    storage: ResolvedStorage,
+    entries: { path: string; name: string; originalPath: string; deletedAt: string }[],
+  ): Promise<void> {
+    const path = `/${FOLDER_TRASH_FILE}`;
+    if (entries.length === 0) {
+      await storage.driver.removePath(path).catch(() => undefined);
+      return;
+    }
+    await storage.driver.write(path, JSON.stringify(entries, null, 2), {
+      modified: new Date(),
+      contentType: 'application/json',
+    });
   }
 
   /** Aggregated tag list with usage counts. */

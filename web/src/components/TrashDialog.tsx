@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { RotateCcw, Trash2 } from 'lucide-react';
+import { Folder, RotateCcw, Trash2 } from 'lucide-react';
 import { relativeTime } from '../lib/format';
 import { useAppStore, useCanWrite } from '../store/useAppStore';
 import { Button, Modal } from './ui/primitives';
@@ -8,6 +8,8 @@ export function TrashDialog() {
   const open = useAppStore((s) => s.trashOpen);
   const setOpen = useAppStore((s) => s.setTrashOpen);
   const trash = useAppStore((s) => s.trash);
+  const trashFolders = useAppStore((s) => s.trashFolders);
+  const restoreTrashFolder = useAppStore((s) => s.restoreTrashFolder);
   const restoreNote = useAppStore((s) => s.restoreNote);
   const deleteNote = useAppStore((s) => s.deleteNote);
   const emptyTrash = useAppStore((s) => s.emptyTrash);
@@ -18,15 +20,15 @@ export function TrashDialog() {
       open={open}
       onClose={() => setOpen(false)}
       title="回收站"
-      subtitle="删除的笔记会移动到 OpenList 中的 _trash 目录，可随时恢复"
+      subtitle="删除的笔记会移动到 OpenList 中的 _trash 目录，文件夹则留在原处改名隐藏；两者都可以恢复"
       width="max-w-2xl"
       footer={
         <div className="flex items-center justify-between">
-          <span className="text-[11.5px] text-[var(--faint)]">{trash.length} 项</span>
+          <span className="text-[11.5px] text-[var(--faint)]">{trash.length + trashFolders.length} 项</span>
           <Button
             variant="outline"
             size="sm"
-            disabled={trash.length === 0 || !canWrite}
+            disabled={trash.length + trashFolders.length === 0 || !canWrite}
             title={canWrite ? '清空回收站' : '没有删除权限'}
             onClick={() => void emptyTrash()}
             className="hover:border-[var(--danger)] hover:text-[var(--danger)]"
@@ -37,7 +39,43 @@ export function TrashDialog() {
         </div>
       }
     >
-      {trash.length === 0 ? (
+      {trashFolders.length > 0 ? (
+        <ul className="mb-3 space-y-2">
+          <AnimatePresence initial={false}>
+            {trashFolders.map((folder) => (
+              <motion.li
+                key={folder.path}
+                layout
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="card-hover flex items-center gap-3 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
+                  <Folder className="h-4 w-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[13px] font-medium text-[var(--text)]">{folder.name}</div>
+                  <div className="truncate text-[11px] text-[var(--faint)]">
+                    文件夹 · {folder.originalPath} · {relativeTime(Date.parse(folder.deletedAt))}
+                  </div>
+                </div>
+                <Button
+                  variant="soft"
+                  size="sm"
+                  disabled={!canWrite}
+                  onClick={() => void restoreTrashFolder(folder.path)}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  恢复
+                </Button>
+              </motion.li>
+            ))}
+          </AnimatePresence>
+        </ul>
+      ) : null}
+
+      {trash.length === 0 && trashFolders.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-14 text-center">
           <div className="float-y mb-4 flex h-14 w-14 items-center justify-center rounded-3xl border border-[var(--line)] bg-[var(--panel)] text-[var(--faint)]">
             <Trash2 className="h-6 w-6" />

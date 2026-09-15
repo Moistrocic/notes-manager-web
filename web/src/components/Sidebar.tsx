@@ -21,7 +21,6 @@ import { formatNumber } from '../lib/format';
 import type { FolderCount } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
 import { Badge, Input, Tooltip } from './ui/primitives';
-import { StatusDetail, StatusPill } from './StatusPill';
 
 /**
  * Navigation, folders and tags.
@@ -311,7 +310,7 @@ function FolderBranch({
                   onClick={() => onDelete(folder.path)}
                   className="focus-ring rounded-md p-1 text-[var(--faint)] transition-colors hover:text-[var(--danger)]"
                   aria-label={`删除文件夹 ${folder.path}`}
-                  title="删除文件夹"
+                  title="删除文件夹（移入回收站，可恢复）"
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
@@ -394,19 +393,17 @@ function NavItem({
 /** Account, storage state and the app level actions. */
 export function SessionFooter() {
   const user = useAppStore((s) => s.user);
-  const status = useAppStore((s) => s.status);
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setAppearanceOpen = useAppStore((s) => s.setAppearanceOpen);
-  const refreshStatus = useAppStore((s) => s.refreshStatus);
   const logout = useAppStore((s) => s.logout);
 
   return (
     <div className="space-y-2">
-      <StatusPill status={status?.storage} onRefresh={() => void refreshStatus()} />
-      <StatusDetail status={status?.storage} />
-
+      {/* The storage card used to sit here. Where notes are kept is a badge
+          beside the version now, and the connection detail belongs with the
+          server settings rather than in the list of notes. */}
       <div className="flex items-center gap-1.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-1.5">
         <div className="flex h-7 w-7 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)]">
           {user?.openlistGuest ? <FileText className="h-3.5 w-3.5" /> : <UserRound className="h-3.5 w-3.5" />}

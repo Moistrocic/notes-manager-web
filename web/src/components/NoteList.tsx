@@ -1,8 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlignJustify,
-  ArrowDownUp,
   ChevronDown,
+  Cloud,
+  HardDrive,
   ChevronLeft,
   FileText,
   LayoutGrid,
@@ -20,7 +21,7 @@ import { cn } from '../lib/cn';
 import { relativeTime } from '../lib/format';
 import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey, type ViewMode } from '../store/useAppStore';
 import type { NoteSummary } from '../lib/types';
-import { Badge, Button, Skeleton, Tooltip } from './ui/primitives';
+import { Badge, Button, Select, Skeleton, Tooltip } from './ui/primitives';
 import { NavSections, SessionFooter } from './Sidebar';
 
 const SORTS: { value: SortKey; label: string }[] = [
@@ -60,6 +61,9 @@ export function NotesPanel() {
   const toggleNav = useAppStore((s) => s.toggleNav);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const capabilities = useAppStore((s) => s.capabilities);
+  // 'degraded' is OpenList configured but unreachable, so notes fall back to disk.
+  const storageDegraded = useAppStore((s) => Boolean(s.status?.storage?.degraded));
+  const driver = capabilities?.driver === 'openlist' ? 'openlist' : storageDegraded ? 'degraded' : 'local';
   const canWrite = useCanWrite();
   const readOnlyReason = useReadOnlyReason();
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -131,9 +135,25 @@ export function NotesPanel() {
                 {'v' + version}
               </span>
             ) : null}
+            {/* Where the notes actually live, at a glance. The connection
+                detail itself is in the server settings. */}
+            <span
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[9px] leading-none',
+                driver === 'openlist'
+                  ? 'bg-[color-mix(in_srgb,var(--success)_16%,transparent)] text-[var(--success)]'
+                  : driver === 'degraded'
+                    ? 'bg-[color-mix(in_srgb,var(--warn)_16%,transparent)] text-[var(--warn)]'
+                    : 'bg-[color-mix(in_srgb,var(--text)_8%,transparent)] text-[var(--faint)]',
+              )}
+              title={capabilities?.root}
+            >
+              {driver === 'openlist' ? <Cloud className="h-2.5 w-2.5" /> : <HardDrive className="h-2.5 w-2.5" />}
+              {driver === 'openlist' ? 'OpenList' : driver === 'degraded' ? '本地（降级）' : '本地'}
+            </span>
           </div>
           <div className="truncate text-[10px] text-[var(--faint)]">
-            {capabilities?.driver === 'openlist' ? capabilities.root : '本地磁盘'}
+            {capabilities?.root ?? '本地磁盘'}
             {capabilities && !capabilities.writable ? ' · 只读' : ''}
           </div>
         </div>
@@ -251,21 +271,19 @@ export function NotesPanel() {
           <span className="truncate text-[12px] font-medium text-[var(--muted)]">{filterLabel}</span>
           <Badge tone="neutral">{filtered.length}</Badge>
           <div className="ml-auto flex items-center gap-1">
-            <div className="relative">
-              <select
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortKey)}
-                className="focus-ring h-7 cursor-pointer appearance-none rounded-lg border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] pl-6 pr-2 text-[11.5px] text-[var(--muted)] outline-none"
-                aria-label="排序方式"
-              >
-                {SORTS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <ArrowDownUp className="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--faint)]" />
-            </div>
+            <Select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              aria-label="排序方式"
+              containerClassName="w-[104px]"
+              className="h-7 rounded-lg pl-2 pr-7 text-[11.5px] text-[var(--muted)]"
+            >
+              {SORTS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
             <div className="flex items-center gap-0.5 rounded-lg border border-[var(--line)] p-0.5">
               <button
                 type="button"

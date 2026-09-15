@@ -146,9 +146,11 @@ export function notesRoutes(services: Services): Router {
     '/folders',
     handler(async (req, res) => {
       const target = String(req.query.path ?? '');
-      await services.notes.deleteFolder(req.session, target);
-      log.info(`folder removed: ${target}`);
-      res.json({ ok: true, folders: await services.notes.folders(req.session) });
+      // Moved to the trash rather than deleted, so it can be recovered from the
+      // same place the notes go.
+      const { trashPath } = await services.notes.deleteFolder(req.session, target);
+      log.info(`folder moved to trash: ${target} -> ${trashPath}`);
+      res.json({ ok: true, trashed: true, folders: await services.notes.folders(req.session) });
     }),
   );
 
@@ -156,7 +158,28 @@ export function notesRoutes(services: Services): Router {
     '/trash',
     handler(async (req, res) => {
       const trashed = await services.notes.listTrash(req.session);
-      res.json({ notes: trashed.map(({ content: _content, ...rest }) => rest) });
+      // Folders are listed beside the notes so one dialog can show everything
+      // waiting to be restored or thrown away.
+      const folders = await services.notes.listFolderTrash(req.session);
+      res.json({
+        notes: trashed.map(({ content: _content, ...rest }) => rest),
+        folders: folders.map((folder) => ({
+          path: folder.path,
+          name: folder.name,
+          originalPath: folder.originalPath,
+          deletedAt: folder.deletedAt,
+        })),
+      });
+    }),
+  );
+
+  router.post(
+    '/trash/folders/restore',
+    handler(async (req, res) => {
+      const body = (req.body ?? {}) as { path?: string };
+      const restored = await services.notes.restoreFolder(req.session, String(body.path ?? ''));
+      log.info(`folder restored: ${restored}`);
+      res.json({ ok: true, path: restored, folders: await services.notes.folders(req.session) });
     }),
   );
 

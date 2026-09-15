@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import { availableFonts, fontExists } from '../lib/fonts';
 import { formatBytes } from '../lib/format';
 import { useAppStore } from '../store/useAppStore';
-import { Badge, Button, Field, Input } from './ui/primitives';
+import { Badge, Button, Field, Input, Select } from './ui/primitives';
 
 /**
  * Interface and code fonts.
@@ -47,10 +47,10 @@ export function FontSettings() {
     <section className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="界面字体">
-          <select
+          <Select
             value={fontExists(fonts, fontSelection.sans) ? fontSelection.sans : ''}
             onChange={(e) => void selectFonts({ sans: e.target.value })}
-            className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
+            aria-label="界面字体"
           >
             <option value="">系统默认</option>
             {optionsFor('sans').map((font) => (
@@ -59,13 +59,13 @@ export function FontSettings() {
                 {font.builtin ? '（内置）' : ''}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label="代码 / 编辑器字体">
-          <select
+          <Select
             value={fontExists(fonts, fontSelection.mono) ? fontSelection.mono : ''}
             onChange={(e) => void selectFonts({ mono: e.target.value })}
-            className="focus-ring h-10 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_70%,transparent)] px-3 text-sm text-[var(--text)] outline-none"
+            aria-label="代码或编辑器字体"
           >
             <option value="">系统默认</option>
             {optionsFor('mono').map((font) => (
@@ -74,7 +74,7 @@ export function FontSettings() {
                 {font.builtin ? '（内置）' : ''}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
       </div>
 

@@ -16,6 +16,7 @@ import { api } from '../lib/api';
 import { cn } from '../lib/cn';
 import type { AppSettingsPayload } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
+import { StatusDetail, StatusPill } from './StatusPill';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
 
 type Driver = 'auto' | 'openlist' | 'local';
@@ -27,6 +28,7 @@ export function SettingsDialog() {
   const refreshStatus = useAppStore((s) => s.refreshStatus);
   const refreshNotes = useAppStore((s) => s.refreshNotes);
   const providers = useAppStore((s) => s.providers);
+  const status = useAppStore((s) => s.status);
 
   const [payload, setPayload] = useState<AppSettingsPayload | null>(null);
   const [driver, setDriver] = useState<Driver>('auto');
@@ -153,6 +155,28 @@ export function SettingsDialog() {
           {envLocked('driver') ? (
             <p className="mt-2 text-[11px] text-[var(--warn)]">STORAGE_DRIVER 由环境变量锁定，修改此处不会生效。</p>
           ) : null}
+        </section>
+
+        {/* Live connection detail. It used to sit under the note list, where it
+            took a card's worth of room to say something you read once. */}
+        <section>
+          <SectionTitle icon={Cloud} title="当前连接" hint="服务器的实际状态" />
+          <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
+            <div className="flex items-center gap-2">
+              <StatusPill status={status?.storage} compact />
+              <button
+                type="button"
+                onClick={() => void refreshStatus()}
+                className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+                aria-label="刷新存储状态"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="mt-2">
+              <StatusDetail status={status?.storage} />
+            </div>
+          </div>
         </section>
 
         {/* OpenList */}

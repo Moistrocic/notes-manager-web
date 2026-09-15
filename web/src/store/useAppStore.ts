@@ -22,6 +22,7 @@ import type {
   FolderCount,
   FontRecord,
   FontSelection,
+  TrashedFolder,
   Note,
   NoteCapabilities,
   NoteStats,
@@ -100,6 +101,9 @@ interface AppState {
   focusRestore: { sidebarOpen: boolean; metaOpen: boolean } | null;
   theme: Theme;
   trash: NoteSummary[];
+  /** Folders in the trash, restored the same way notes are. */
+  trashFolders: TrashedFolder[];
+  restoreTrashFolder: (path: string) => Promise<void>;
   trashOpen: boolean;
   settingsOpen: boolean;
   paletteOpen: boolean;
@@ -327,6 +331,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   appearanceOpen: false,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
+  trashFolders: [],
   trashOpen: false,
   settingsOpen: false,
   paletteOpen: false,
@@ -735,8 +740,8 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   loadTrash: async () => {
     try {
-      const { notes } = await api.listTrash();
-      set({ trash: notes });
+      const { notes, folders } = await api.listTrash();
+      set({ trash: notes, trashFolders: folders ?? [] });
     } catch (err) {
       get().pushToast({ title: '无法加载回收站', message: errorMessage(err), tone: 'error' });
     }
@@ -745,7 +750,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   emptyTrash: async () => {
     try {
       const result = await api.emptyTrash();
-      set({ trash: [] });
+      set({ trash: [], trashFolders: [] });
       get().pushToast({ title: '回收站已清空', message: `删除 ${result.removed} 个文件`, tone: 'success' });
     } catch (err) {
       get().pushToast({ title: '清空失败', message: errorMessage(err), tone: 'error' });
@@ -839,7 +844,11 @@ export const appStore = createStore<AppState>((set, get) => ({
       set({ folders: result.folders });
       if (get().activeFolder === path) set({ activeFolder: null });
       await get().refreshNotes({ silent: true });
-      get().pushToast({ title: '文件夹已删除', message: path, tone: 'success' });
+      get().pushToast({
+        title: '文件夹已移入回收站',
+        message: `${path} · 可在回收站里恢复`,
+        tone: 'success',
+      });
     } catch (err) {
       get().pushToast({ title: '删除文件夹失败', message: errorMessage(err), tone: 'error' });
     }
@@ -959,6 +968,18 @@ export const appStore = createStore<AppState>((set, get) => ({
     applyTheme(theme);
     set({ theme });
   },
+  restoreTrashFolder: async (path) => {
+    try {
+      await api.restoreTrashFolder(path);
+      set((state) => ({ trashFolders: state.trashFolders.filter((f) => f.path !== path) }));
+      await get().refreshMeta();
+      await get().refreshNotes({ silent: true });
+      get().pushToast({ title: '文件夹已恢复', message: path, tone: 'success' });
+    } catch (err) {
+      get().pushToast({ title: '恢复文件夹失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
   setTrashOpen: (value) => {
     set({ trashOpen: value });
     if (value) void get().loadTrash();
