@@ -136,6 +136,9 @@ interface AppState {
   wallpaper: WallpaperSettings;
   /** The URL the background layer should load (remote URL or blob URL). */
   wallpaperUrl: string | null;
+  /** The interface colour taken from the wallpaper, when that is turned on. */
+  accent: string | null;
+  setAccent: (colour: string | null) => void;
   setWallpaper: (patch: Partial<WallpaperSettings>) => void;
   setWallpaperFile: (file: File, source?: WallpaperSource, kind?: WallpaperKind) => Promise<void>;
   clearWallpaper: () => Promise<void>;
@@ -143,6 +146,8 @@ interface AppState {
   setAppearanceOpen: (value: boolean) => void;
   closeNote: () => void;
   createNote: (input?: { title?: string; folder?: string; content?: string }) => Promise<void>;
+  /** Creates one note per uploaded .md file. Returns how many were accepted. */
+  uploadNotes: (files: File[], folder?: string) => Promise<number>;
   patchActive: (patch: NotePatch, options?: { save?: boolean }) => void;
   saveActive: (immediate?: boolean) => Promise<void>;
   deleteNote: (id: string, options?: { permanent?: boolean }) => Promise<void>;
@@ -308,6 +313,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   fontSelection: { sans: '', mono: '' },
   wallpaper: DEFAULT_WALLPAPER,
   wallpaperUrl: null,
+  accent: null,
   appearanceOpen: false,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
@@ -514,6 +520,47 @@ export const appStore = createStore<AppState>((set, get) => ({
     void get().saveActive(true);
     set({ activeId: null, activeNote: null, pendingAnchor: null, dirty: false, lastSaved: null });
     replaceLocation(null);
+  },
+
+  uploadNotes: async (files, folder) => {
+    // Only note files. A zip or an image would come back as a note containing
+    // binary noise, which is worse than refusing it.
+    const accepted = files.filter((file) => /\.(md|markdown|txt)$/i.test(file.name));
+    const rejected = files.length - accepted.length;
+    if (accepted.length === 0) {
+      get().pushToast({ title: '没有可上传的笔记', message: '只支持 .md / .markdown / .txt 文件', tone: 'error' });
+      return 0;
+    }
+
+    const target = folder ?? get().activeFolder ?? undefined;
+    let uploaded = 0;
+    const failures: string[] = [];
+    for (const file of accepted) {
+      try {
+        await api.uploadNote(file, target);
+        uploaded += 1;
+      } catch (err) {
+        failures.push(`${file.name}: ${errorMessage(err)}`);
+      }
+    }
+
+    if (uploaded > 0) await get().refreshNotes({ silent: true });
+    void get().refreshMeta();
+
+    if (failures.length > 0) {
+      get().pushToast({
+        title: `${uploaded} 篇已上传，${failures.length} 篇失败`,
+        message: failures.slice(0, 3).join('；'),
+        tone: 'error',
+      });
+    } else {
+      get().pushToast({
+        title: `已上传 ${uploaded} 篇笔记`,
+        message: rejected > 0 ? `另有 ${rejected} 个文件不是笔记，已跳过` : undefined,
+        tone: 'success',
+      });
+    }
+    return uploaded;
   },
 
   createNote: async (input) => {
@@ -820,6 +867,10 @@ export const appStore = createStore<AppState>((set, get) => ({
     const result = await api.selectFonts(selection);
     applyFonts(result.fonts, result.selection);
     set({ fonts: result.fonts, fontSelection: result.selection });
+  },
+
+  setAccent: (colour) => {
+    if (get().accent !== colour) set({ accent: colour });
   },
 
   setWallpaper: (patch) => {

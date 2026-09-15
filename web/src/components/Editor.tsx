@@ -3,6 +3,7 @@ import {
   Bold,
   Code2,
   Columns2,
+  Download,
   Eye,
   Heading1,
   Heading2,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { noteDownloadUrl } from '../lib/api';
 import { cn } from '../lib/cn';
 import { formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
@@ -319,6 +321,18 @@ export function Editor() {
           <Tooltip label={focusMode ? '退出专注模式' : '专注模式（隐藏列表与工具栏）'}>
             <Button variant="ghost" size="icon" onClick={() => toggleFocusMode()}>
               <Maximize2 className="h-4 w-4" />
+            </Button>
+          </Tooltip>
+          {/* Straight to the file the server stores, front matter and all. */}
+          <Tooltip label="下载这篇笔记（.md）">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                window.location.href = noteDownloadUrl(activeNote.id);
+              }}
+            >
+              <Download className="h-4 w-4" />
             </Button>
           </Tooltip>
           <Tooltip label={canWrite ? '删除笔记' : '没有删除权限'}>

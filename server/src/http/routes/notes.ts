@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import type { Services } from '../../services.js';
 import { createLogger } from '../../logger.js';
 import { handler, requireAuth } from '../middleware.js';
@@ -6,9 +6,40 @@ import type { NotePatch } from '../../notes/repository.js';
 
 const log = createLogger('routes:notes');
 
+/** Uploads are notes, so they are small. Generous next to a real .md file. */
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   return value.map((v) => String(v));
+}
+
+/** A file name a browser will accept, on any platform. */
+function safeFileName(raw: string): string {
+  const cleaned = raw
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  return cleaned.slice(0, 80) || 'note';
+}
+
+/**
+ * The uploaded text without a front matter block.
+ *
+ * A note's title, tags and flags live in front matter, and the repository
+ * writes its own when it saves. Keeping the uploaded block would bury one
+ * inside the other.
+ */
+function stripFrontMatter(text: string): string {
+  const match = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(text);
+  return match ? text.slice(match[0].length) : text.replace(/^\uFEFF/, '');
+}
+
+/** The first heading, which is a better title than a file name when present. */
+function firstHeading(text: string): string | null {
+  const match = /^#{1,2}\s+(.+)$/m.exec(text);
+  return match ? match[1].trim().slice(0, 120) : null;
 }
 
 export function notesRoutes(services: Services): Router {
@@ -160,6 +191,70 @@ export function notesRoutes(services: Services): Router {
         favorite: body.favorite,
         color: body.color ?? undefined,
       });
+      res.status(201).json({ note });
+    }),
+  );
+
+  /**
+   * The note as a plain .md file.
+   *
+   * Deliberately a download rather than JSON: the point is to get the file the
+   * server actually stores, front matter and all, so it can be dropped into
+   * another editor or handed to someone else.
+   */
+  router.get(
+    '/:id/download',
+    handler(async (req, res) => {
+      const note = await services.notes.get(req.session, String(req.params.id));
+      const name = `${safeFileName(note.title)}.md`;
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      // RFC 5987, so a Chinese title survives the header.
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
+      res.send(note.content);
+    }),
+  );
+
+  /**
+   * Creates a note from an uploaded file.
+   *
+   * The bytes are the body and the metadata rides in headers, the same shape the
+   * font upload uses: the client sends exactly the file, and no multipart parser
+   * is needed for one field.
+   */
+  router.post(
+    '/upload',
+    express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }),
+    handler(async (req, res) => {
+      const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (body.length === 0) {
+        res.status(400).json({ error: { message: '上传的文件是空的', code: 'empty_upload' } });
+        return;
+      }
+
+      // Header values are latin-1, so the client percent-encodes anything
+      // outside ASCII - a Chinese file name, most obviously.
+      const header = (name: string) => {
+        const value = req.get(name);
+        if (typeof value !== 'string' || !value.trim()) return '';
+        try {
+          return decodeURIComponent(value.trim());
+        } catch {
+          return value.trim();
+        }
+      };
+      const rawName = header('X-Note-Filename') || header('X-Font-Filename') || 'note.md';
+      const text = stripFrontMatter(body.toString('utf8'));
+      const title = header('X-Note-Title') || firstHeading(text) || safeFileName(rawName.replace(/\.md$/i, ''));
+      const note = await services.notes.create(req.session, {
+        title: safeFileName(title),
+        content: text,
+        folder: header('X-Note-Folder') || undefined,
+      });
+
+      log.info(`note uploaded: ${rawName} -> ${note.id}`);
       res.status(201).json({ note });
     }),
   );

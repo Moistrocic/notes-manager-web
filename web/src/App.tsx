@@ -14,6 +14,7 @@ import { TrashDialog } from './components/TrashDialog';
 import { Button } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
+import { applyAccent } from './lib/accent';
 import { cn } from './lib/cn';
 import { useAppStore } from './store/useAppStore';
 
@@ -21,8 +22,16 @@ export default function App() {
   const booted = useAppStore((s) => s.booted);
   const user = useAppStore((s) => s.user);
   const boot = useAppStore((s) => s.boot);
-  const wallpaperActive = useAppStore((s) => s.wallpaper.kind !== 'none' && Boolean(s.wallpaperUrl));
+  const wallpaper = useAppStore((s) => s.wallpaper);
+  const accent = useAppStore((s) => s.accent);
+  const wallpaperActive = wallpaper.kind !== 'none' && Boolean(useAppStore((s) => s.wallpaperUrl));
   useHotkeys();
+
+  // One place decides the interface colour: the wallpaper's own when that is
+  // turned on, the user's pick when it is off, the theme's colour otherwise.
+  useEffect(() => {
+    applyAccent(wallpaper.autoAccent ? accent : wallpaper.accentColor || null);
+  }, [wallpaper.autoAccent, wallpaper.accentColor, accent]);
 
   // Fades the aurora down while a wallpaper is showing.
   useEffect(() => {

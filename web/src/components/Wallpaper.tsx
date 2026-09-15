@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { extractAccent } from '../lib/accent';
 import { canPlayScenes, playScene, type ScenePlayer } from '../lib/scene/play-scene';
 import { cropMediaStyle } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
@@ -13,6 +14,7 @@ export function Wallpaper() {
   const wallpaper = useAppStore((s) => s.wallpaper);
   const url = useAppStore((s) => s.wallpaperUrl);
   const pushToast = useAppStore((s) => s.pushToast);
+  const setAccent = useAppStore((s) => s.setAccent);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
@@ -94,6 +96,29 @@ export function Wallpaper() {
       player?.stop();
     };
   }, [wallpaper.kind, url, pushToast]);
+
+  /**
+   * Take the interface colour from the picture.
+   *
+   * Delayed a little because a video has no frame and a live scene has no
+   * canvas content until something has been drawn; sampling immediately would
+   * read an empty buffer and give up. Failure is not an error - it means the
+   * picture came from another origin, and the theme's colour stays.
+   */
+  useEffect(() => {
+    if (wallpaper.kind === 'none' || !url || !wallpaper.autoAccent) return undefined;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      const media = document.querySelector('.wallpaper-media');
+      if (!media) return;
+      setAccent(extractAccent(media as unknown as CanvasImageSource));
+    }, 1500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [url, wallpaper.kind, wallpaper.autoAccent, setAccent]);
 
   // Nothing should animate in a tab nobody is looking at.
   useEffect(() => {

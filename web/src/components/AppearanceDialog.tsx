@@ -54,6 +54,7 @@ export function AppearanceDialog() {
   const setWallpaperFile = useAppStore((s) => s.setWallpaperFile);
   const clearWallpaper = useAppStore((s) => s.clearWallpaper);
   const pushToast = useAppStore((s) => s.pushToast);
+  const accent = useAppStore((s) => s.accent);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const folderRef = useRef<HTMLInputElement | null>(null);
@@ -421,6 +422,58 @@ export function AppearanceDialog() {
                 <p className="text-[11px] text-[var(--faint)]">选择壁纸后可以在这里框选要显示的区域。</p>
               )}
             </section>
+
+            {/* Interface colour: taken from the picture by default, because a
+                wallpaper and an accent that fight each other look like a bug. */}
+            <section className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] p-2.5">
+              <div className="min-w-0">
+                <div className="text-[12px] text-[var(--muted)]">界面颜色跟随背景</div>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                  {wallpaper.autoAccent
+                    ? '从壁纸里取一个主色当作界面强调色。取不到时（图片来自其他站点会被浏览器拦住）用主题自带颜色。'
+                    : '已关闭，使用下面选定的颜色。'}
+                </p>
+              </div>
+              <Switch
+                checked={wallpaper.autoAccent}
+                onChange={(value) => setWallpaper({ autoAccent: value })}
+                className="mt-0.5 shrink-0"
+              />
+            </section>
+
+            {wallpaper.autoAccent ? (
+              <div className="flex items-center gap-2 px-1 text-[11px] text-[var(--faint)]">
+                <span>当前取色</span>
+                <span
+                  className="h-4 w-4 rounded-full border border-[var(--line)]"
+                  style={{ background: accent ?? 'var(--accent)' }}
+                />
+                <span className="font-mono">{accent ?? '主题默认'}</span>
+              </div>
+            ) : (
+              <section className="flex items-center gap-3 rounded-2xl border border-[var(--line)] p-2.5">
+                <span className="text-[12px] text-[var(--muted)]">界面颜色</span>
+                <input
+                  type="color"
+                  aria-label="界面颜色"
+                  value={wallpaper.accentColor || '#6d4cff'}
+                  onChange={(e) => setWallpaper({ accentColor: e.target.value })}
+                  className="h-8 w-12 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
+                />
+                <span className="font-mono text-[11px] text-[var(--faint)]">
+                  {wallpaper.accentColor || '主题默认'}
+                </span>
+                {wallpaper.accentColor ? (
+                  <button
+                    type="button"
+                    onClick={() => setWallpaper({ accentColor: '' })}
+                    className="focus-ring ml-auto rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  >
+                    恢复主题色
+                  </button>
+                ) : null}
+              </section>
+            )}
 
             <div className="flex items-center gap-2.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3">
               <div className="h-14 w-24 shrink-0 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)]">

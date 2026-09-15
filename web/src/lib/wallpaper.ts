@@ -54,6 +54,10 @@ export interface WallpaperSettings {
    * GPU context and draws continuously.
    */
   dynamicScene: boolean;
+  /** Take the interface colour from the wallpaper. On unless turned off. */
+  autoAccent: boolean;
+  /** The colour to use when autoAccent is off. Empty means the theme's own. */
+  accentColor: string;
 }
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
@@ -64,6 +68,8 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   dim: 0.35,
   crop: { ...FULL_CROP },
   dynamicScene: false,
+  autoAccent: true,
+  accentColor: '',
 };
 
 /**
@@ -141,6 +147,8 @@ export function loadWallpaperSettings(): WallpaperSettings {
       dim: clamp(Number(parsed.dim ?? DEFAULT_WALLPAPER.dim), 0, 0.85),
       crop: readCrop(parsed as Record<string, unknown>),
       dynamicScene: parsed.dynamicScene === true,
+      autoAccent: parsed.autoAccent !== false,
+      accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : '',
     };
   } catch {
     return { ...DEFAULT_WALLPAPER };

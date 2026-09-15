@@ -49,6 +49,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (payload ?? {}) as T;
 }
 
+/**
+ * Where the browser should fetch a note's .md file from.
+ *
+ * A plain URL rather than a fetch: the response carries Content-Disposition, so
+ * navigating to it lets the browser do the saving, with the file name the server
+ * chose. The session cookie rides along because it is same-origin.
+ */
+export function noteDownloadUrl(id: string): string {
+  return `${API_ROOT}/notes/${encodeURIComponent(id)}/download`;
+}
+
 export const api = {
   /* ------------------------------- auth -------------------------------- */
   providers: () => request<AuthProviders>('/auth/providers'),
@@ -129,6 +140,23 @@ export const api = {
     return request<NotesPayload>(`/notes${qs ? `?${qs}` : ''}`);
   },
   getNote: (id: string) => request<{ note: Note }>(`/notes/${encodeURIComponent(id)}`),
+  /**
+   * Creates a note from an uploaded .md file.
+   *
+   * Header values are latin-1, so the names are percent-encoded; the server
+   * decodes them. Only note files are accepted, by extension and size.
+   */
+  uploadNote: (file: File, folder?: string) =>
+    request<{ note: Note }>('/notes/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'X-Note-Filename': encodeURIComponent(file.name),
+        ...(folder ? { 'X-Note-Folder': encodeURIComponent(folder) } : {}),
+      },
+      body: file,
+    }),
+
   createNote: (input: { title?: string; content?: string; tags?: string[]; folder?: string }) =>
     request<{ note: Note }>('/notes', { method: 'POST', body: JSON.stringify(input) }),
   updateNote: (id: string, patch: Record<string, unknown>) =>

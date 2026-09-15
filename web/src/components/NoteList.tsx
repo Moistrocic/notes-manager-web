@@ -10,6 +10,7 @@ import {
   Pin,
   Plus,
   Search,
+  Upload,
   Sparkles,
   Star,
   X,
@@ -42,6 +43,7 @@ export function NotesPanel() {
   const activeId = useAppStore((s) => s.activeId);
   const selectNote = useAppStore((s) => s.selectNote);
   const createNote = useAppStore((s) => s.createNote);
+  const uploadNotes = useAppStore((s) => s.uploadNotes);
   const query = useAppStore((s) => s.query);
   const setQuery = useAppStore((s) => s.setQuery);
   const sort = useAppStore((s) => s.sort);
@@ -61,6 +63,7 @@ export function NotesPanel() {
   const canWrite = useCanWrite();
   const readOnlyReason = useReadOnlyReason();
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const uploadRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -153,6 +156,31 @@ export function NotesPanel() {
           <Plus className="h-4 w-4" />
           新建笔记
         </Button>
+
+        {/* Upload: one note per .md file, into the folder currently open. */}
+        <input
+          ref={uploadRef}
+          type="file"
+          multiple
+          accept=".md,.markdown,.txt,text/markdown"
+          className="hidden"
+          onChange={(e) => {
+            const chosen = Array.from(e.target.files ?? []);
+            if (chosen.length > 0) void uploadNotes(chosen, activeFolder ?? undefined);
+            if (uploadRef.current) uploadRef.current.value = '';
+          }}
+        />
+        <Tooltip label="上传笔记（.md）">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-10 w-10"
+            disabled={!canWrite}
+            onClick={() => uploadRef.current?.click()}
+          >
+            <Upload className="h-4 w-4" />
+          </Button>
+        </Tooltip>
         <button
           type="button"
           onClick={() => toggleNav()}

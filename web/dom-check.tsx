@@ -478,6 +478,8 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
         dim: 0.35,
         crop,
         dynamicScene: false,
+        autoAccent: true,
+        accentColor: '',
       },
       wallpaperUrl: 'https://cdn.example.com/a.png',
     });
@@ -663,6 +665,8 @@ console.log('\nappearance dialog (jsdom)');
       dim: 0.35,
       crop: { x: 0, y: 0, w: 1, h: 1 },
       dynamicScene: false,
+      autoAccent: true,
+      accentColor: '',
     },
     wallpaperUrl: null,
   });
@@ -694,6 +698,52 @@ console.log('\nappearance dialog (jsdom)');
   appStore.setState(hold);
   closeLibrary();
   void entry;
+}
+
+/* --- the interface colour taken from the wallpaper ------------------------- */
+const { applyAccent, extractAccent } = await import('./src/lib/accent');
+
+console.log('\nwallpaper accent (jsdom)');
+{
+  // No 2D context here for real, which is exactly the cross-origin case: the
+  // colour must be given up on rather than guessed.
+  check('an unreadable picture yields no colour', extractAccent({} as CanvasImageSource), null);
+
+  // Stand in a context so the selection itself can be checked: a big washed out
+  // grey field and a small vivid red block. The red has to win on saturation,
+  // not on area.
+  const SAMPLE = 48;
+  const pixels = new Uint8ClampedArray(SAMPLE * SAMPLE * 4);
+  for (let i = 0; i < SAMPLE * SAMPLE; i += 1) {
+    const inBlock = i % SAMPLE < 10 && Math.floor(i / SAMPLE) < 10;
+    pixels[i * 4] = inBlock ? 220 : 130;
+    pixels[i * 4 + 1] = inBlock ? 30 : 130;
+    pixels[i * 4 + 2] = inBlock ? 40 : 132;
+    pixels[i * 4 + 3] = 255;
+  }
+  const proto = w.HTMLCanvasElement.prototype as unknown as Record<string, unknown>;
+  const original = proto.getContext;
+  proto.getContext = () => ({ drawImage() {}, getImageData: () => ({ data: pixels }) });
+
+  const picked = extractAccent({} as CanvasImageSource);
+  check('a picture yields a colour', typeof picked, 'string');
+  check('and it is the vivid hue, not the grey', /^#[0-9a-f]{6}$/.test(picked ?? ''), true);
+  const [r, g, b] = [1, 3, 5].map((i) => Number.parseInt((picked ?? '#000000').slice(i, i + 2), 16));
+  check('which is red, the colour of the block', r > g + 40 && r > b + 40, true);
+
+  proto.getContext = original;
+
+  // Applying is one style element and two variables, and removing it puts the
+  // theme back.
+  applyAccent('#ff8800');
+  const style = document.getElementById('wallpaper-accent');
+  check('the accent is written as a style element', Boolean(style), true);
+  check('carrying the colour', style?.textContent?.includes('#ff8800'), true);
+  check('and a matching soft variant', style?.textContent?.includes('--accent-soft'), true);
+  applyAccent(null);
+  check('clearing it removes the element', document.getElementById('wallpaper-accent'), null);
+
+  applyAccent(null);
 }
 
 /* --- a live scene wallpaper draws into a canvas ---------------------------- */
