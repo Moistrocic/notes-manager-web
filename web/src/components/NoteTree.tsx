@@ -9,6 +9,7 @@ import { Tooltip } from './ui/primitives';
 export interface NoteTreeActions {
   onSelectFolder: (path: string) => void;
   onSelectNote: (id: string) => void;
+  /** Opens the naming prompt; an empty path means the notes root. */
   onCreateChild: (path: string) => void;
   onRenameFolder: (path: string) => void;
   onDeleteFolder: (path: string) => void;
@@ -105,7 +106,10 @@ export function NoteTree({
           <Row
             depth={depth}
             active={active}
-            onClick={() => actions.onSelectFolder(folder.path)}
+            // Opens and closes. Selecting the folder is not this row's job:
+            // filtering the list to one of its own branches is what the tree
+            // exists to avoid.
+            onClick={() => toggle(folder.path)}
             leading={
               <button
                 type="button"
@@ -114,9 +118,12 @@ export function NoteTree({
                   e.stopPropagation();
                   toggle(folder.path);
                 }}
+                // pointer-events-auto because the whole label area is
+                // pointer-events-none: without it this button never receives
+                // the click and a folder could only ever be opened, never shut.
                 className={cn(
-                  'focus-ring -ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-transform',
-                  kids.length === 0 && own.length === 0 && 'pointer-events-none opacity-0',
+                  'focus-ring pointer-events-auto -ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-transform',
+                  kids.length === 0 && own.length === 0 && 'invisible',
                   expanded && 'rotate-90',
                 )}
               >
@@ -219,6 +226,16 @@ export function NoteTree({
 
   return (
     <div className="space-y-0.5 px-2">
+      {/* Folders can be made at the top level too, not only inside another. */}
+      <button
+        type="button"
+        onClick={() => actions.onCreateChild('')}
+        disabled={!canWrite}
+        className="focus-ring mb-1 flex w-full items-center gap-1.5 rounded-xl px-2 py-1.5 text-[11.5px] text-[var(--faint)] transition-colors hover:text-[var(--accent)] disabled:opacity-40"
+      >
+        <FolderPlus className="h-3.5 w-3.5" />
+        在根目录新建文件夹
+      </button>
       {renderFolders('', 0)}
       {rootNotes.map((note) => renderNote(note, 0))}
       {roots.length === 0 && rootNotes.length === 0 ? (
@@ -266,11 +283,13 @@ function Row({
         aria-label={label}
         aria-current={active || undefined}
       />
-      {/* Everything is pointer-events-none except the hover actions, so the
-          row stays one big click target. */}
       <span className="pointer-events-none relative flex min-w-0 flex-1 items-center gap-1.5">
         {leading}
         {icon}
+        {/* No right-hand gutter reserved here. The actions float over the row
+            instead, so a title is shown whole until the pointer is actually on
+            it - which is when the buttons become worth more than the last few
+            characters. */}
         <span className={cn('truncate', active && 'font-medium')}>{label}</span>
         {marked}
         {sub ? <span className="shrink-0 text-[10px] text-[var(--faint)]">{sub}</span> : null}
@@ -280,7 +299,7 @@ function Row({
           </span>
         ) : null}
       </span>
-      <span className="relative flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
+      <span className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-[var(--panel-solid)] px-0.5 opacity-0 shadow-soft transition-opacity group-hover/row:opacity-100 focus-within:opacity-100">
         {actions}
       </span>
     </div>

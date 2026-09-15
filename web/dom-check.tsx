@@ -563,8 +563,12 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
   const stillCovering = await render(React.createElement(Wallpaper));
   check('a kept selection stays on screen', /left:\s*-16.66/.test(stillCovering), true);
 
-  // The four footer buttons sit on an edge the panel clips, so their labels
-  // have to open upward or they are cut in half.
+  // The four footer buttons sit on an edge the panel clips. Labels used to be
+  // absolutely positioned inside their trigger and needed a per-call-site
+  // "open upward" flag to survive it; they are rendered into the body now, so
+  // there is nothing left to clip and no flag to remember. What still has to
+  // hold is that each control carries its own name, since the bubble itself
+  // only exists while hovered.
   appStore.setState({
     user: {
       id: 'u1',
@@ -576,10 +580,9 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
     } as never,
   });
   const footer = await render(React.createElement(SessionFooter));
-  const upward = (footer.match(/bottom-\[calc\(100%\+6px\)\]/g) ?? []).length;
-  const downward = (footer.match(/top-\[calc\(100%\+6px\)\]/g) ?? []).length;
-  check('every footer label opens upward', upward, 4);
-  check('none of them opens downward into the clipped edge', downward, 0);
+  check('no footer label is nested where it could be clipped', /role="tooltip"/.test(footer), false);
+  const named = (footer.match(/aria-label="/g) ?? []).length;
+  check('every footer control still carries its own name', named >= 4, true);
 
   appStore.setState(hold);
 }
@@ -970,6 +973,15 @@ console.log('\nnote list (jsdom)');
   // The three actions the design asks for, in order.
   check('the panel offers exactly the three primary actions', ['新建笔记', '上传笔记（.md）', '回收站'].every((label) => tree.includes(label)), true);
 
+  // The expander has to be clickable: the label area around it is
+  // pointer-events-none, and without this a folder could only ever open.
+  check('the folder expander can actually be clicked', /focus-ring pointer-events-auto[^"]*"[^>]*aria-label="展开"/.test(tree) || (tree.includes('pointer-events-auto') && tree.includes('aria-label="展开"')), true);
+  check('a folder can be made at the root', tree.includes('在根目录新建文件夹'), true);
+
+  // Clicking a folder opens it rather than filtering to it - asserted through
+  // the absence of the filter chip, which selecting a folder used to raise.
+  check('a folder row does not select or filter', tree.includes('清除筛选'), false);
+
   // Narrowing the search must actually narrow, not just look different.
   // Opened, so the note the query matches is actually on screen.
   appStore.setState({ query: '收藏', activeFolder: 'proj' });
@@ -989,6 +1001,47 @@ console.log('\nnote list (jsdom)');
   check('the card modes still narrow to the folder', cards.includes('项目笔记'), true);
 
   appStore.setState(hold);
+}
+
+/* --- asking for a name before making a folder ------------------------------ */
+console.log('\nfolder prompts (jsdom)');
+{
+  const { PromptDialog } = await import('./src/components/NoteList');
+  const renderPrompt = async (state: unknown) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(
+        React.createElement(PromptDialog, {
+          state: state as never,
+          folders: ['proj', 'proj/deep'],
+          onClose: () => undefined,
+          onConfirm: () => undefined,
+        }),
+      );
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  // Creating used to invent a name and make the folder in one go, which left a
+  // folder called 新文件夹 to be renamed straight afterwards.
+  const root = await renderPrompt({ kind: 'newFolder', parent: '', value: '新文件夹' });
+  check('making a folder asks for its name', root.includes('新建文件夹'), true);
+  check('and says where it will go', root.includes('在根目录下'), true);
+  check('with the name in a field', root.includes('<input'), true);
+
+  const nested = await renderPrompt({ kind: 'newFolder', parent: 'proj', value: '新文件夹' });
+  check('a nested one names its parent', nested.includes('在 proj 下'), true);
+
+  const move = await renderPrompt({ kind: 'moveNote', id: 'a', value: 'proj' });
+  check('moving picks from the folders', move.includes('移动笔记') && move.includes('proj/deep'), true);
 }
 
 /* --- the running version is visible in the page ---------------------------- */

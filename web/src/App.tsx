@@ -227,7 +227,9 @@ function Workspace() {
       </AnimatePresence>
 
       {/* Always available way back to the list - the button in the editor header
-          only exists while a note is open. */}
+          only exists while a note is open. Anchored bottom-left rather than
+          top-left: the top-left corner is where the first card's title sits, and
+          a floating pill there covered it. */}
       {!sidebarOpen && !focusMode ? (
         <motion.button
           type="button"
@@ -236,7 +238,7 @@ function Workspace() {
           exit={{ opacity: 0, x: -14 }}
           onClick={() => toggleSidebar(true)}
           title="显示笔记列表"
-          className="glass focus-ring fixed left-4 top-4 z-30 flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] font-medium shadow-strong"
+          className="glass focus-ring fixed bottom-4 left-4 z-30 flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] font-medium shadow-strong"
         >
           <PanelLeftOpen className="h-4 w-4" />
           显示列表

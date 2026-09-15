@@ -10,6 +10,7 @@ export function TrashDialog() {
   const trash = useAppStore((s) => s.trash);
   const trashFolders = useAppStore((s) => s.trashFolders);
   const restoreTrashFolder = useAppStore((s) => s.restoreTrashFolder);
+  const deleteTrashFolder = useAppStore((s) => s.deleteTrashFolder);
   const restoreNote = useAppStore((s) => s.restoreNote);
   const deleteNote = useAppStore((s) => s.deleteNote);
   const emptyTrash = useAppStore((s) => s.emptyTrash);
@@ -68,6 +69,19 @@ export function TrashDialog() {
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   恢复
+                </Button>
+                {/* A folder in the trash has to be disposable too, or it can
+                    only ever come back. */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!canWrite}
+                  aria-label={`彻底删除文件夹 ${folder.name}`}
+                  title="彻底删除（不可恢复）"
+                  onClick={() => void deleteTrashFolder(folder.path)}
+                  className="text-[var(--faint)] hover:text-[var(--danger)]"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </motion.li>
             ))}

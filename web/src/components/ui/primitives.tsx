@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronDown, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
@@ -7,7 +8,7 @@ import type {
   SelectHTMLAttributes,
   TextareaHTMLAttributes,
 } from 'react';
-import { useEffect } from 'react';
+import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactElement } from 'react';
 import { cn } from '../../lib/cn';
 
 /* ------------------------------------------------------------------ */
@@ -341,6 +342,15 @@ export function Badge({
  * clipped by that panel (and by the bottom of the window). Rows that sit
  * against such an edge ask for "top" instead.
  */
+/**
+ * A label that appears on hover.
+ *
+ * Rendered into the document body and positioned from the trigger's own
+ * rectangle. An absolutely positioned bubble inside the trigger cannot escape
+ * an ancestor with overflow hidden - which is what an expanding folder row is -
+ * so tooltips in the note tree were being cut off by the very container they
+ * were describing.
+ */
 export function Tooltip({
   label,
   children,
@@ -350,17 +360,51 @@ export function Tooltip({
   children: ReactNode;
   side?: 'top' | 'bottom';
 }) {
+  const anchor = useRef<HTMLSpanElement | null>(null);
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+
+  const show = () => {
+    const rect = anchor.current?.getBoundingClientRect();
+    if (!rect) return;
+    setAt({
+      left: rect.left + rect.width / 2,
+      top: side === 'top' ? rect.top - 6 : rect.bottom + 6,
+    });
+  };
+
+  // A tooltip is decoration; the control it describes still needs a name of its
+  // own, or it has none at all to a screen reader - and none in the markup once
+  // the bubble only exists while hovered. Supplied here so every call site gets
+  // it without having to remember.
+  const named =
+    isValidElement(children) && (children.props as { 'aria-label'?: string })['aria-label'] === undefined
+      ? cloneElement(children as ReactElement<{ 'aria-label'?: string }>, { 'aria-label': label })
+      : children;
+
   return (
-    <span className="group/tip relative inline-flex">
-      {children}
-      <span
-        className={cn(
-          'pointer-events-none absolute left-1/2 z-40 -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-lg border border-[var(--line)] bg-[var(--elevated)] px-2 py-1 text-[11.5px] text-[var(--muted)] opacity-0 shadow-soft transition-all duration-150 group-hover/tip:translate-y-0 group-hover/tip:opacity-100',
-          side === 'top' ? 'bottom-[calc(100%+6px)]' : 'top-[calc(100%+6px)]',
-        )}
-      >
-        {label}
-      </span>
+    <span
+      ref={anchor}
+      className="relative inline-flex"
+      onPointerEnter={show}
+      onPointerLeave={() => setAt(null)}
+      onPointerDown={() => setAt(null)}
+    >
+      {named}
+      {at && typeof document !== 'undefined'
+        ? createPortal(
+            <span
+              role="tooltip"
+              style={{ left: at.left, top: at.top }}
+              className={cn(
+                'pointer-events-none fixed z-[60] -translate-x-1/2 whitespace-nowrap rounded-lg border border-[var(--line)] bg-[var(--elevated)] px-2 py-1 text-[11.5px] text-[var(--muted)] shadow-soft',
+                side === 'top' ? '-translate-y-full' : '',
+              )}
+            >
+              {label}
+            </span>,
+            document.body,
+          )
+        : null}
     </span>
   );
 }

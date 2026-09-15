@@ -183,6 +183,16 @@ export function notesRoutes(services: Services): Router {
     }),
   );
 
+  router.delete(
+    '/trash/folders',
+    handler(async (req, res) => {
+      const target = String(req.query.path ?? '');
+      await services.notes.purgeTrashedFolder(req.session, target);
+      log.info(`trashed folder purged: ${target}`);
+      res.json({ ok: true });
+    }),
+  );
+
   router.post(
     '/trash/folders/restore',
     handler(async (req, res) => {

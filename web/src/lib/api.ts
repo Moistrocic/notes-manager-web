@@ -168,6 +168,9 @@ export const api = {
       { method: 'DELETE' },
     ),
   listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),
+  deleteTrashFolder: (path: string) =>
+    request<{ ok: boolean }>(`/notes/trash/folders?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
+
   restoreTrashFolder: (path: string) =>
     request<{ ok: boolean; path: string; folders: FolderCount[] }>('/notes/trash/folders/restore', {
       method: 'POST',

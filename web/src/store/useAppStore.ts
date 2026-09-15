@@ -122,6 +122,7 @@ interface AppState {
   /** Folders in the trash, restored the same way notes are. */
   trashFolders: TrashedFolder[];
   restoreTrashFolder: (path: string) => Promise<void>;
+  deleteTrashFolder: (path: string) => Promise<void>;
   trashOpen: boolean;
   settingsOpen: boolean;
   paletteOpen: boolean;
@@ -1056,6 +1057,16 @@ export const appStore = createStore<AppState>((set, get) => ({
       get().pushToast({ title: '文件夹已恢复', message: path, tone: 'success' });
     } catch (err) {
       get().pushToast({ title: '恢复文件夹失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
+  deleteTrashFolder: async (path) => {
+    try {
+      await api.deleteTrashFolder(path);
+      set((state) => ({ trashFolders: state.trashFolders.filter((f) => f.path !== path) }));
+      get().pushToast({ title: '文件夹已彻底删除', message: path, tone: 'success' });
+    } catch (err) {
+      get().pushToast({ title: '删除失败', message: errorMessage(err), tone: 'error' });
     }
   },
 

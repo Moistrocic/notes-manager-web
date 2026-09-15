@@ -663,6 +663,21 @@ export class NotesRepository {
     return alive.sort((a, b) => Date.parse(b.deletedAt) - Date.parse(a.deletedAt));
   }
 
+  /** Removes one trashed folder for good. */
+  async purgeTrashedFolder(user: SessionUser | null | undefined, trashPath: string): Promise<void> {
+    const storage = await this.storageManager.resolve(user);
+    const manifest = await this.readFolderTrash(storage);
+    const entry = manifest.find((item) => item.path === trashPath);
+    if (!entry) throw new StorageError('Folder is not in the trash', 404, 'folder_not_found');
+    await storage.driver.removePath(entry.path).catch(() => undefined);
+    await this.writeFolderTrash(
+      storage,
+      manifest.filter((item) => item.path !== trashPath),
+    );
+    this.invalidate(`${this.namespace(storage, user)}:trash`);
+    log.info(`purged trashed folder ${entry.path}`);
+  }
+
   /** Puts a trashed folder back, asking for a free name if the old one is taken. */
   async restoreFolder(user: SessionUser | null | undefined, trashPath: string): Promise<string> {
     const storage = await this.storageManager.resolve(user);

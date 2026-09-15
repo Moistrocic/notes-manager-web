@@ -2,7 +2,6 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   Cloud,
   HardDrive,
-  Layers,
   ChevronLeft,
   FileText,
   LayoutGrid,
@@ -24,7 +23,7 @@ import type { NoteSummary } from '../lib/types';
 import { DEFAULT_SEARCH_SCOPE } from '../store/useAppStore';
 import { NoteTree } from './NoteTree';
 import { Badge, Button, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
-import { NavSections, SessionFooter } from './Sidebar';
+import { SessionFooter } from './Sidebar';
 
 const SORTS: { value: SortKey; label: string }[] = [
   { value: 'updated', label: '最近更新' },
@@ -45,34 +44,45 @@ const SORTS: { value: SortKey; label: string }[] = [
  * about that; these are drawn to look like the cards they switch to.
  */
 function CardsIcon({ className }: { className?: string }) {
+  const width = 9;
+  const height = 3.4;
+  const depth = 1.4;
   return (
     <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
-      {[0, 5.5, 11].map((x) => (
-        <g key={x}>
-          <rect x={x + 0.5} y={4} width={4} height={8.5} rx={0.6} stroke="currentColor" strokeWidth={1.1} />
-          <path d={`M${x + 0.5} 4 L${x + 2} 2.6 L${x + 6} 2.6 L${x + 4.5} 4`} stroke="currentColor" strokeWidth={1.1} strokeLinejoin="round" />
-          <path d={`M${x + 4.5} 4 L${x + 6} 2.6 L${x + 6} 11 L${x + 4.5} 12.5`} stroke="currentColor" strokeWidth={1.1} strokeLinejoin="round" />
-        </g>
-      ))}
+      {[2.2, 6.6, 11].map((y) => {
+        const x = (16 - width) / 2;
+        return (
+          <g key={y}>
+            <rect x={x} y={y} width={width} height={height} rx={0.6} stroke="currentColor" strokeWidth={1.1} />
+            <path
+              d={`M${x} ${y} L${x + depth} ${y - depth} L${x + width + depth} ${y - depth} L${x + width} ${y}`}
+              stroke="currentColor"
+              strokeWidth={1.1}
+              strokeLinejoin="round"
+            />
+            <path
+              d={`M${x + width} ${y} L${x + width + depth} ${y - depth} L${x + width + depth} ${y + height - depth} L${x + width} ${y + height}`}
+              stroke="currentColor"
+              strokeWidth={1.1}
+              strokeLinejoin="round"
+            />
+          </g>
+        );
+      })}
     </svg>
   );
 }
 
-/** A folder with the levels below it - what the tree mode actually shows. */
+/** Three bullets and their lines - the shape of an outline. */
 function TreeIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
-      <path
-        d="M2.2 3.4a1 1 0 0 1 1-1h2l1.2 1.4h5.4a1 1 0 0 1 1 1v1.4"
-        stroke="currentColor"
-        strokeWidth={1.2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M6 8.2v-1h8" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" />
-      <rect x={1} y={3.2} width={6} height={4.4} rx={0.9} stroke="currentColor" strokeWidth={1.2} />
-      <rect x={9} y={10} width={6} height={4} rx={0.9} stroke="currentColor" strokeWidth={1.2} />
-      <path d="M6 12h3" stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" />
+      {[3.4, 8, 12.6].map((y) => (
+        <g key={y}>
+          <circle cx={2.6} cy={y} r={1.15} fill="currentColor" />
+          <path d={`M5.6 ${y} H13.6`} stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" />
+        </g>
+      ))}
     </svg>
   );
 }
@@ -112,8 +122,6 @@ export function NotesPanel() {
   const togglePinned = useAppStore((s) => s.togglePinned);
   const toggleFavorite = useAppStore((s) => s.toggleFavorite);
   const setFavoriteOnly = useAppStore((s) => s.setFavoriteOnly);
-  const navOpen = useAppStore((s) => s.navOpen);
-  const toggleNav = useAppStore((s) => s.toggleNav);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
   const capabilities = useAppStore((s) => s.capabilities);
   // 'degraded' is OpenList configured but unreachable, so notes fall back to disk.
@@ -135,6 +143,7 @@ export function NotesPanel() {
         ? '搜索标题与内容…'
         : '搜索笔记、标签…';
   const [dialog, setDialog] = useState<
+    | { kind: 'newFolder'; parent: string; value: string }
     | { kind: 'renameFolder'; path: string; value: string }
     | { kind: 'renameNote'; id: string; value: string }
     | { kind: 'moveNote'; id: string; value: string }
@@ -235,17 +244,6 @@ export function NotesPanel() {
             {capabilities && !capabilities.writable ? ' · 只读' : ''}
           </div>
         </div>
-        <Tooltip label={navOpen ? '收起导航' : '展开导航（文件夹 / 标签）'}>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => toggleNav()}
-            className={cn(navOpen && 'text-[var(--accent)]')}
-            aria-pressed={navOpen}
-          >
-            <Layers className="h-4 w-4" />
-          </Button>
-        </Tooltip>
         <Tooltip label="隐藏列表">
           <Button variant="ghost" size="icon" className="hidden lg:inline-flex" onClick={() => toggleSidebar(false)}>
             <ChevronLeft className="h-4 w-4" />
@@ -303,22 +301,6 @@ export function NotesPanel() {
         </div>
       ) : null}
 
-      {/* Collapsible navigation */}
-      <AnimatePresence initial={false}>
-        {navOpen ? (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="overflow-hidden border-b border-[var(--line)]"
-          >
-            <div className="scroll-area max-h-[46vh] overflow-y-auto px-3 py-2">
-              <NavSections />
-            </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
 
       {/* Search + filters */}
       <div className="space-y-2 border-b border-[var(--line)] px-3 pb-2.5 pt-2.5">
@@ -439,7 +421,7 @@ export function NotesPanel() {
               onChange={(e) => setSort(e.target.value as SortKey)}
               aria-label="排序方式"
               containerClassName="w-[104px]"
-              className="h-7 rounded-lg pl-2 pr-7 text-[11.5px] text-[var(--muted)]"
+              className="h-[30px] rounded-lg border-[var(--line)] bg-transparent pl-2 pr-7 text-[11.5px] text-[var(--muted)]"
             >
               {SORTS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -531,7 +513,9 @@ export function NotesPanel() {
             actions={{
               onSelectFolder: (path) => setActiveFolder(activeFolder === path ? null : path),
               onSelectNote: (id) => void selectNote(id),
-              onCreateChild: (path) => void createFolder(`${path}/新文件夹`),
+              // Asks for the name rather than inventing one: a folder called
+              // 新文件夹 that has to be renamed straight away is a step wasted.
+              onCreateChild: (path) => setDialog({ kind: 'newFolder', parent: path, value: '新文件夹' }),
               onRenameFolder: (path) =>
                 setDialog({ kind: 'renameFolder', path, value: path.split('/').pop() ?? path }),
               onDeleteFolder: (path) => void deleteFolder(path),
@@ -569,6 +553,9 @@ export function NotesPanel() {
           onClose={() => setDialog(null)}
           onConfirm={(value) => {
             if (!dialog) return;
+            if (dialog.kind === 'newFolder') {
+              void createFolder(dialog.parent ? `${dialog.parent}/${value}` : value);
+            }
             if (dialog.kind === 'renameFolder') void renameFolder(dialog.path, value);
             if (dialog.kind === 'renameNote') void renameNote(dialog.id, value);
             if (dialog.kind === 'moveNote') void moveNote(dialog.id, value);
@@ -634,13 +621,14 @@ function Chip({
   );
 }
 
-function PromptDialog({
+export function PromptDialog({
   state,
   folders,
   onClose,
   onConfirm,
 }: {
   state:
+    | { kind: 'newFolder'; parent: string; value: string }
     | { kind: 'renameFolder'; path: string; value: string }
     | { kind: 'renameNote'; id: string; value: string }
     | { kind: 'moveNote'; id: string; value: string }
@@ -658,13 +646,23 @@ function PromptDialog({
   if (!state) return null;
 
   const title =
-    state.kind === 'renameFolder' ? '重命名文件夹' : state.kind === 'renameNote' ? '重命名笔记' : '移动笔记';
+    state.kind === 'newFolder'
+      ? '新建文件夹'
+      : state.kind === 'renameFolder'
+        ? '重命名文件夹'
+        : state.kind === 'renameNote'
+          ? '重命名笔记'
+          : '移动笔记';
   const hint =
-    state.kind === 'renameFolder'
-      ? state.path
-      : state.kind === 'moveNote'
-        ? '选择目标文件夹，空选项表示根目录'
-        : '留空则取消';
+    state.kind === 'newFolder'
+      ? state.parent
+        ? `在 ${state.parent} 下`
+        : '在根目录下'
+      : state.kind === 'renameFolder'
+        ? state.path
+        : state.kind === 'moveNote'
+          ? '选择目标文件夹，空选项表示根目录'
+          : '留空则取消';
 
   return (
     <Modal

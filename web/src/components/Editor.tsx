@@ -243,12 +243,17 @@ export function Editor() {
           {renderModeSwitch(true)}
           <span className="h-5 w-px bg-[var(--line)]" />
           <Tooltip label={metaOpen ? '隐藏大纲' : '显示大纲'}>
-            <Button variant={metaOpen ? 'soft' : 'ghost'} size="icon" onClick={() => toggleMeta()}>
+            <Button
+              variant={metaOpen ? 'soft' : 'ghost'}
+              size="icon"
+              aria-label={metaOpen ? '隐藏大纲' : '显示大纲'}
+              onClick={() => toggleMeta()}
+            >
               <PanelRightOpen className="h-4 w-4" />
             </Button>
           </Tooltip>
           <Tooltip label="退出专注模式">
-            <Button variant="soft" size="icon" onClick={() => toggleFocusMode(false)}>
+            <Button variant="soft" size="icon" aria-label="退出专注模式" onClick={() => toggleFocusMode(false)}>
               <Minimize2 className="h-4 w-4" />
             </Button>
           </Tooltip>
@@ -308,18 +313,28 @@ export function Editor() {
           {renderModeSwitch()}
           {!sidebarOpen ? (
             <Tooltip label="显示笔记列表">
-              <Button variant="ghost" size="icon" onClick={() => toggleSidebar(true)}>
+              <Button variant="ghost" size="icon" aria-label="显示笔记列表" onClick={() => toggleSidebar(true)}>
                 <PanelLeftOpen className="h-4 w-4" />
               </Button>
             </Tooltip>
           ) : null}
           <Tooltip label={metaOpen ? '隐藏大纲' : '显示大纲'}>
-            <Button variant={metaOpen ? 'soft' : 'ghost'} size="icon" onClick={() => toggleMeta()}>
+            <Button
+              variant={metaOpen ? 'soft' : 'ghost'}
+              size="icon"
+              aria-label={metaOpen ? '隐藏大纲' : '显示大纲'}
+              onClick={() => toggleMeta()}
+            >
               <PanelRightOpen className="h-4 w-4" />
             </Button>
           </Tooltip>
           <Tooltip label={focusMode ? '退出专注模式' : '专注模式（隐藏列表与工具栏）'}>
-            <Button variant="ghost" size="icon" onClick={() => toggleFocusMode()}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={focusMode ? '退出专注模式' : '进入专注模式'}
+              onClick={() => toggleFocusMode()}
+            >
               <Maximize2 className="h-4 w-4" />
             </Button>
           </Tooltip>
@@ -328,6 +343,7 @@ export function Editor() {
             <Button
               variant="ghost"
               size="icon"
+              aria-label="下载这篇笔记"
               onClick={() => {
                 window.location.href = noteDownloadUrl(activeNote.id);
               }}
@@ -339,6 +355,7 @@ export function Editor() {
             <Button
               variant="ghost"
               size="icon"
+              aria-label={canWrite ? '删除笔记' : '没有删除权限'}
               disabled={!canWrite}
               onClick={() => void deleteNote(activeNote.id)}
               className="text-[var(--faint)] hover:text-[var(--danger)]"
@@ -347,7 +364,13 @@ export function Editor() {
             </Button>
           </Tooltip>
           <Tooltip label="关闭">
-            <Button variant="ghost" size="icon" onClick={() => useAppStore.getState().closeNote()} className="lg:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="关闭笔记"
+              onClick={() => useAppStore.getState().closeNote()}
+              className="lg:hidden"
+            >
               <X className="h-4 w-4" />
             </Button>
           </Tooltip>
