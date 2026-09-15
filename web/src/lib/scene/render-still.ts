@@ -28,8 +28,13 @@ export interface SceneStill {
  * rasteriser, the vendored code. Without it a wallpaper keeps showing the frame
  * an older build produced, which is how white boxes survived the fix that
  * removed them.
+ *
+ * It has to be bumped for every change that alters what a scene looks like,
+ * including the ones that only remove something. v3: the still comes from the
+ * WebGL renderer rather than the CPU rasteriser, and the layers Wallpaper
+ * Engine would have hidden at run time are hidden.
  */
-const RENDER_VERSION = 'v2';
+const RENDER_VERSION = 'v3';
 const CACHE_PREFIX = `scene-still:${RENDER_VERSION}:`;
 
 /** The browser can do this here and now? */
@@ -46,12 +51,22 @@ export interface RenderOptions {
   cacheKey: string;
   maxWidth?: number;
   quality?: number;
+  /**
+   * Whether a remembered frame may be reused.
+   *
+   * On in the app, where the same wallpaper is drawn over and over. Off in the
+   * test bench, where the whole point is to see what the current code produces
+   * - and where a cache hit is indistinguishable from a fix that did nothing.
+   */
+  useCache?: boolean;
 }
 
 export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOptions): Promise<SceneStill> {
   const key = CACHE_PREFIX + options.cacheKey;
-  const cached = await idbGet<SceneStill>(key);
-  if (cached?.blob) return cached;
+  if (options.useCache !== false) {
+    const cached = await idbGet<SceneStill>(key);
+    if (cached?.blob) return cached;
+  }
 
   const id = nextRequestId();
   const worker = getSceneWorker();

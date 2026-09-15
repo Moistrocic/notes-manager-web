@@ -116,6 +116,9 @@ stillButton.addEventListener('click', () => {
     try {
       const still = await renderSceneStill(pkg!.bytes.slice(0), {
         cacheKey: `lab:${pkg!.name}:${pkg!.bytes.byteLength}`,
+        // Always render. A cached frame would hide the effect of the very
+        // change being tested, and look exactly like a fix that did nothing.
+        useCache: false,
       });
       const elapsed = Math.round(performance.now() - started);
       if (stillUrl.current) URL.revokeObjectURL(stillUrl.current);
