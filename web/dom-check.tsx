@@ -12,6 +12,8 @@
  * address bar, the editor and the preview agreeing with each other.
  */
 import { JSDOM } from 'jsdom';
+// Type only: erased at compile time, so it cannot run before the globals below.
+import type { CropRect } from './src/lib/wallpaper';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'https://notes.example.com/',
@@ -445,6 +447,8 @@ console.log('\nSteam wallpaper detection (jsdom)');
 const { Wallpaper } = await import('./src/components/Wallpaper');
 const { SessionFooter } = await import('./src/components/Sidebar');
 
+const { clampCrop, cropForRatio, DEFAULT_WALLPAPER, MIN_CROP } = await import('./src/lib/wallpaper');
+
 console.log('\nwallpaper framing and hover labels (jsdom)');
 {
   const hold = appStore.getState();
@@ -463,7 +467,8 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
     return html;
   };
 
-  const show = (blur: number, scale: number) =>
+  const FULL: CropRect = { x: 0, y: 0, w: 1, h: 1 };
+  const show = (blur: number, crop: CropRect) =>
     appStore.setState({
       wallpaper: {
         kind: 'image',
@@ -471,65 +476,51 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
         url: 'https://cdn.example.com/a.png',
         blur,
         dim: 0.35,
-        scale,
-        focusX: 50,
-        focusY: 50, dynamicScene: false,
+        crop,
+        dynamicScene: false,
       },
       wallpaperUrl: 'https://cdn.example.com/a.png',
     });
 
-  // No blur: the picture fills the frame exactly, so no filter and no zoom.
-  show(0, 1);
+  // No blur and no crop: the picture fills the frame, nothing is transformed.
+  show(0, FULL);
   let markup = await render(React.createElement(Wallpaper));
-  check('a sharp wallpaper is neither filtered nor zoomed', /filter:|transform:/.test(markup), false);
-  check('and it is drawn with object-fit cover', markup.includes('wallpaper-media'), true);
+  check('a sharp, whole wallpaper is neither filtered nor transformed', /filter:|transform:/.test(markup), false);
+  check('and it is drawn at the size of the layer', /width:\s*100%/.test(markup), true);
 
   // Blur: a blur samples past the edge, so without compensation the picture
   // fades away from the frame. The element has to grow to push that off screen.
-  show(24, 1);
+  show(24, FULL);
   markup = await render(React.createElement(Wallpaper));
   check('a blurred wallpaper is blurred', /filter:\s*blur\(24px\)/.test(markup), true);
   const zoom = Number((markup.match(/scale\(([\d.]+)\)/) ?? [])[1] ?? '1');
   check('and zoomed enough to hide the faded edge', zoom > 1.1 && zoom < 1.3, true);
 
-  // Framing: a square wallpaper on a wide screen keeps a band of its height,
-  // and the focus picks which one.
-  show(0, 1);
-  appStore.setState({
-    wallpaper: {
-      kind: 'image',
-      source: 'url',
-      url: 'https://cdn.example.com/a.png',
-      blur: 0,
-      dim: 0.35,
-      scale: 1,
-      focusX: 50,
-      focusY: 50, dynamicScene: false,
-    },
-  });
-  check('a centred wallpaper says so', /object-position:\s*50% 50%/.test(await render(React.createElement(Wallpaper))), true);
-  appStore.setState({
-    wallpaper: {
-      kind: 'image',
-      source: 'url',
-      url: 'https://cdn.example.com/a.png',
-      blur: 0,
-      dim: 0.35,
-      scale: 1,
-      focusX: 0,
-      focusY: 100,
-      dynamicScene: false,
-    },
-  });
-  const framed = await render(React.createElement(Wallpaper));
-  check('moving the focus moves the crop', /object-position:\s*0% 100%/.test(framed), true);
-  check('and framing alone adds no zoom', /transform:/.test(framed), false);
+  // The selection is what fills the screen: a quarter-size box is magnified
+  // four times and offset so its corner meets the layer's.
+  show(0, { x: 0.25, y: 0.5, w: 0.25, h: 0.25 });
+  const cropped = await render(React.createElement(Wallpaper));
+  check('the selection is magnified to fill the layer', /width:\s*400%/.test(cropped), true);
+  check('and its height likewise', /height:\s*400%/.test(cropped), true);
+  check('and shifted so its top-left corner lands on the layer', /left:\s*-100%/.test(cropped), true);
+  check('vertically too', /top:\s*-200%/.test(cropped), true);
+  check('selecting a region does not itself transform anything', /transform:/.test(cropped), false);
 
-  // The user's own zoom multiplies on top of it rather than replacing it.
-  show(24, 1.5);
-  markup = await render(React.createElement(Wallpaper));
-  const both = Number((markup.match(/scale\(([\d.]+)\)/) ?? [])[1] ?? '1');
-  check('the user zoom stacks on the compensation', both > 1.5, true);
+  // The maths that backs the component, checked directly.
+  check('a full selection is the whole picture', cropForRatio(null, 16 / 9), FULL);
+  const band = cropForRatio(16 / 9, 1);
+  check('16:9 out of a square keeps a centred band', [band.x, band.w, band.h], [0, 1, 9 / 16]);
+  const pillar = cropForRatio(1, 16 / 9);
+  check('1:1 out of a wide picture keeps a centred column', [pillar.y, pillar.w, pillar.h], [0, 9 / 16, 1]);
+  const bounded = clampCrop({ x: -1, y: 2, w: 0.5, h: 0.5 });
+  check('a selection cannot leave the picture', [bounded.x, bounded.y, bounded.w, bounded.h], [0, 0.5, 0.5, 0.5]);
+  check('nor shrink below the minimum', clampCrop({ x: 0, y: 0, w: 0.001, h: 0.001 }).w, MIN_CROP);
+
+  // The window can change shape after a wallpaper is set, so a selection that
+  // was right on one screen still has to cover another.
+  show(0, { x: 0.1, y: 0.2, w: 0.6, h: 0.6 });
+  const stillCovering = await render(React.createElement(Wallpaper));
+  check('a kept selection stays on screen', /left:\s*-16.66/.test(stillCovering), true);
 
   // The four footer buttons sit on an edge the panel clips, so their labels
   // have to open upward or they are cut in half.
@@ -670,9 +661,7 @@ console.log('\nappearance dialog (jsdom)');
       url: '',
       blur: 0,
       dim: 0.35,
-      scale: 1,
-      focusX: 50,
-      focusY: 50,
+      crop: { x: 0, y: 0, w: 1, h: 1 },
       dynamicScene: false,
     },
     wallpaperUrl: null,
@@ -709,7 +698,6 @@ console.log('\nappearance dialog (jsdom)');
 
 /* --- a live scene wallpaper draws into a canvas ---------------------------- */
 const { canPlayScenes } = await import('./src/lib/scene/play-scene');
-const { DEFAULT_WALLPAPER } = await import('./src/lib/wallpaper');
 
 console.log('\nlive scene wallpaper (jsdom)');
 {

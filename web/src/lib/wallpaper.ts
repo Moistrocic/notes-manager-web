@@ -14,6 +14,19 @@ export type WallpaperKind = 'none' | 'image' | 'video' | 'scene';
 /** Where the current wallpaper came from. "library" means a local folder. */
 export type WallpaperSource = 'url' | 'file' | 'library';
 
+export interface CropRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The whole picture. */
+export const FULL_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
+
+/** The smallest selection the editor will produce, in either axis. */
+export const MIN_CROP = 0.08;
+
 export interface WallpaperSettings {
   kind: WallpaperKind;
   source: WallpaperSource;
@@ -23,15 +36,18 @@ export interface WallpaperSettings {
   blur: number;
   /** Darkening scrim, 0 - 0.85. */
   dim: number;
-  /** Extra zoom for cover fitting, 1 - 2. */
-  scale: number;
   /**
-   * Which part of the picture to keep when cover has to crop it, as a
-   * percentage of the leftover. 50/50 is centred; a square wallpaper on a wide
-   * screen needs this to choose its horizontal band.
+   * The part of the picture that fills the screen, in picture coordinates:
+   * x/y are the top-left corner and w/h the size, all 0-1. The whole picture is
+   * {x:0, y:0, w:1, h:1}.
+   *
+   * This replaced a zoom factor plus an object-position pair. Those two are not
+   * independent - zooming scales about the element's centre and drags the
+   * chosen region with it - so after zooming, the region you picked was no
+   * longer the region you got. A rectangle has no such ambiguity: it is the
+   * region, and it always fills the screen exactly.
    */
-  focusX: number;
-  focusY: number;
+  crop: CropRect;
   /**
    * Render scene wallpapers live instead of compositing one frame. Off by
    * default: the still costs nothing to keep on screen, a live scene holds a
@@ -46,24 +62,67 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   url: '',
   blur: 0,
   dim: 0.35,
-  scale: 1,
-  focusX: 50,
-  focusY: 50,
+  crop: { ...FULL_CROP },
   dynamicScene: false,
 };
 
-/** The nine positions most people pick from, top-left to bottom-right. */
-export const FOCUS_PRESETS: { x: number; y: number; label: string }[] = [
-  { x: 0, y: 0, label: '左上' },
-  { x: 50, y: 0, label: '上' },
-  { x: 100, y: 0, label: '右上' },
-  { x: 0, y: 50, label: '左' },
-  { x: 50, y: 50, label: '居中' },
-  { x: 100, y: 50, label: '右' },
-  { x: 0, y: 100, label: '左下' },
-  { x: 50, y: 100, label: '下' },
-  { x: 100, y: 100, label: '右下' },
+/**
+ * Positions a media element so the crop rectangle fills its container.
+ *
+ * Scale up by 1/w and 1/h, then shift left and up so the rectangle's top-left
+ * corner lands on the container's. Used by the background layer and by the
+ * dialog's preview, so the two can never disagree about the framing.
+ */
+export function cropMediaStyle(crop: CropRect): {
+  position: 'absolute';
+  width: string;
+  height: string;
+  left: string;
+  top: string;
+} {
+  return {
+    position: 'absolute',
+    width: `${100 / crop.w}%`,
+    height: `${100 / crop.h}%`,
+    left: `${-(crop.x / crop.w) * 100}%`,
+    top: `${-(crop.y / crop.h) * 100}%`,
+  };
+}
+
+/** Keeps a rectangle inside the picture and above the minimum size. */
+export function clampCrop(rect: CropRect): CropRect {
+  const w = Math.min(1, Math.max(MIN_CROP, rect.w));
+  const h = Math.min(1, Math.max(MIN_CROP, rect.h));
+  return {
+    w,
+    h,
+    x: Math.min(1 - w, Math.max(0, rect.x)),
+    y: Math.min(1 - h, Math.max(0, rect.y)),
+  };
+}
+
+/** The common shapes, as a starting point for a wallpaper that does not fit. */
+export const CROP_PRESETS: { label: string; ratio: number | null }[] = [
+  { label: '整张', ratio: null },
+  { label: '16:9', ratio: 16 / 9 },
+  { label: '16:10', ratio: 16 / 10 },
+  { label: '21:9', ratio: 21 / 9 },
+  { label: '4:3', ratio: 4 / 3 },
+  { label: '1:1', ratio: 1 },
 ];
+
+/** The largest centred rectangle of `ratio` that fits in the picture. */
+export function cropForRatio(ratio: number | null, imageAspect: number): CropRect {
+  if (ratio === null) return { ...FULL_CROP };
+  // Normalised coordinates: the picture is 1 wide and 1 tall regardless of its
+  // real shape, so the ratio has to be expressed against the picture's aspect.
+  const wanted = ratio / imageAspect;
+  if (wanted >= 1) {
+    const h = 1 / wanted;
+    return { x: 0, y: (1 - h) / 2, w: 1, h };
+  }
+  return { x: (1 - wanted) / 2, y: 0, w: wanted, h: 1 };
+}
 
 const SETTINGS_KEY = 'notes-manager-wallpaper';
 const DB_NAME = 'notes-manager';
@@ -80,16 +139,34 @@ export function loadWallpaperSettings(): WallpaperSettings {
       ...parsed,
       blur: clamp(Number(parsed.blur ?? 0), 0, 40),
       dim: clamp(Number(parsed.dim ?? DEFAULT_WALLPAPER.dim), 0, 0.85),
-      scale: clamp(Number(parsed.scale ?? 1), 1, 2),
-      // Missing on anything saved before the framing controls existed, and
-      // centred is the right default for those.
-      focusX: clamp(Number(parsed.focusX ?? 50), 0, 100),
-      focusY: clamp(Number(parsed.focusY ?? 50), 0, 100),
+      crop: readCrop(parsed as Record<string, unknown>),
       dynamicScene: parsed.dynamicScene === true,
     };
   } catch {
     return { ...DEFAULT_WALLPAPER };
   }
+}
+
+/**
+ * The selection, from whatever the stored settings happen to hold.
+ *
+ * Settings written before the crop box existed carry a zoom factor and an
+ * object-position pair instead. Those are converted rather than discarded, so
+ * an existing wallpaper keeps roughly the framing it had: a zoom of 2 becomes a
+ * half-size box centred on the old anchor point.
+ */
+function readCrop(raw: Record<string, unknown>): CropRect {
+  const stored = raw.crop as Partial<CropRect> | undefined;
+  if (stored && ['x', 'y', 'w', 'h'].every((key) => Number.isFinite(Number((stored as never)[key])))) {
+    return clampCrop({ x: Number(stored.x), y: Number(stored.y), w: Number(stored.w), h: Number(stored.h) });
+  }
+
+  const zoom = clamp(Number(raw.scale ?? 1), 1, 2);
+  if (zoom <= 1) return { ...FULL_CROP };
+  const size = 1 / zoom;
+  const anchorX = clamp(Number(raw.focusX ?? 50), 0, 100) / 100;
+  const anchorY = clamp(Number(raw.focusY ?? 50), 0, 100) / 100;
+  return clampCrop({ w: size, h: size, x: anchorX * (1 - size), y: anchorY * (1 - size) });
 }
 
 export function saveWallpaperSettings(settings: WallpaperSettings): void {

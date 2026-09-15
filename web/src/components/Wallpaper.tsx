@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { canPlayScenes, playScene, type ScenePlayer } from '../lib/scene/play-scene';
+import { cropMediaStyle } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 
 /**
@@ -115,13 +116,12 @@ export function Wallpaper() {
   // Scaling is used rather than stretching the box, because the box has to keep
   // the window's aspect ratio for object-fit: cover to crop the way it should.
   const zoom = wallpaper.blur > 0 ? 1 + (5 * wallpaper.blur) / Math.max(320, Math.min(viewport.w, viewport.h)) : 1;
-  const totalScale = wallpaper.scale * zoom;
 
+  // The selection fills the layer exactly.
   const mediaStyle = {
+    ...cropMediaStyle(wallpaper.crop),
     filter: wallpaper.blur > 0 ? `blur(${wallpaper.blur}px)` : undefined,
-    transform: totalScale !== 1 ? `scale(${totalScale.toFixed(4)})` : undefined,
-    // Which slice of an over-tall or over-wide picture survives the crop.
-    objectPosition: `${wallpaper.focusX}% ${wallpaper.focusY}%`,
+    transform: zoom !== 1 ? `scale(${zoom.toFixed(4)})` : undefined,
   } as CSSProperties;
 
   return (

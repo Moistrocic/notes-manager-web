@@ -380,7 +380,10 @@ function NavItem({
       <Icon className={cn('relative h-3.5 w-3.5 shrink-0', active && 'text-[var(--accent)]')} />
       <span className="relative flex-1 truncate">{label}</span>
       {typeof count === 'number' && count > 0 ? (
-        <span className="relative rounded-md bg-[color-mix(in_srgb,var(--text)_8%,transparent)] px-1.5 py-0.5 text-[10.5px] text-[var(--faint)]">
+        // The row's action buttons are absolutely positioned over this corner,
+        // so the badge steps aside while they are showing instead of sitting
+        // underneath them. Only rows inside group/folder have those buttons.
+        <span className="relative rounded-md bg-[color-mix(in_srgb,var(--text)_8%,transparent)] px-1.5 py-0.5 text-[10.5px] text-[var(--faint)] transition-opacity group-hover/folder:opacity-0">
           {count}
         </span>
       ) : null}

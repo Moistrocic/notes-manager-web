@@ -20,7 +20,8 @@ import {
 } from '../lib/local-wallpapers';
 import { canPlayScenes } from '../lib/scene/play-scene';
 import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
-import { acceptFor, FOCUS_PRESETS, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
+import { acceptFor, cropMediaStyle, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
+import { WallpaperCrop } from './WallpaperCrop';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Field, Input, Modal, Switch } from './ui/primitives';
 
@@ -354,12 +355,11 @@ export function AppearanceDialog() {
               )}
             </section>
 
-            <section className="grid gap-3 sm:grid-cols-3">
+            <section className="grid gap-3 sm:grid-cols-2">
               {(
                 [
                   { key: 'blur' as const, label: '模糊', min: 0, max: 40, step: 1, suffix: 'px' },
                   { key: 'dim' as const, label: '暗度', min: 0, max: 0.85, step: 0.05, suffix: '' },
-                  { key: 'scale' as const, label: '缩放', min: 1, max: 2, step: 0.05, suffix: '×' },
                 ] as const
               ).map((control) => (
                 <label key={control.key} className="space-y-1.5">
@@ -403,83 +403,43 @@ export function AppearanceDialog() {
               />
             </section>
 
-            {/* Where the picture sits inside the frame. object-fit: cover always
-                crops something when the shapes differ; this decides what. */}
+            {/* Which part of the picture fills the screen. A rectangle, because a
+                zoom factor and an anchor point cannot be reasoned about together. */}
             <section className="space-y-2.5">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[12px] text-[var(--muted)]">取景位置</span>
-                <span className="text-[11px] text-[var(--faint)]">正方形壁纸在这里选显示哪一块</span>
+                <span className="text-[12px] text-[var(--muted)]">取景区</span>
+                <span className="text-[11px] text-[var(--faint)]">框住的部分会填满屏幕</span>
               </div>
-              <div className="flex items-start gap-3">
-                <div className="grid shrink-0 grid-cols-3 gap-1">
-                  {FOCUS_PRESETS.map((preset) => {
-                    const active = wallpaper.focusX === preset.x && wallpaper.focusY === preset.y;
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        title={preset.label}
-                        aria-label={preset.label}
-                        aria-pressed={active}
-                        onClick={() => setWallpaper({ focusX: preset.x, focusY: preset.y })}
-                        className={cn(
-                          'focus-ring h-6 w-6 rounded-md border transition-colors',
-                          active
-                            ? 'border-transparent bg-[var(--accent)]'
-                            : 'border-[var(--line)] hover:border-[var(--accent)]',
-                        )}
-                      />
-                    );
-                  })}
-                </div>
-                <div className="grid flex-1 gap-3 sm:grid-cols-2">
-                  {(
-                    [
-                      { key: 'focusX' as const, label: '水平' },
-                      { key: 'focusY' as const, label: '垂直' },
-                    ] as const
-                  ).map((control) => (
-                    <label key={control.key} className="space-y-1.5">
-                      <span className="flex items-center justify-between text-[12px] text-[var(--muted)]">
-                        <span>{control.label}</span>
-                        <span className="text-[var(--faint)]">{wallpaper[control.key]}%</span>
-                      </span>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        step={1}
-                        value={wallpaper[control.key]}
-                        onChange={(e) => setWallpaper({ [control.key]: Number(e.target.value) } as never)}
-                        className="w-full accent-[var(--accent)]"
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
+              {wallpaperUrl ? (
+                <WallpaperCrop
+                  src={wallpaperUrl}
+                  kind={wallpaper.kind === 'video' ? 'video' : wallpaper.kind === 'scene' ? 'scene' : 'image'}
+                  crop={wallpaper.crop}
+                  onChange={(crop) => setWallpaper({ crop })}
+                />
+              ) : (
+                <p className="text-[11px] text-[var(--faint)]">选择壁纸后可以在这里框选要显示的区域。</p>
+              )}
             </section>
 
             <div className="flex items-center gap-2.5 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-3">
               <div className="h-14 w-24 shrink-0 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface-2)]">
                 {wallpaperUrl ? (
-                  wallpaper.kind === 'video' ? (
-                    <video
-                      src={wallpaperUrl}
-                      className="h-full w-full object-cover"
-                      style={{ objectPosition: `${wallpaper.focusX}% ${wallpaper.focusY}%` }}
-                      muted
-                      loop
-                      autoPlay
-                      playsInline
-                    />
-                  ) : (
-                    <img
-                      src={wallpaperUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                      style={{ objectPosition: `${wallpaper.focusX}% ${wallpaper.focusY}%` }}
-                    />
-                  )
+                  <div className="relative h-full w-full">
+                    {wallpaper.kind === 'video' ? (
+                      <video
+                        src={wallpaperUrl}
+                        className="wallpaper-media"
+                        style={cropMediaStyle(wallpaper.crop)}
+                        muted
+                        loop
+                        autoPlay
+                        playsInline
+                      />
+                    ) : (
+                      <img src={wallpaperUrl} alt="" className="wallpaper-media" style={cropMediaStyle(wallpaper.crop)} />
+                    )}
+                  </div>
                 ) : null}
               </div>
               <div className="min-w-0 flex-1 text-[11.5px] leading-relaxed text-[var(--faint)]">
