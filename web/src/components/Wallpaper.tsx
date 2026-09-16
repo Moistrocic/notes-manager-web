@@ -14,6 +14,9 @@ export function Wallpaper() {
   const settings = useAppStore((s) => s.wallpaper);
   const ownUrl = useAppStore((s) => s.wallpaperUrl);
   const admin = useAppStore((s) => s.adminBackground);
+  // While this is open the layer does not render: the dialog is rendering the
+  // same scene for its own preview, and there is one main thread.
+  const appearanceOpen = useAppStore((s) => s.appearanceOpen);
 
   /**
    * The administrator's background takes over while the switch is on.
@@ -53,18 +56,35 @@ export function Wallpaper() {
 
   useEffect(() => {
     const video = videoRef.current;
-    if (video && wallpaper.kind === 'video') {
-      video.play().catch(() => {
-        /* autoplay may be blocked; the poster/first frame still shows */
-      });
+    if (!video || wallpaper.kind !== 'video') return;
+    // Held while the dialog is open, for the same reason the scene is: the
+    // dialog is doing its own work and the picture behind it is not being
+    // looked at.
+    if (appearanceOpen) {
+      video.pause();
+      return;
     }
-  }, [url, wallpaper.kind]);
+    video.play().catch(() => {
+      /* autoplay may be blocked; the poster/first frame still shows */
+    });
+  }, [url, wallpaper.kind, appearanceOpen]);
 
-  // A live scene: the canvas is handed to the worker, which owns it from then
-  // on - parsing, decoding textures, translating shaders and drawing all happen
-  // off the main thread, which is what keeps the page smooth behind it.
+  /**
+   * A live scene.
+   *
+   * The renderer parses the container, decodes its textures and compiles its
+   * shaders on the main thread, and it is not cheap: tens of megabytes and a
+   * few seconds. The appearance dialog needs a picture of the same scene for
+   * its crop editor, which costs the same again - and running both at once is
+   * what made a wallpaper switch look like the server had died.
+   *
+   * So the layer stands down while the dialog is up. It keeps whatever frame it
+   * last drew, which costs nothing, and starts again when the dialog closes.
+   * One render at a time, on the one thread there is.
+   */
   useEffect(() => {
     if (wallpaper.kind !== 'scene' || !url) return undefined;
+    if (appearanceOpen) return undefined;
     const canvas = canvasRef.current;
     if (!canvas || !canPlayScenes()) return undefined;
 
@@ -115,7 +135,7 @@ export function Wallpaper() {
       playerRef.current = null;
       player?.stop();
     };
-  }, [wallpaper.kind, url, pushToast]);
+  }, [wallpaper.kind, url, appearanceOpen, pushToast]);
 
   /**
    * Take the interface colour from the picture.
