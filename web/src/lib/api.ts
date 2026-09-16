@@ -167,6 +167,16 @@ export const api = {
       `/notes/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`,
       { method: 'DELETE' },
     ),
+  /** What the administrator put in the server's backgrounds directory. */
+  background: () =>
+    request<{
+      configured: boolean;
+      file: string | null;
+      kind: 'image' | 'scene' | null;
+      bytes: number;
+      note: string | null;
+    }>('/background'),
+
   listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),
   deleteTrashFolder: (path: string) =>
     request<{ ok: boolean }>(`/notes/trash/folders?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),

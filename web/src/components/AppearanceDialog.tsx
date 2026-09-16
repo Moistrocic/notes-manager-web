@@ -58,6 +58,10 @@ export function AppearanceDialog() {
   const accent = useAppStore((s) => s.accent);
   const scenePreview = useAppStore((s) => s.scenePreview);
   const setScenePreview = useAppStore((s) => s.setScenePreview);
+  const admin = useAppStore((s) => s.adminBackground);
+  // While the administrator's background is the one showing, the controls that
+  // would change it are not offered.
+  const locked = wallpaper.useAdminBackground && admin?.configured === true;
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const folderRef = useRef<HTMLInputElement | null>(null);
@@ -257,7 +261,30 @@ export function AppearanceDialog() {
       <div className="space-y-5">
         <section>
           <h3 className="mb-2.5 text-[12.5px] font-semibold text-[var(--text)]">背景</h3>
-          <div className="grid grid-cols-3 gap-2">
+
+          {/* Default on, and the user may turn it off. While it is on the
+              administrator's choice is the one that shows and the controls
+              below are hidden rather than disabled: a row of greyed-out buttons
+              invites the question of how to un-grey them. */}
+          <section className="mb-3 flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] p-2.5">
+            <div className="min-w-0">
+              <div className="text-[12px] text-[var(--muted)]">使用管理员设置的默认背景</div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                {locked && admin?.configured
+                  ? `正在使用管理员设置的背景${admin.note ? `：${admin.note}` : ''}。关掉这个开关就能自己选。`
+                  : admin && !admin.configured
+                    ? '管理员还没有放置背景文件，下面由你自己决定。'
+                    : '已关闭，下面由你自己决定。'}
+              </p>
+            </div>
+            <Switch
+              checked={wallpaper.useAdminBackground}
+              onChange={(value) => setWallpaper({ useAdminBackground: value })}
+              className="mt-0.5 shrink-0"
+            />
+          </section>
+
+          <div className={cn('grid grid-cols-3 gap-2', locked && 'pointer-events-none opacity-40')}>
             {KINDS.map((kind) => {
               const Icon = kind.icon;
               const active = wallpaper.kind === kind.value;
@@ -294,7 +321,7 @@ export function AppearanceDialog() {
           {/* The built-in background is the theme's two accents, so this is
               where they can be changed - the accent setting colours the whole
               interface, which is not what someone tinting a background wants. */}
-          {wallpaper.kind === 'none' ? (
+          {!locked && wallpaper.kind === 'none' ? (
             <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-3">
               <span className="text-[12px] text-[var(--muted)]">极光配色</span>
               {(
@@ -329,7 +356,7 @@ export function AppearanceDialog() {
           ) : null}
         </section>
 
-        {wallpaper.kind !== 'none' ? (
+        {!locked && wallpaper.kind !== 'none' ? (
           <>
             <section className="space-y-3">
               <div className="flex items-center gap-2">

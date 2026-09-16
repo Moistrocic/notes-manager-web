@@ -11,8 +11,22 @@ import { useAppStore } from '../store/useAppStore';
  * it, and a scrim keeps the text readable whatever the picture looks like.
  */
 export function Wallpaper() {
-  const wallpaper = useAppStore((s) => s.wallpaper);
-  const url = useAppStore((s) => s.wallpaperUrl);
+  const settings = useAppStore((s) => s.wallpaper);
+  const ownUrl = useAppStore((s) => s.wallpaperUrl);
+  const admin = useAppStore((s) => s.adminBackground);
+
+  /**
+   * The administrator's background takes over while the switch is on.
+   *
+   * An overlay rather than a replacement: the user's own choice stays in the
+   * settings untouched, so turning the switch off gives it straight back, and
+   * nothing downstream has to know there are two sources.
+   */
+  const locked = settings.useAdminBackground && admin?.configured === true;
+  const wallpaper = locked
+    ? { ...settings, kind: admin?.kind ?? 'image', source: 'url' as const, url: admin?.url ?? '' }
+    : settings;
+  const url = locked ? (admin?.url ?? '') : ownUrl;
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
   const videoRef = useRef<HTMLVideoElement | null>(null);

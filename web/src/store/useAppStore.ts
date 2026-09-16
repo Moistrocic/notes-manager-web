@@ -162,6 +162,20 @@ interface AppState {
   wallpaper: WallpaperSettings;
   /** The URL the background layer should load (remote URL or blob URL). */
   wallpaperUrl: string | null;
+  /**
+   * The administrator's default background, as the server reports it.
+   *
+   * Held separately from the user's own wallpaper rather than replacing it: the
+   * switch that uses this is one the user can turn off, and turning it off
+   * should give them back what they had, not a blank page.
+   */
+  adminBackground: {
+    configured: boolean;
+    kind: 'image' | 'scene' | null;
+    url: string;
+    note: string | null;
+  } | null;
+  refreshAdminBackground: () => Promise<void>;
   /** The interface colour taken from the wallpaper, when that is turned on. */
   accent: string | null;
   setAccent: (colour: string | null) => void;
@@ -387,6 +401,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   fontSelection: { sans: '', mono: '' },
   wallpaper: DEFAULT_WALLPAPER,
   wallpaperUrl: null,
+  adminBackground: null,
   accent: null,
   scenePreview: null,
   appearanceOpen: false,
@@ -404,6 +419,9 @@ export const appStore = createStore<AppState>((set, get) => ({
     // the wallpaper is a client side preference: restore it before anything else
     set({ wallpaper: loadWallpaperSettings() });
     void get().refreshWallpaperUrl();
+    // The administrator's background shows before anybody signs in, so it is
+    // asked for here rather than after the session is known.
+    void get().refreshAdminBackground();
     try {
       const [providers, me, status] = await Promise.all([api.providers(), api.me(), api.status()]);
       set({ providers, user: me.user, status, booted: true, bootError: null });
@@ -864,6 +882,26 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
 
   /** Resolves the background layer's URL: a remote one, or a blob for a local file. */
+  refreshAdminBackground: async () => {
+    try {
+      const payload = await api.background();
+      set({
+        adminBackground: {
+          configured: payload.configured,
+          kind: payload.kind,
+          // Cache-busted per file name: an administrator replacing the file
+          // should not have to wonder why nobody sees the new one.
+          url: payload.configured ? `/api/background/file?v=${encodeURIComponent(payload.file ?? '')}` : '',
+          note: payload.note,
+        },
+      });
+    } catch {
+      // Nothing configured, or the server is unreachable. Either way the user's
+      // own wallpaper is the answer.
+      set({ adminBackground: null });
+    }
+  },
+
   refreshWallpaperUrl: async () => {
     const settings = get().wallpaper;
     const previous = get().wallpaperUrl;

@@ -107,6 +107,46 @@ sudo nano /opt/notes-manager/.env
 sudo systemctl restart notes-manager
 ```
 
+### 设置所有人的默认背景（可选）
+
+管理员把一个背景文件放进数据目录下的 `backgrounds/`，所有人打开面板时看到的就是它：
+
+```
+/opt/notes-manager/data/backgrounds/
+├── scene.pkg          场景壁纸（Wallpaper Engine 的 .pkg）
+├── *.jpg / *.png      或者一张静态图片
+└── background.json    可选，指定用哪个、以及附一条说明
+```
+
+`background.json` 长这样（不写也行，目录里只有一个文件时就用它）：
+
+```json
+{ "file": "scene.pkg", "kind": "scene", "note": "洛茜 Rossi · 创意工坊 3691554683" }
+```
+
+放好后重启服务：
+
+```bash
+sudo systemctl restart notes-manager
+```
+
+- 数据目录默认是 `/opt/notes-manager/data`，安装脚本会创建并纳入备份范围；它不在
+  代码目录里，所以更新程序不会动到它；
+- 背景**只在服务器上读取并原样送出**，不需要上传到任何地方；
+- 用户界面上的「**使用管理员设置的默认背景**」开关**默认打开**，此时界面上的背景选项
+  不显示；**用户可以自己关掉**，关掉后就能自由选择极光、本地图片或本地场景壁纸。
+
+#### 关于场景壁纸的获取
+
+项目**不分发**任何壁纸素材。场景壁纸需要你在 Steam 创意工坊**订阅**后自行取得
+`scene.pkg`，例如洛茜（[创意工坊 3691554683](https://steamcommunity.com/sharedfiles/filedetails/?id=3691554683)）：
+
+```
+<Steam 库>/steamapps/workshop/content/431960/3691554683/scene.pkg
+```
+
+把它复制到上面的 `backgrounds/` 目录即可。壁纸版权归其作者所有。
+
 ### 卸载
 
 ```bash

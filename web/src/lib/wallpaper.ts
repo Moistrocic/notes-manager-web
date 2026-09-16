@@ -60,6 +60,11 @@ export interface WallpaperSettings {
    */
   auroraA: string;
   auroraB: string;
+  /**
+   * Use the background the administrator set for everyone. On by default, and
+   * the user can turn it off to choose their own.
+   */
+  useAdminBackground: boolean;
   /** Take the interface colour from the wallpaper. On unless turned off. */
   autoAccent: boolean;
   /** The colour to use when autoAccent is off. Empty means the theme's own. */
@@ -76,6 +81,7 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   dynamicScene: false,
   auroraA: '',
   auroraB: '',
+  useAdminBackground: true,
   autoAccent: true,
   accentColor: '',
 };
@@ -237,6 +243,7 @@ export function loadWallpaperSettings(): WallpaperSettings {
       dynamicScene: parsed.dynamicScene === true,
       auroraA: typeof parsed.auroraA === 'string' ? parsed.auroraA : '',
       auroraB: typeof parsed.auroraB === 'string' ? parsed.auroraB : '',
+      useAdminBackground: parsed.useAdminBackground !== false,
       autoAccent: parsed.autoAccent !== false,
       accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : '',
     };
