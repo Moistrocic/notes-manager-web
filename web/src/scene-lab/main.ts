@@ -1,18 +1,13 @@
 /**
  * The scene wallpaper test bench.
  *
- * Runs a scene.pkg through the same modules the application uses - the same
- * worker, the same still compositor, the same live renderer - so that what it
- * shows here is what the app does, and a failure here is a failure there.
- *
- * Its reason for existing is that the live path could only be judged from
- * inside a wallpaper layer, which reports nothing. Everything the worker says
- * is printed, including the messages that arrive long after the first frame and
- * used to be dropped on the floor.
+ * Drives wallpaper-scene-layers directly. The library takes an
+ * HTMLCanvasElement rather than an OffscreenCanvas, so this runs on the main
+ * thread - and that makes the canvas readable, which is how the motion counter
+ * below can be honest about whether the picture is actually changing.
  */
 
-import { canPlayScenes, playScene, type ScenePlayer } from '../lib/scene/play-scene';
-import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
+import { createRossiWallpaper, createWallpaper, type Wallpaper } from 'wallpaper-scene-layers';
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -22,22 +17,26 @@ const $ = <T extends HTMLElement>(id: string): T => {
 
 const fileInput = $<HTMLInputElement>('file');
 const sourceLabel = $('source');
+const modeSelect = $<HTMLSelectElement>('mode');
 const stillButton = $<HTMLButtonElement>('still');
 const stillImage = $<HTMLImageElement>('still-img');
 const stillLog = $('still-log');
 const stillNote = $('still-note');
 const playButton = $<HTMLButtonElement>('play');
 const stopButton = $<HTMLButtonElement>('stop');
-const playStage = $('play-stage');
+const playCanvas = $<HTMLCanvasElement>('play-canvas');
 const playLog = $('play-log');
 const playNote = $('play-note');
 const reloadButton = $<HTMLButtonElement>('reload');
 const layersButton = $<HTMLButtonElement>('layers');
+const layerList = $('layer-list');
 
 let pkg: { name: string; bytes: ArrayBuffer } | null = null;
-let player: ScenePlayer | null = null;
+let live: Wallpaper | null = null;
 let ticker: number | null = null;
-const stillUrl: { current: string | null } = { current: null };
+let stillUrl: string | null = null;
+/** Layers switched off by hand, by id. */
+const hidden = new Set<number>();
 
 function say(target: HTMLElement, line: string, tone: 'plain' | 'ok' | 'bad' = 'plain') {
   const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -48,36 +47,42 @@ function say(target: HTMLElement, line: string, tone: 'plain' | 'ok' | 'bad' = '
   target.scrollTop = target.scrollHeight;
 }
 
-function reset(target: HTMLElement, line: string) {
+const reset = (target: HTMLElement, line: string) => {
   target.innerHTML = line;
+};
+
+/** The Rossi preset, or the scene as it comes. */
+const rossi = () => modeSelect.value === 'rossi';
+
+function common() {
+  return {
+    fit: 'cover' as const,
+    autoStart: false,
+    trackMouse: true,
+    onDiagnostic: (message: string) => say(playLog, `诊断：${message}`),
+  };
 }
 
 function ready() {
-  const canStill = canRenderScenes() && Boolean(pkg);
-  const canLive = canPlayScenes() && Boolean(pkg);
-  stillButton.disabled = !canStill;
-  playButton.disabled = !canLive;
-  stopButton.disabled = !player;
-  stillNote.textContent = pkg ? `${(pkg.bytes.byteLength / 1024 / 1024).toFixed(1)} MB` : '';
-  playNote.textContent = canPlayScenes()
-    ? pkg
-      ? `${(pkg.bytes.byteLength / 1024 / 1024).toFixed(1)} MB`
-      : ''
-    : '这个浏览器不支持（需要 WebGL2 与 OffscreenCanvas）';
-}
-
-function usePkg(name: string, bytes: ArrayBuffer) {
-  pkg = { name, bytes };
-  sourceLabel.textContent = `${name} · ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB`;
-  reset(stillLog, '已载入，等待合成…');
-  reset(playLog, '已载入，等待渲染…');
-  ready();
-  // Listed straight away: choosing what to draw is the point of the page, and
-  // having to press a button to discover that is a step in the way.
-  void inspectLayers();
+  stillButton.disabled = !pkg;
+  playButton.disabled = !pkg;
+  stopButton.disabled = !live;
+  const size = pkg ? `${(pkg.bytes.byteLength / 1024 / 1024).toFixed(1)} MB` : '';
+  stillNote.textContent = size;
+  playNote.textContent = size;
 }
 
 /* ------------------------------- loading -------------------------------- */
+
+function usePkg(name: string, bytes: ArrayBuffer) {
+  pkg = { name, bytes };
+  hidden.clear();
+  sourceLabel.textContent = `${name} · ${(bytes.byteLength / 1024 / 1024).toFixed(1)} MB`;
+  reset(stillLog, '已载入，等待取帧…');
+  reset(playLog, '已载入，等待渲染…');
+  layerList.replaceChildren();
+  ready();
+}
 
 async function loadFromUrl(url = '/scene.pkg') {
   try {
@@ -93,13 +98,9 @@ async function loadFromUrl(url = '/scene.pkg') {
 
 fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0];
-  if (!file) return;
-  void file.arrayBuffer().then((bytes) => usePkg(file.name, bytes));
+  if (file) void file.arrayBuffer().then((bytes) => usePkg(file.name, bytes));
 });
-
 reloadButton.addEventListener('click', () => void loadFromUrl());
-
-// Dropping the file anywhere on the page is quicker than the picker.
 window.addEventListener('dragover', (event) => event.preventDefault());
 window.addEventListener('drop', (event) => {
   event.preventDefault();
@@ -107,210 +108,49 @@ window.addEventListener('drop', (event) => {
   if (file) void file.arrayBuffer().then((bytes) => usePkg(file.name, bytes));
 });
 
-/* -------------------------------- still --------------------------------- */
+/* --------------------------------- still -------------------------------- */
 
 stillButton.addEventListener('click', () => {
   if (!pkg) return;
   stillButton.disabled = true;
-  reset(stillLog, '正在合成…');
+  reset(stillLog, '正在取帧…');
   const started = performance.now();
-
   void (async () => {
     try {
-      const still = await renderSceneStill(pkg!.bytes.slice(0), {
-        cacheKey: `lab:${pkg!.name}:${pkg!.bytes.byteLength}`,
-        // Always render. A cached frame would hide the effect of the very
-        // change being tested, and look exactly like a fix that did nothing.
-        useCache: false,
-        overrides,
-      });
-      const elapsed = Math.round(performance.now() - started);
-      if (stillUrl.current) URL.revokeObjectURL(stillUrl.current);
-      stillUrl.current = URL.createObjectURL(still.blob);
-      stillImage.src = stillUrl.current;
+      // A canvas of its own: the library attaches to the canvas it is given, and
+      // the live one already belongs to whatever is running in the other pane.
+      const canvas = document.createElement('canvas');
+      canvas.width = 2560;
+      canvas.height = 1440;
+      const options = { ...common(), canvas, source: pkg!.bytes.slice(0) };
+      const wallpaper = rossi() ? await createRossiWallpaper(options) : await createWallpaper(options);
+      // One frame, which is exactly what a still is.
+      wallpaper.renderFrame(0);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+      if (!blob) throw new Error('toBlob 返回空');
+      if (stillUrl) URL.revokeObjectURL(stillUrl);
+      stillUrl = URL.createObjectURL(blob);
+      stillImage.src = stillUrl;
       say(
         stillLog,
-        `完成：${still.width}×${still.height}，绘制 ${still.drawn} 层，解析 ${still.resolved}，跳过 ${still.skipped}，${elapsed} ms，${(still.blob.size / 1024).toFixed(0)} KB`,
+        `完成：${canvas.width}×${canvas.height}，${wallpaper.layers.length} 层，${((performance.now() - started) / 1000).toFixed(2)} s，${(blob.size / 1024).toFixed(0)} KB`,
         'ok',
       );
+      wallpaper.dispose();
     } catch (err) {
-      say(stillLog, `合成失败：${(err as Error).message}`, 'bad');
-      // The stack is the useful part when a layer cannot be decoded.
-      say(stillLog, String((err as Error).stack ?? '').split('\n').slice(0, 4).join(' | '), 'bad');
+      say(stillLog, `取帧失败：${(err as Error).message}`, 'bad');
+      say(stillLog, String((err as Error).stack ?? '').split('\n').slice(0, 3).join(' | '), 'bad');
     } finally {
       ready();
     }
   })();
 });
 
-
-/* ------------------------------- layers --------------------------------- */
-
-/**
- * What the loader kept, what it dropped, and why.
- *
- * A white rectangle in the picture is caused by a layer that should not have
- * been drawn, so the layer responsible is by definition missing from the
- * visible set. Listing the dropped ones with their reasons turns that from a
- * guess into an answer - and the average colour of each kept layer's texture
- * catches the other case, a layer drawn with a texture that is itself blank.
- */
-const layerList = $('layer-list');
-
-/**
- * Which layers the person has decided about, by index, kept between visits.
- *
- * The loader's rules are a guess about what Wallpaper Engine would have drawn,
- * and a wrong guess is indistinguishable from a rendering bug. This is the
- * escape hatch: say what you want and see it.
- */
-const OVERRIDE_KEY = 'scene-lab-layer-overrides';
-const overrides: Record<number, boolean> = (() => {
-  try {
-    return JSON.parse(localStorage.getItem(OVERRIDE_KEY) ?? '{}') as Record<number, boolean>;
-  } catch {
-    return {};
-  }
-})();
-
-function saveOverrides(): void {
-  try {
-    localStorage.setItem(OVERRIDE_KEY, JSON.stringify(overrides));
-  } catch {
-    /* ignore */
-  }
-}
-
-function setOverride(index: number, value: boolean | null): void {
-  if (value === null) delete overrides[index];
-  else overrides[index] = value;
-  saveOverrides();
-  // Redrawn from what is already known rather than re-inspected: asking the
-  // loader again would re-parse a 45 MB container and decode its textures for
-  // every checkbox, which is a second of work per click.
-  if (lastRows) renderLayerList(lastRows);
-}
-
-interface LayerRow {
-  index: number;
-  name: string;
-  /** What the rules alone decided, before any manual choice. */
-  ruleDrawn: boolean;
-  reason: string | null;
-}
-
-let lastRows: LayerRow[] | null = null;
-
-async function inspectLayers(): Promise<void> {
-  if (!pkg) return;
-  reset(stillLog, '正在解析图层…');
-  try {
-    const { parsePkg } = await import('../lib/we-scene/src/pkg/container.js');
-    const { parseScene } = await import('../lib/we-scene/src/scene/parse.js');
-    const { loadSceneAssets } = await import('../lib/scene/load-browser');
-
-    const container = parsePkg(new Uint8Array(pkg.bytes.slice(0)));
-    const entry = container.entries.find((e: { name: string }) => e.name === 'scene.json');
-    if (!entry) throw new Error('scene.json 不在容器里');
-    const data = new TextDecoder().decode(
-      container.buf.subarray(container.dataStart + entry.offset, container.dataStart + entry.offset + entry.size),
-    );
-    const scene = parseScene(JSON.parse(data));
-    // Asked with no overrides, so the list shows what the rules decided and
-    // the manual choices are layered on top of that rather than baked in.
-    const { hidden, drawn, textures } = await loadSceneAssets(container, scene, {});
-
-    const byIndex = new Map<number, string>();
-    for (const h of hidden) byIndex.set(h.index, h.reason);
-    const drawnIndex = new Set(drawn.map((d) => d.index));
-
-    const rows: LayerRow[] = scene.layers.map((layer: { name?: string }, index: number) => ({
-      index,
-      name: String(layer.name ?? ''),
-      ruleDrawn: drawnIndex.has(index),
-      reason: byIndex.get(index) ?? null,
-    }));
-
-    lastRows = rows;
-    const willDraw = rows.filter((r) => overrides[r.index] ?? r.ruleDrawn).length;
-    reset(stillLog, `共 ${rows.length} 层 · 规则会画 ${drawn.length} · 不画 ${hidden.length} · 纹理 ${textures.size}`);
-    say(stillLog, `按当前选择会画 ${willDraw} 层`);
-    renderLayerList(rows);
-  } catch (err) {
-    say(stillLog, `解析失败：${(err as Error).message}`, 'bad');
-  }
-}
-
-function renderLayerList(rows: LayerRow[]): void {
-  layerList.replaceChildren();
-
-  const title = document.createElement('h3');
-  title.textContent = '图层（勾选 = 画出来）';
-  layerList.append(title);
-
-  const hint = document.createElement('p');
-  hint.className = 'hint';
-  hint.textContent =
-    '改动会记住，并在下次「取第一帧」或「开始渲染」时生效。带「手动」的图层是你自己决定的，点「自动」还给规则。';
-  layerList.append(hint);
-
-  const reset_ = document.createElement('button');
-  reset_.type = 'button';
-  reset_.textContent = '全部交回规则';
-  reset_.style.marginBottom = '8px';
-  reset_.addEventListener('click', () => {
-    for (const key of Object.keys(overrides)) delete overrides[Number(key)];
-    saveOverrides();
-    void inspectLayers();
-  });
-  layerList.append(reset_);
-
-  for (const row of rows) {
-    const item = document.createElement('label');
-    const manual = overrides[row.index] !== undefined;
-    const willDraw = overrides[row.index] ?? row.ruleDrawn;
-    item.className = 'layer ' + (willDraw ? 'on' : 'off') + (manual ? ' manual' : '');
-
-    const box = document.createElement('input');
-    box.type = 'checkbox';
-    box.checked = willDraw;
-    box.addEventListener('change', () => setOverride(row.index, box.checked));
-    item.append(box);
-
-    const meta = document.createElement('span');
-    meta.className = 'meta';
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = `#${String(row.index).padStart(2, '0')} ${row.name}`;
-    meta.append(name);
-    const why = document.createElement('span');
-    why.className = 'why';
-    why.textContent = manual ? '手动' : (row.reason ?? '（规则允许，会画出来）');
-    meta.append(document.createElement('br'), why);
-    item.append(meta);
-
-    if (manual) {
-      const auto = document.createElement('button');
-      auto.type = 'button';
-      auto.textContent = '自动';
-      auto.style.flex = 'none';
-      auto.addEventListener('click', (event) => {
-        event.preventDefault();
-        setOverride(row.index, null);
-      });
-      item.append(auto);
-    }
-    layerList.append(item);
-  }
-}
-
-layersButton.addEventListener('click', () => void inspectLayers());
-
 /* --------------------------------- live --------------------------------- */
 
 stopButton.addEventListener('click', () => {
-  player?.stop();
-  player = null;
+  live?.stop();
+  live = null;
   if (ticker !== null) window.clearInterval(ticker);
   ticker = null;
   reset(playLog, '已停止。');
@@ -320,64 +160,105 @@ stopButton.addEventListener('click', () => {
 playButton.addEventListener('click', () => {
   if (!pkg) return;
   playButton.disabled = true;
-  reset(playLog, '正在启动 WebGL…');
-
-  // A canvas can only be handed to a worker once, ever, so every start gets a
-  // brand new element. Reusing one is what silently broke this in the app.
-  const canvas = document.createElement('canvas');
-  canvas.id = 'play-canvas';
-  playStage.replaceChildren(canvas);
-
+  reset(playLog, '正在加载…');
   const started = performance.now();
   void (async () => {
     try {
-      const started2 = await playScene(canvas, pkg!.bytes.slice(0), {
-        maxWidth: 1920,
-        fps: 30,
-        overrides,
-        onError: (message) => say(playLog, `渲染中途失败：${message}`, 'bad'),
-      });
-      player = started2;
-      const info = started2.info;
-      say(
-        playLog,
-        `已启动：${info.width}×${info.height}，解析 ${info.resolved}，跳过 ${info.skipped}，握手 ${Math.round(performance.now() - started)} ms`,
-        'ok',
-      );
+      live?.dispose();
+      live = null;
+      const options = { ...common(), canvas: playCanvas, source: pkg!.bytes.slice(0), autoStart: true };
+      const wallpaper = rossi() ? await createRossiWallpaper(options) : await createWallpaper(options);
+      live = wallpaper;
+      for (const id of hidden) wallpaper.setLayerVisible(id, false);
+      say(playLog, `已启动：${wallpaper.layers.length} 层，${((performance.now() - started) / 1000).toFixed(2)} s`, 'ok');
+      renderLayers(wallpaper);
 
-      // Only the worker's own count is reported. Sampling the placeholder with
-      // drawImage looks like it would answer "is it moving", but Chrome hands
-      // back the snapshot from the moment the canvas was transferred, so it
-      // reads a still picture off a scene that is animating perfectly well.
-      // Judge the picture with your eyes; this number says the loop is alive.
+      // The canvas is read rather than the frame count watched. This is a real
+      // canvas on the main thread, so unlike a transferred one it can be read
+      // back honestly - and "the loop is running" is a different claim from
+      // "the picture is changing", which is the one that matters.
+      let last = '';
+      let samples = 0;
+      let changes = 0;
       ticker = window.setInterval(() => {
-        const status = started2.status();
-        if (status.error) {
-          say(playLog, `worker 报告错误：${status.error}`, 'bad');
-          if (ticker !== null) window.clearInterval(ticker);
-          ticker = null;
-          return;
-        }
-        // Two numbers, because one of them lies on its own: frames counts the
-        // loop turning, painted counts the picture actually changing.
+        samples += 1;
+        const probe = document.createElement('canvas');
+        probe.width = 64;
+        probe.height = 36;
+        const ctx = probe.getContext('2d');
+        if (!ctx) return;
+        ctx.drawImage(playCanvas, 0, 0, 64, 36);
+        const shot = probe.toDataURL('image/png');
+        if (last && shot !== last) changes += 1;
+        last = shot;
+        const stalled = samples > 3 && changes === 0;
         say(
           playLog,
-          `已绘制 ${status.frames} 帧 · 画面变化 ${status.painted} 次` +
-            (status.frames > 60 && status.painted === 0 ? '  ← 循环在跑但画面没变' : ''),
-          status.frames > 60 && status.painted === 0 ? 'bad' : 'plain',
+          `采样 ${samples} 次 · 画面变化 ${changes} 次${stalled ? '  ← 画面没有变化' : ''}`,
+          stalled ? 'bad' : 'plain',
         );
-      }, 2000);
+      }, 1500);
     } catch (err) {
       say(playLog, `启动失败：${(err as Error).message}`, 'bad');
-      say(playLog, String((err as Error).stack ?? '').split('\n').slice(0, 4).join(' | '), 'bad');
+      say(playLog, String((err as Error).stack ?? '').split('\n').slice(0, 3).join(' | '), 'bad');
     } finally {
       ready();
     }
   })();
 });
 
+/* -------------------------------- layers -------------------------------- */
+
+function renderLayers(wallpaper: Wallpaper) {
+  layerList.replaceChildren();
+  const title = document.createElement('h3');
+  title.textContent = `图层（${wallpaper.layers.length} 个，勾选 = 显示）`;
+  layerList.append(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = '勾选立即生效，不需要重新开始渲染。';
+  layerList.append(hint);
+
+  for (const layer of wallpaper.layers) {
+    const item = document.createElement('label');
+    const on = !hidden.has(layer.id);
+    item.className = 'layer ' + (on ? 'on' : 'off');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = on;
+    box.addEventListener('change', () => {
+      wallpaper.setLayerVisible(layer.id, box.checked);
+      if (box.checked) hidden.delete(layer.id);
+      else hidden.add(layer.id);
+      item.className = 'layer ' + (box.checked ? 'on' : 'off');
+    });
+    item.append(box);
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = `#${layer.id} ${layer.name || layer.type}`;
+    const why = document.createElement('span');
+    why.className = 'why';
+    why.textContent = `${layer.type}${layer.visible ? '' : ' · 场景里本来是关闭的'}`;
+    meta.append(name, document.createElement('br'), why);
+    item.append(meta);
+    layerList.append(item);
+  }
+}
+
+layersButton.addEventListener('click', () => {
+  if (live) renderLayers(live);
+  else say(stillLog, '先开始渲染——图层清单来自正在运行的壁纸。', 'bad');
+});
+
 /* --------------------------------- boot --------------------------------- */
 
 ready();
-if (!canRenderScenes()) say(stillLog, '这个浏览器不支持合成（需要 Worker / OffscreenCanvas / createImageBitmap）', 'bad');
+modeSelect.addEventListener('change', () => {
+  hidden.clear();
+  reset(playLog, rossi() ? '已切到洛茜预设，重新开始渲染生效。' : '已切到通用加载，重新开始渲染生效。');
+});
 void loadFromUrl();

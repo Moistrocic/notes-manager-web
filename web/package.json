@@ -29,6 +29,7 @@
     "marked": "^18.0.13",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "wallpaper-scene-layers": "file:./src/lib/wallpaper-scene-layers/packages/we-scene",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
