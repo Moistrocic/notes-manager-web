@@ -35,6 +35,8 @@ export function Wallpaper() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
+  /** Diagnostics are worth saying once, not once per frame. */
+  const diagnosticSaid = useRef(false);
   const [failed, setFailed] = useState(false);
   const [viewport, setViewport] = useState(() => ({
     w: typeof window === 'undefined' ? 1280 : window.innerWidth,
@@ -106,7 +108,18 @@ export function Wallpaper() {
         if (cancelled) return;
         // No size hints: the library sizes itself from the canvas, which the
         // layer has already laid out at the size the screen needs.
-        player = await playScene(canvas, bytes, { onError: report });
+        player = await playScene(canvas, bytes, {
+          onError: report,
+          // Said once, and nothing is stopped. A scene that uses an effect the
+          // library cannot compile still renders the rest of itself, and the
+          // alternative - reporting it as a failure - took the whole wallpaper
+          // down and repeated the same toast for as long as it kept drawing.
+          onDiagnostic: (message) => {
+            if (diagnosticSaid.current) return;
+            diagnosticSaid.current = true;
+            pushToast({ title: '场景里有部分效果无法渲染', message, tone: 'info' });
+          },
+        });
         if (cancelled) {
           player.stop();
           return;

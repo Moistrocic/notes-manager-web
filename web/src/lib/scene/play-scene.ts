@@ -35,8 +35,17 @@ export function canPlayScenes(): boolean {
 
 export interface PlayOptions {
   maxWidth?: number;
-  /** Called if the library reports something worth surfacing. */
+  /**
+   * Called when something goes wrong that stops the scene.
+   *
+   * Not the same as a diagnostic, which is the library saying it could not do
+   * part of the job and carried on - an effect whose shader it cannot compile,
+   * say. Those are reported once and do not stop anything; routing them here
+   * stopped the wallpaper and filled the screen with identical toasts.
+   */
   onError?: (message: string) => void;
+  /** Something the library could not do, having worked around it. */
+  onDiagnostic?: (message: string) => void;
 }
 
 export async function playScene(
@@ -50,7 +59,7 @@ export async function playScene(
     fit: 'cover',
     autoStart: true,
     trackMouse: false,
-    onDiagnostic: (message: string) => options.onError?.(message),
+    onDiagnostic: (message: string) => options.onDiagnostic?.(message),
   });
 
   return {
