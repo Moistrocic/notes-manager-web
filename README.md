@@ -116,10 +116,10 @@ sudo systemctl restart notes-manager
 
 分两步：把文件放上服务器，然后在界面里选它。
 
-**第一步：把文件放进数据目录下的 `backgrounds/`**（默认 `/opt/notes-manager/data/backgrounds/`）：
+**第一步：把文件放进数据目录下的 `backgrounds/`**（默认 `/var/lib/notes-manager/backgrounds/`）：
 
 ```
-/opt/notes-manager/data/backgrounds/
+/var/lib/notes-manager/backgrounds/
 ├── scene.pkg          场景壁纸（Wallpaper Engine 的 .pkg）
 ├── *.jpg / *.png      图片
 └── *.mp4 / *.webm     视频
