@@ -14,7 +14,7 @@ import {
   Wand2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { api } from '../lib/api';
+import { api, backgroundFileUrl } from '../lib/api';
 import { cn } from '../lib/cn';
 import { sceneStillUrl } from '../lib/scene/render-still';
 import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
@@ -174,8 +174,7 @@ export function SettingsDialog() {
 
   // The picture the crop editor draws over: the file itself, or - for a scene,
   // which no img can read - one composited frame of it.
-  const previewUrl =
-    needsFile && background.file ? `/api/background/file?name=${encodeURIComponent(background.file)}` : null;
+  const previewUrl = needsFile && background.file ? backgroundFileUrl(background.file) : null;
   /** The size is part of the cache key: a replaced file is a different frame. */
   const previewBytes = available.find((entry) => entry.name === background.file)?.bytes ?? 0;
   const cropSource = background.kind === 'scene' ? cropStill : previewUrl;

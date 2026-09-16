@@ -59,9 +59,21 @@ export function Wallpaper() {
    */
   const live = playsScenesLive(wallpaper.kind, wallpaper.dynamicScene);
 
+  /**
+   * Says what went wrong, and whose background it was.
+   *
+   * A wallpaper that does not arrive is otherwise silence: the layer draws
+   * nothing, which looks the same as a background nobody configured. When it is
+   * the administrator's, name it and name the URL - a deployment under a sub
+   * path asks the wrong server, and that 404 is the whole story.
+   */
   const report = (message: string) => {
     setFailed(true);
-    pushToast({ title: '动态场景已停止', message, tone: 'error' });
+    pushToast({
+      title: locked ? '管理员设置的默认背景加载失败' : '动态场景已停止',
+      message: locked ? `${message}（${url}）` : message,
+      tone: 'error',
+    });
   };
 
   // Only the blur compensation needs this, but it has to be the real size.

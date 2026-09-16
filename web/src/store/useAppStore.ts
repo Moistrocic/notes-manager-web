@@ -1,6 +1,6 @@
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
-import { api } from '../lib/api';
+import { api, backgroundFileUrl } from '../lib/api';
 import { stripMarkdown } from '../lib/markdown';
 import { pushLocation, readLocation, replaceLocation } from '../lib/url';
 import { applyFonts } from '../lib/fonts';
@@ -907,9 +907,10 @@ export const appStore = createStore<AppState>((set, get) => ({
         adminBackground: {
           configured: payload.configured,
           kind: payload.kind,
-          // Cache-busted per file name: an administrator replacing the file
-          // should not have to wonder why nobody sees the new one.
-          url: payload.configured && payload.file ? `/api/background/file?v=${encodeURIComponent(payload.file)}` : '',
+          // Named, so it is a URL at a file rather than at "whatever is
+          // configured", and built from the API root so a deployment under a
+          // sub path asks the right server.
+          url: payload.configured && payload.file ? backgroundFileUrl(payload.file) : '',
           note: payload.note,
           file: payload.file,
           bytes: payload.bytes,

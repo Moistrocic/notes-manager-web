@@ -62,6 +62,20 @@ export function noteDownloadUrl(id: string): string {
   return `${API_ROOT}/notes/${encodeURIComponent(id)}/download`;
 }
 
+/**
+ * Where a background file is served from.
+ *
+ * Built from the API root rather than written out: the app can be installed
+ * under a sub path (`--base-path`), and a URL that starts at the domain root
+ * then points at nothing - which is a wallpaper that never arrives rather than
+ * an error anybody sees. Without a name it is whatever the administrator
+ * configured; with one it is that file, which is what the settings dialog
+ * previews while a choice is still being made.
+ */
+export function backgroundFileUrl(name?: string | null): string {
+  return name ? `${API_ROOT}/background/file?name=${encodeURIComponent(name)}` : `${API_ROOT}/background/file`;
+}
+
 export const api = {
   /* ------------------------------- auth -------------------------------- */
   providers: () => request<AuthProviders>('/auth/providers'),
