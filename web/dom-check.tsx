@@ -1668,7 +1668,7 @@ console.log('\nwallpaper loading (jsdom)');
     check('nothing is shown when nothing is loading', host.innerHTML, '');
 
     await act(async () => {
-      appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio: 0.45 } });
+      appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio: 0.45, rate: 1_900_000 } });
     });
     await render();
     check('and nothing the moment a load starts', host.innerHTML, '');
@@ -1678,7 +1678,7 @@ console.log('\nwallpaper loading (jsdom)');
     // with every update.
     await act(async () => {
       for (const ratio of [0.05, 0.2, 0.35, 0.45]) {
-        appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio } });
+        appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio, rate: 1_900_000 } });
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
     });
@@ -1688,12 +1688,13 @@ console.log('\nwallpaper loading (jsdom)');
     check('a slow load ends up saying what it is doing', host.innerHTML.includes('正在下载背景…'), true);
     check('with the percentage it has', host.innerHTML.includes('45%'), true);
     check('and a bar that is a bar', host.innerHTML.includes('width: 45%'), true);
+    check('with the rate, which is what says whether the line or the parsing is slow', host.innerHTML.includes('1.8 MB/s'), true);
     check('it sits across the top of the screen', host.innerHTML.includes('inset-x-0 top-4'), true);
 
     // The phases that cannot be measured say so with a moving bar rather than
     // a number nobody has.
     await act(async () => {
-      appStore.setState({ wallpaperLoading: { label: '正在合成背景…', ratio: null } });
+      appStore.setState({ wallpaperLoading: { label: '正在合成背景…', ratio: null, rate: null } });
     });
     await render();
     check('a phase without a number shows the walking bar', host.innerHTML.includes('progress-unknown'), true);

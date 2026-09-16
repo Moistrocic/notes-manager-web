@@ -9,7 +9,7 @@
  */
 
 import { createRossiWallpaper } from 'wallpaper-scene-layers';
-import { fetchWithProgress, type DownloadProgress } from '../download';
+import { fetchContainer, type DownloadProgress } from '../download';
 import { idbGet, idbPut } from '../wallpaper';
 import { releaseContext } from './play-scene';
 
@@ -59,12 +59,14 @@ export async function renderSceneStillFrom(
   url: string,
   options: RenderOptions,
   onProgress?: DownloadProgress,
+  /** What the container is, so it can be fetched once and kept. */
+  containerIdentity?: string | null,
 ): Promise<SceneStill> {
   if (options.useCache !== false) {
     const remembered = await idbGet<SceneStill>(CACHE_PREFIX + options.cacheKey);
     if (remembered?.blob) return remembered;
   }
-  const bytes = await fetchWithProgress(url, onProgress);
+  const bytes = await fetchContainer(url, containerIdentity ?? null, onProgress);
   return renderSceneStill(bytes, { ...options, useCache: false });
 }
 
@@ -74,8 +76,13 @@ export async function renderSceneStillFrom(
  * Used when a scene is not being played live: one frame is composited and the
  * result is a blob URL an img can show.
  */
-export async function sceneStillUrl(url: string, cacheKey: string, onProgress?: DownloadProgress): Promise<string> {
-  const still = await renderSceneStillFrom(url, { cacheKey }, onProgress);
+export async function sceneStillUrl(
+  url: string,
+  cacheKey: string,
+  onProgress?: DownloadProgress,
+  containerIdentity?: string | null,
+): Promise<string> {
+  const still = await renderSceneStillFrom(url, { cacheKey }, onProgress, containerIdentity);
   return URL.createObjectURL(still.blob);
 }
 

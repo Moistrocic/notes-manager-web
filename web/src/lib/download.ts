@@ -8,11 +8,12 @@
  * optional throughout: a proxy is allowed to drop it, and then the count of
  * bytes is all anyone can honestly report.
  *
- * The container cache is what stops a scene being downloaded again on every
- * visit. It keeps exactly one: the wallpaper that is in use, under the
- * fingerprint the server gave for its contents, so a replaced file is a
- * different fingerprint and therefore a download, and an unchanged one is a
- * read from disk.
+ * Two things stop the same file being fetched twice. The container cache keeps
+ * the one wallpaper in use, under the fingerprint the server gave for its
+ * contents, so a visit that changes nothing is a read from disk. And a download
+ * already running is joined rather than started again: the layer's effect can
+ * run more than once while the application is still settling, and a second 45 MB
+ * request competing with the first is what a slow wallpaper looks like.
  */
 import { idbGet, idbPut } from './wallpaper';
 
@@ -47,8 +48,12 @@ export async function readWithProgress(response: Response, onProgress?: Download
 }
 
 /** The same, for a URL: fetches it and fails the way a fetch should. */
-export async function fetchWithProgress(url: string, onProgress?: DownloadProgress): Promise<ArrayBuffer> {
-  const response = await fetch(url);
+export async function fetchWithProgress(
+  url: string,
+  onProgress?: DownloadProgress,
+  signal?: AbortSignal,
+): Promise<ArrayBuffer> {
+  const response = await fetch(url, signal ? { signal } : undefined);
   if (!response.ok) throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
   return readWithProgress(response, onProgress);
 }
@@ -61,6 +66,16 @@ interface CachedContainer {
   blob: Blob;
 }
 
+interface RunningDownload {
+  promise: Promise<ArrayBuffer>;
+  listeners: Set<DownloadProgress>;
+  /** The last thing the readers were told, for anyone joining late. */
+  last: [number, number | null] | null;
+}
+
+/** Downloads in progress, so two callers who want the same bytes wait together. */
+const running = new Map<string, RunningDownload>();
+
 /**
  * The container, from the browser's own copy when it is the same one.
  *
@@ -72,14 +87,47 @@ export async function fetchContainer(
   url: string,
   identity: string | null,
   onProgress?: DownloadProgress,
+  signal?: AbortSignal,
 ): Promise<ArrayBuffer> {
-  if (identity) {
-    const remembered = await idbGet<CachedContainer>(CONTAINER_KEY);
-    if (remembered?.blob && remembered.identity === identity) return remembered.blob.arrayBuffer();
+  if (!identity) return fetchWithProgress(url, onProgress, signal);
+
+  const remembered = await idbGet<CachedContainer>(CONTAINER_KEY);
+  if (remembered?.blob && remembered.identity === identity) {
+    // Said as finished progress, so a caller that shows a bar does not sit at
+    // zero while the bytes are read off the disk.
+    onProgress?.(remembered.blob.size, remembered.blob.size);
+    return remembered.blob.arrayBuffer();
   }
-  const bytes = await fetchWithProgress(url, onProgress);
-  // One record, replaced rather than added to: only the wallpaper in use is
-  // worth 45 MB of somebody's disk, and the one it replaces is not.
-  if (identity) void idbPut(CONTAINER_KEY, { identity, blob: new Blob([bytes]) } satisfies CachedContainer);
-  return bytes;
+
+  const existing = running.get(identity);
+  if (existing) {
+    if (onProgress) {
+      existing.listeners.add(onProgress);
+      if (existing.last) onProgress(existing.last[0], existing.last[1]);
+    }
+    return existing.promise;
+  }
+
+  const entry: RunningDownload = {
+    listeners: new Set(onProgress ? [onProgress] : []),
+    last: null,
+    promise: Promise.resolve(new ArrayBuffer(0)),
+  };
+  entry.promise = fetchWithProgress(
+    url,
+    (loaded, total) => {
+      entry.last = [loaded, total];
+      for (const listener of [...entry.listeners]) listener(loaded, total);
+    },
+    signal,
+  )
+    .then((bytes) => {
+      // One record, replaced rather than added to: only the wallpaper in use is
+      // worth 45 MB of somebody's disk, and the one it replaces is not.
+      void idbPut(CONTAINER_KEY, { identity, blob: new Blob([bytes]) } satisfies CachedContainer);
+      return bytes;
+    })
+    .finally(() => running.delete(identity));
+  running.set(identity, entry);
+  return entry.promise;
 }

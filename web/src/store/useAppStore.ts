@@ -202,8 +202,8 @@ interface AppState {
    * to look at nothing. The layer reports what it is doing, and the indicator in
    * the corner says so.
    */
-  wallpaperLoading: { label: string; ratio: number | null } | null;
-  setWallpaperLoading: (state: { label: string; ratio: number | null } | null) => void;
+  wallpaperLoading: { label: string; ratio: number | null; rate: number | null } | null;
+  setWallpaperLoading: (state: { label: string; ratio: number | null; rate: number | null } | null) => void;
   setWallpaper: (patch: Partial<WallpaperSettings>) => void;
   setWallpaperFile: (file: File, source?: WallpaperSource, kind?: WallpaperKind) => Promise<void>;
   clearWallpaper: () => Promise<void>;

@@ -37,13 +37,19 @@ export function WallpaperLoading() {
 
   if (!loading || !visible) return null;
   const percent = loading.ratio === null ? null : Math.round(Math.min(1, Math.max(0, loading.ratio)) * 100);
+  // The rate is what tells a slow line apart from slow parsing, which is the
+  // difference between waiting and fixing something.
+  const rate = loading.rate && loading.rate > 0 ? `${(loading.rate / 1024 / 1024).toFixed(1)} MB/s` : null;
 
   return (
     <div className="pointer-events-none fixed inset-x-0 top-4 z-[70] flex justify-center px-4" role="status" aria-live="polite">
       <div className="w-full max-w-sm rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--panel-solid)_92%,transparent)] px-4 py-3 shadow-strong backdrop-blur">
         <div className="flex items-baseline gap-3">
           <Loader2 className="h-3.5 w-3.5 shrink-0 translate-y-0.5 animate-spin text-[var(--accent)]" />
-          <span className="min-w-0 flex-1 text-[12.5px] text-[var(--text)]">{loading.label}</span>
+          <span className="min-w-0 flex-1 text-[12.5px] text-[var(--text)]">
+            {loading.label}
+            {rate ? <span className="ml-2 text-[11px] text-[var(--faint)]">{rate}</span> : null}
+          </span>
           {percent === null ? null : (
             <span className="shrink-0 font-mono text-[17px] font-semibold leading-none tabular-nums text-[var(--accent)]">
               {percent}%

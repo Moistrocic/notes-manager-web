@@ -58,6 +58,50 @@ export function Wallpaper() {
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
   const setLoading = useAppStore((s) => s.setWallpaperLoading);
+  /**
+   * Says how the load is going, without saying it 700 times.
+   *
+   * A 45 MB response arrives in tens of thousands of chunks; a state update per
+   * chunk is thousands of renders for a bar nobody can read that fast. Four a
+   * second is smooth, and the rate is worked out from the bytes between them.
+   */
+  const reporter = useRef<{ at: number; loaded: number; said: number; doneAt: number | null; started: number }>({
+    at: 0,
+    loaded: 0,
+    said: 0,
+    doneAt: null,
+    started: 0,
+  });
+  const beginLoad = (label: string) => {
+    reporter.current = { at: performance.now(), loaded: 0, said: 0, doneAt: null, started: performance.now() };
+    setLoading({ label, ratio: null, rate: null });
+  };
+  const reportProgress = (label: string) => (loaded: number, total: number | null) => {
+    const state = reporter.current;
+    const now = performance.now();
+    state.loaded = loaded;
+    const finished = total !== null && loaded >= total;
+    if (finished) state.doneAt = state.doneAt ?? now;
+    if (!finished && now - state.said < 250) return;
+    state.said = now;
+    const seconds = (now - state.at) / 1000;
+    const rate = seconds > 0 ? loaded / ((now - state.started) / 1000) : 0;
+    setLoading(
+      finished
+        ? { label, ratio: null, rate: null }
+        : { label, ratio: total ? loaded / total : null, rate },
+    );
+  };
+  /** What took the time, for whoever has the console open. */
+  const reportTiming = (what: string, restSeconds: number) => {
+    const state = reporter.current;
+    const seconds = ((state.doneAt ?? performance.now()) - state.started) / 1000;
+    const rate = seconds > 0 ? state.loaded / 1024 / 1024 / seconds : 0;
+    console.info(
+      `[wallpaper] ${what}: ${(state.loaded / 1024 / 1024).toFixed(1)} MB in ${seconds.toFixed(1)}s ` +
+        `(${rate.toFixed(2)} MB/s), then ${restSeconds.toFixed(1)}s`,
+    );
+  };
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
@@ -156,7 +200,7 @@ export function Wallpaper() {
 
     // The container is fetched here rather than by the worker, so that the wait
     // has a number; the worker's own download would be invisible from this side.
-    setLoading({ label: '正在载入动态场景…', ratio: null });
+    beginLoad('正在载入动态场景…');
 
     void (async () => {
       try {
@@ -165,12 +209,7 @@ export function Wallpaper() {
           cacheIdentity: containerIdentity,
           onProgress: (loaded, total) => {
             if (cancelled) return;
-            const finished = total !== null && loaded >= total;
-            setLoading(
-              finished
-                ? { label: '正在解析场景…', ratio: null }
-                : { label: '正在下载场景…', ratio: total ? loaded / total : null },
-            );
+            reportProgress('正在下载场景…')(loaded, total);
           },
           onError: fail,
           // Said once, and nothing is stopped. A scene that uses an effect the
@@ -190,6 +229,7 @@ export function Wallpaper() {
         playerRef.current = player;
         if (document.hidden) player.pause();
         setLoading(null);
+        reportTiming('动态场景', (performance.now() - (reporter.current.doneAt ?? performance.now())) / 1000);
       } catch (err) {
         fail((err as Error).message);
         setLoading(null);
@@ -226,23 +266,24 @@ export function Wallpaper() {
     // the container being parsed and its textures decoded, which is where the
     // seconds go. The bar covers the download, which is the part that has an
     // answer; the rest says what it is doing.
-    setLoading({ label: '正在载入背景…', ratio: null });
+    beginLoad('正在载入背景…');
     void (async () => {
       try {
-        made = await sceneStillUrl(url, `still:${identityKey ?? url}`, (loaded, total) => {
-          if (cancelled) return;
-          const finished = total !== null && loaded >= total;
-          setLoading(
-            finished
-              ? { label: '正在合成背景…', ratio: null }
-              : { label: '正在下载背景…', ratio: total ? loaded / total : null },
-          );
-        });
+        made = await sceneStillUrl(
+          url,
+          `still:${identityKey ?? url}`,
+          (loaded, total) => {
+            if (cancelled) return;
+            reportProgress('正在下载背景…')(loaded, total);
+          },
+          containerIdentity,
+        );
         if (cancelled) {
           URL.revokeObjectURL(made);
           return;
         }
         setStill(made);
+        reportTiming('静态背景', (performance.now() - (reporter.current.doneAt ?? performance.now())) / 1000);
       } catch (err) {
         if (!cancelled) report((err as Error).message);
       } finally {
@@ -266,7 +307,7 @@ export function Wallpaper() {
    */
   useEffect(() => {
     if (wallpaper.kind === 'none' || wallpaper.kind === 'scene' || !url) return undefined;
-    setLoading({ label: '正在载入背景…', ratio: null });
+    setLoading({ label: '正在载入背景…', ratio: null, rate: null });
     return () => setLoading(null);
   }, [wallpaper.kind, url, setLoading]);
 
