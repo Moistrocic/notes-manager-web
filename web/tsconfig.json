@@ -28,5 +28,9 @@
     "store-check.tsx",
     "outline-check.tsx",
     "dom-check.tsx"
-  ]
+  ],
+  // The submodules are other repositories with their own configs and their own
+  // strictness. Reading their sources with ours reports their dead parameters
+  // as our errors, which says nothing about this project.
+  "exclude": ["src/lib/wallpaper-scene-layers", "src/lib/we-scene"]
 }
