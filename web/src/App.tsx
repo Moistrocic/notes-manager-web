@@ -15,6 +15,7 @@ import { Button } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { applyAccent, applyAurora } from './lib/accent';
+import { shownWallpaper } from './lib/admin-background';
 import { cn } from './lib/cn';
 import { useAppStore } from './store/useAppStore';
 
@@ -22,13 +23,20 @@ export default function App() {
   const booted = useAppStore((s) => s.booted);
   const user = useAppStore((s) => s.user);
   const boot = useAppStore((s) => s.boot);
-  const wallpaper = useAppStore((s) => s.wallpaper);
+  const settings = useAppStore((s) => s.wallpaper);
+  const admin = useAppStore((s) => s.adminBackground);
+  // The same overlay the background layer uses, so the theme's own background
+  // takes the administrator's colours when theirs is the one showing.
+  const wallpaper = shownWallpaper(settings, admin);
   const accent = useAppStore((s) => s.accent);
   // Every hook is called on every render. Reading the url inside the && would
   // call useAppStore only when a wallpaper is set, so the hook count would
   // change the moment boot() loads one and React would unmount the whole tree.
   const wallpaperUrl = useAppStore((s) => s.wallpaperUrl);
-  const wallpaperActive = wallpaper.kind !== 'none' && Boolean(wallpaperUrl);
+  // The layer shows the administrator's file when theirs is the one in use, and
+  // the user's own URL otherwise - the theme's background has neither.
+  const layerUrl = wallpaper === settings ? wallpaperUrl : wallpaper.url;
+  const wallpaperActive = wallpaper.kind !== 'none' && Boolean(layerUrl);
   useHotkeys();
 
   // One place decides the interface colour: the wallpaper's own when that is

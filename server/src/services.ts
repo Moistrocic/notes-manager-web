@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { AuthService } from './auth/service.js';
 import { SessionStore } from './auth/sessions.js';
 import { SettingsStore, StateStore, serverConfig, type ServerConfig } from './config.js';
-import { BackgroundStore } from './backgrounds/store.js';
+import { BackgroundStore, adoptManifest } from './backgrounds/store.js';
 import { FontStore } from './fonts/store.js';
 import { createLogger } from './logger.js';
 import { NotesRepository } from './notes/repository.js';
@@ -37,6 +37,8 @@ export function createServices(): Services {
   const fonts = new FontStore(config.dataDir);
 
   const backgrounds = new BackgroundStore(config.dataDir);
+  // A selection written by hand before this was a setting is taken over once.
+  adoptManifest(settings, backgrounds);
   return { config, settings, state, sessions, storage, notes, auth, fonts, backgrounds };
 }
 

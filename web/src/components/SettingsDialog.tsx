@@ -15,12 +15,45 @@ import {
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
-import type { AppSettingsPayload } from '../lib/types';
+import { sceneStillUrl } from '../lib/scene/render-still';
+import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
 import { useAppStore } from '../store/useAppStore';
 import { StatusDetail, StatusPill } from './StatusPill';
+import { WallpaperCrop } from './WallpaperCrop';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
 
 type Driver = 'auto' | 'openlist' | 'local';
+
+/** What the administrator can make the default background out of. */
+const BACKGROUND_KINDS: { value: BackgroundSettings['kind']; label: string; hint: string }[] = [
+  { value: 'off', label: '不设置', hint: '每个人自己在「外观」里选' },
+  { value: 'aurora', label: '主题极光', hint: '主题自带的动态背景，可选两个颜色' },
+  { value: 'image', label: '图片', hint: 'JPG / PNG / WebP / GIF' },
+  { value: 'video', label: '视频', hint: 'MP4 / WebM' },
+  { value: 'scene', label: '场景壁纸', hint: 'Wallpaper Engine 的 .pkg，可实时渲染' },
+];
+
+const KIND_LABELS: Record<string, string> = { image: '图片', video: '视频', scene: '场景壁纸' };
+
+const DEFAULT_BACKGROUND: BackgroundSettings = {
+  kind: 'off',
+  file: '',
+  note: '',
+  crop: { x: 0, y: 0, w: 1, h: 1 },
+  blur: 0,
+  dim: 0.35,
+  dynamic: false,
+  auroraA: '',
+  auroraB: '',
+};
+
+/** A file size, for a list of files nobody wants to read in bytes. */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 /** A file name inside a sentence, so the paths read as paths. */
 function Code({ children }: { children: React.ReactNode }) {
@@ -51,6 +84,10 @@ export function SettingsDialog() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  /** The default background being edited, saved with the rest of the form. */
+  const [background, setBackground] = useState<BackgroundSettings>(DEFAULT_BACKGROUND);
+  /** A composited frame of the scene being picked, for the crop editor. */
+  const [cropStill, setCropStill] = useState<string | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
   const version = useAppStore((s) => s.status?.version);
 
@@ -66,6 +103,7 @@ export function SettingsDialog() {
         setToken(data.settings.storage.openlist.token);
         setRoot(data.settings.storage.openlist.root);
         setPerUser(data.settings.storage.openlist.perUser);
+        setBackground(data.settings.background ?? DEFAULT_BACKGROUND);
       })
       .catch((err: Error) => pushToast({ title: '读取设置失败', message: err.message, tone: 'error' }));
   }, [open, pushToast]);
@@ -78,9 +116,10 @@ export function SettingsDialog() {
           driver,
           openlist: { url: url.trim(), token: token.trim(), root: root.trim() || '/notes', perUser },
         },
+        background,
       });
       pushToast({ title: '设置已保存', tone: 'success' });
-      await Promise.all([refreshStatus(), refreshNotes({ silent: true })]);
+      await Promise.all([refreshStatus(), refreshNotes({ silent: true }), refreshAdminBackground()]);
       const data = await api.settings();
       setPayload(data);
     } catch (err) {
@@ -104,6 +143,57 @@ export function SettingsDialog() {
   };
 
   const envLocked = (key: string) => payload?.effective.sources?.[key] === 'env';
+
+  /** A file kind needs a file; the theme's own background does not. */
+  const needsFile = background.kind === 'image' || background.kind === 'video' || background.kind === 'scene';
+  const available = adminBackground?.available ?? [];
+  const matchingFiles = needsFile ? available.filter((entry) => entry.kind === background.kind) : [];
+  const backgroundsDir = payload ? `${payload.paths.dataDir}/backgrounds` : 'data/backgrounds';
+  const kindLabel = (kind: BackgroundSettings['kind']) => KIND_LABELS[kind] ?? '背景';
+
+  /** Choosing a kind also chooses a file, when there is one of that kind. */
+  const chooseKind = (kind: BackgroundSettings['kind']) => {
+    setBackground((current) => {
+      if (kind !== 'image' && kind !== 'video' && kind !== 'scene') return { ...current, kind, file: '' };
+      const kept = available.find((entry) => entry.kind === kind && entry.name === current.file);
+      const first = kept ?? available.find((entry) => entry.kind === kind);
+      return { ...current, kind, file: first?.name ?? '' };
+    });
+  };
+
+  // The picture the crop editor draws over: the file itself, or - for a scene,
+  // which no img can read - one composited frame of it.
+  const previewUrl =
+    needsFile && background.file ? `/api/background/file?name=${encodeURIComponent(background.file)}` : null;
+  /** The size is part of the cache key: a replaced file is a different frame. */
+  const previewBytes = available.find((entry) => entry.name === background.file)?.bytes ?? 0;
+  const cropSource = background.kind === 'scene' ? cropStill : previewUrl;
+
+  useEffect(() => {
+    if (!open || background.kind !== 'scene' || !previewUrl) {
+      setCropStill(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let made: string | null = null;
+    void (async () => {
+      try {
+        made = await sceneStillUrl(previewUrl, `admin:${background.file}:${previewBytes}`);
+        if (cancelled) {
+          URL.revokeObjectURL(made);
+          return;
+        }
+        setCropStill(made);
+      } catch {
+        /* nothing to draw over; the editor says so instead */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (made) URL.revokeObjectURL(made);
+      setCropStill(null);
+    };
+  }, [open, background.kind, background.file, previewUrl, previewBytes]);
 
   return (
     <Modal
@@ -189,38 +279,194 @@ export function SettingsDialog() {
           </div>
         </section>
 
-        {/* The background everyone gets, and where to put it. Read-only: the
-            administrator manages it with a file manager rather than a form. */}
+        {/* The background everyone gets, and how it should look. The files are
+            the administrator's own, dropped into backgrounds/ with a file
+            manager; everything about them is set here. */}
         <section>
           <SectionTitle icon={ImageIcon} title="默认背景" hint="所有人打开面板时看到的背景" />
-          <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
-            {adminBackground?.configured ? (
-              <div className="flex items-center gap-2 text-[12.5px]">
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
-                <span className="text-[var(--text)]">已设置</span>
-                {adminBackground.note ? (
-                  <span className="min-w-0 truncate text-[var(--faint)]">· {adminBackground.note}</span>
-                ) : null}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto shrink-0"
-                  onClick={() => void refreshAdminBackground()}
+          <div className="space-y-3 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {BACKGROUND_KINDS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => chooseKind(option.value)}
+                  title={option.hint}
+                  className={cn(
+                    'focus-ring rounded-full border px-3 py-1 text-[11.5px] transition-colors',
+                    background.kind === option.value
+                      ? 'border-transparent bg-[var(--accent)] text-white'
+                      : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]',
+                  )}
                 >
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  重新读取
-                </Button>
+                  {option.label}
+                </button>
+              ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto shrink-0"
+                onClick={() => void refreshAdminBackground()}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                重新读取
+              </Button>
+            </div>
+
+            {needsFile ? (
+              <div className="space-y-2">
+                <div className="text-[11.5px] text-[var(--faint)]">
+                  背景文件 · 服务器数据目录下的 <Code>backgrounds/</Code>
+                </div>
+                {matchingFiles.length > 0 ? (
+                  <div className="max-h-40 space-y-1 overflow-y-auto">
+                    {matchingFiles.map((entry) => (
+                      <button
+                        key={entry.name}
+                        type="button"
+                        onClick={() => setBackground((current) => ({ ...current, file: entry.name }))}
+                        className={cn(
+                          'focus-ring flex w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[12px] transition-colors',
+                          background.file === entry.name
+                            ? 'border-[color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[var(--accent-soft)] text-[var(--text)]'
+                            : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]',
+                        )}
+                      >
+                        <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
+                        <span className="shrink-0 text-[11px] text-[var(--faint)]">{formatBytes(entry.bytes)}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2 text-[11.5px] leading-relaxed text-[var(--warn)]">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      这里还没有{kindLabel(background.kind)}文件。把文件放进{' '}
+                      <Code>{backgroundsDir}</Code> 之后点「重新读取」。
+                    </span>
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="flex items-start gap-2 text-[12px] leading-relaxed text-[var(--faint)]">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>
-                  还没有设置。把 <Code>scene.pkg</Code> 或一张图片放进服务器数据目录下的{' '}
-                  <Code>backgrounds/</Code>，重启服务即可；也可以放一个 <Code>background.json</Code>{' '}
-                  指定用哪个文件。
-                </span>
+            ) : null}
+
+            {background.kind === 'aurora' ? (
+              <div className="flex flex-wrap items-center gap-3">
+                {(
+                  [
+                    { key: 'auroraA' as const, label: '主色', fallback: '#6d4cff' },
+                    { key: 'auroraB' as const, label: '辅色', fallback: '#0ea5e9' },
+                  ] as const
+                ).map((field) => (
+                  <label key={field.key} className="flex items-center gap-2">
+                    <span className="text-[11.5px] text-[var(--faint)]">{field.label}</span>
+                    <input
+                      type="color"
+                      aria-label={`极光${field.label}`}
+                      value={background[field.key] || field.fallback}
+                      onChange={(e) => setBackground((current) => ({ ...current, [field.key]: e.target.value }))}
+                      className="h-7 w-10 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
+                    />
+                  </label>
+                ))}
+                {background.auroraA || background.auroraB ? (
+                  <button
+                    type="button"
+                    onClick={() => setBackground((current) => ({ ...current, auroraA: '', auroraB: '' }))}
+                    className="focus-ring rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  >
+                    恢复主题色
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-[var(--faint)]">当前跟随主题的两个强调色</span>
+                )}
               </div>
-            )}
+            ) : null}
+
+            {needsFile ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {(
+                    [
+                      { key: 'blur' as const, label: '模糊', min: 0, max: 40, step: 1, suffix: 'px' },
+                      { key: 'dim' as const, label: '暗度', min: 0, max: 0.85, step: 0.05, suffix: '' },
+                    ] as const
+                  ).map((control) => (
+                    <label key={control.key} className="space-y-1.5">
+                      <span className="flex items-center justify-between text-[12px] text-[var(--muted)]">
+                        <span>{control.label}</span>
+                        <span className="text-[var(--faint)]">
+                          {control.key === 'dim'
+                            ? `${Math.round(background[control.key] * 100)}%`
+                            : `${background[control.key]}${control.suffix}`}
+                        </span>
+                      </span>
+                      <input
+                        type="range"
+                        min={control.min}
+                        max={control.max}
+                        step={control.step}
+                        value={background[control.key]}
+                        onChange={(e) =>
+                          setBackground((current) => ({ ...current, [control.key]: Number(e.target.value) }))
+                        }
+                        className="w-full accent-[var(--accent)]"
+                      />
+                    </label>
+                  ))}
+                </div>
+
+                {background.kind === 'scene' ? (
+                  <div className="flex items-start justify-between gap-3 rounded-xl border border-[var(--line)] p-2.5">
+                    <div className="min-w-0">
+                      <div className="text-[12px] text-[var(--muted)]">实时渲染</div>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                        开启后场景壁纸在 worker 里实时播放（有动画，较耗电）；关闭则合成一张静态背景图，所有人打开面板都只下载那一张。
+                      </p>
+                    </div>
+                    <Switch
+                      checked={background.dynamic}
+                      onChange={(value) => setBackground((current) => ({ ...current, dynamic: value }))}
+                      className="mt-0.5 shrink-0"
+                    />
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-[12px] text-[var(--muted)]">取景区</span>
+                    <span className="text-[11px] text-[var(--faint)]">框住的部分会填满屏幕</span>
+                  </div>
+                  {cropSource ? (
+                    <WallpaperCrop
+                      src={cropSource}
+                      kind={background.kind === 'scene' ? 'scene' : background.kind === 'video' ? 'video' : 'image'}
+                      crop={background.crop}
+                      onChange={(crop) => setBackground((current) => ({ ...current, crop }))}
+                      unavailable={
+                        background.kind === 'scene' ? '正在从场景里取一帧用于预览…' : '这个文件还没有可以预览的图片。'
+                      }
+                    />
+                  ) : (
+                    <p className="text-[11px] text-[var(--faint)]">选好文件后可以在这里框选要显示的区域。</p>
+                  )}
+                </div>
+              </>
+            ) : null}
+
+            <Field label="备注" hint="给以后接手的人看">
+              <Input
+                value={background.note}
+                onChange={(e) => setBackground((current) => ({ ...current, note: e.target.value }))}
+                placeholder="例如：洛茜 Rossi · 创意工坊 3691554683"
+              />
+            </Field>
+
+            <p className="text-[11px] leading-relaxed text-[var(--faint)]">
+              {background.kind === 'off'
+                ? '没有默认背景：每个人在「外观」里自己选。已经选过的人不会被打扰。'
+                : '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；取景区、模糊、暗度与是否实时渲染都以这里为准。'}{' '}
+              改完点右下角保存。
+            </p>
           </div>
         </section>
 

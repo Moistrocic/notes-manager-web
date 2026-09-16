@@ -16,6 +16,7 @@ import {
   type WallpaperSettings,
   type WallpaperSource,
 } from '../lib/wallpaper';
+import type { AdminBackground } from '../lib/admin-background';
 import { ApiError } from '../lib/types';
 import type {
   AuthProviders,
@@ -177,12 +178,7 @@ interface AppState {
    * switch that uses this is one the user can turn off, and turning it off
    * should give them back what they had, not a blank page.
    */
-  adminBackground: {
-    configured: boolean;
-    kind: 'image' | 'scene' | null;
-    url: string;
-    note: string | null;
-  } | null;
+  adminBackground: AdminBackground | null;
   refreshAdminBackground: () => Promise<void>;
   /** The interface colour taken from the wallpaper, when that is turned on. */
   accent: string | null;
@@ -911,8 +907,12 @@ export const appStore = createStore<AppState>((set, get) => ({
           kind: payload.kind,
           // Cache-busted per file name: an administrator replacing the file
           // should not have to wonder why nobody sees the new one.
-          url: payload.configured ? `/api/background/file?v=${encodeURIComponent(payload.file ?? '')}` : '',
+          url: payload.configured && payload.file ? `/api/background/file?v=${encodeURIComponent(payload.file)}` : '',
           note: payload.note,
+          file: payload.file,
+          bytes: payload.bytes,
+          options: payload.options,
+          available: payload.available,
         },
       });
     } catch {

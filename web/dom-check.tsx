@@ -1294,5 +1294,119 @@ console.log('\nversion display (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- the administrator's default background -------------------------------- */
+console.log('\ndefault background (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    settingsOpen: true,
+    adminBackground: {
+      configured: true,
+      kind: 'scene',
+      file: 'rossi.pkg',
+      bytes: 45_562_692,
+      url: '/api/background/file?v=rossi.pkg',
+      note: '洛茜 Rossi',
+      options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
+      available: [
+        { name: 'rossi.pkg', kind: 'scene', bytes: 45_562_692 },
+        { name: 'loop.mp4', kind: 'video', bytes: 2_048_000 },
+        { name: 'still.png', kind: 'image', bytes: 1024 },
+      ],
+    },
+  });
+
+  // The section edits the saved settings, which the dialog reads from the
+  // server; jsdom has no server, so it is answered here.
+  const realFetch = globalThis.fetch;
+  const settings = {
+    storage: {
+      driver: 'local',
+      openlist: { url: '', token: '', root: '/notes', perUser: false, timeoutMs: 15000 },
+      local: { root: '' },
+    },
+    background: {
+      kind: 'scene',
+      file: 'rossi.pkg',
+      note: '洛茜 Rossi',
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      blur: 0,
+      dim: 0.35,
+      dynamic: false,
+      auroraA: '',
+      auroraB: '',
+    },
+  };
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith('/api/system/settings')) {
+      return new Response(
+        JSON.stringify({
+          settings,
+          effective: { ...settings, background: settings.background, sources: {} },
+          paths: {
+            projectRoot: '/srv/notes-manager',
+            dataDir: '/srv/notes-manager/data',
+            localNotesRoot: '/srv/notes-manager/data/notes',
+            envFile: '/srv/notes-manager/.env',
+            envFileLoaded: true,
+          },
+          env: { storageDriver: null, openlistUrl: null, openlistTokenSet: false, openlistRoot: null, notesRoot: null },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    throw new Error('no server here');
+  }) as typeof fetch;
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(SettingsDialog));
+  });
+  await flush();
+  // The kind is a choice, and the parameters follow it: what is on screen when
+  // the dialog opens is whatever was saved, which here is a scene.
+  let markup = host.innerHTML;
+  check('the settings dialog offers the kinds', ['不设置', '主题极光', '图片', '视频', '场景壁纸'].every((label) => markup.includes(label)), true);
+  check('and the files that can be chosen', markup.includes('rossi.pkg'), true);
+  check('with their size', markup.includes('43.5 MB'), true);
+  check('and the darkness and framing controls', markup.includes('模糊') && markup.includes('暗度') && markup.includes('取景区'), true);
+  check('a scene can be played or composited', markup.includes('在 worker 里实时播放'), true);
+  check('the files it cannot use are not offered', markup.includes('still.png'), false);
+  check('and it says where to put them', markup.includes('backgrounds'), true);
+  check('with a note field', markup.includes('备注'), true);
+
+  // Switching to the theme's own background swaps the file list for colours.
+  const aurora = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === '主题极光');
+  await act(async () => {
+    aurora?.click();
+  });
+  markup = host.innerHTML;
+  check('the theme background offers its two colours', markup.includes('极光主色') && markup.includes('极光辅色'), true);
+  check('and needs no file', markup.includes('rossi.pkg'), false);
+  check('and no crop editor either', markup.includes('拖动方框移动'), false);
+
+  // Video is its own kind, with its own files.
+  const video = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === '视频');
+  await act(async () => {
+    video?.click();
+  });
+  markup = host.innerHTML;
+  check('a video kind lists videos', markup.includes('loop.mp4'), true);
+  check('and not the scenes', markup.includes('rossi.pkg'), false);
+  // A picture the browser can show is its own preview, so the crop editor is
+  // there to frame it - a scene has to be composited first, which jsdom cannot do.
+  check('and a video can be framed', markup.includes('拖动方框移动'), true);
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  globalThis.fetch = realFetch;
+  appStore.setState(hold);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

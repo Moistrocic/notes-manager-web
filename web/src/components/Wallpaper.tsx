@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { extractAccent } from '../lib/accent';
+import { shownWallpaper } from '../lib/admin-background';
 import { playScene, playsScenesLive, type ScenePlayer } from '../lib/scene/play-scene';
 import { sceneStillUrl } from '../lib/scene/render-still';
 import { cropMediaStyle } from '../lib/wallpaper';
@@ -24,14 +25,16 @@ export function Wallpaper() {
    *
    * An overlay rather than a replacement: the user's own choice stays in the
    * settings untouched, so turning the switch off gives it straight back, and
-   * nothing downstream has to know there are two sources.
+   * nothing downstream has to know there are two sources. Everything the layer
+   * reads - kind, framing, darkness, whether a scene animates - comes from the
+   * administrator while it is showing.
    */
-  const locked = settings.useAdminBackground && admin?.configured === true;
-  const wallpaper = locked
-    ? { ...settings, kind: admin?.kind ?? 'image', source: 'url' as const, url: admin?.url ?? '' }
-    : settings;
-  const url = locked ? (admin?.url ?? '') : ownUrl;
-  const identityKey = locked ? (admin?.url ?? '') : identity;
+  const wallpaper = shownWallpaper(settings, admin);
+  const locked = wallpaper !== settings;
+  const url = locked ? wallpaper.url : ownUrl;
+  // A blob URL is different on every page load; a file in the server's
+  // backgrounds folder is not, so the composed frame is remembered by name.
+  const identityKey = locked ? `admin:${admin?.file ?? ''}:${admin?.bytes ?? 0}` : identity;
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
   const videoRef = useRef<HTMLVideoElement | null>(null);

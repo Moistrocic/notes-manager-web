@@ -1,3 +1,5 @@
+import type { BackgroundOptions } from './admin-background';
+
 export interface NoteSummary {
   id: string;
   title: string;
@@ -163,6 +165,13 @@ export interface NoteCapabilities {
   } | null;
 }
 
+/** What the server stores about the administrator's default background. */
+export interface BackgroundSettings extends BackgroundOptions {
+  kind: 'off' | 'aurora' | 'image' | 'video' | 'scene';
+  file: string;
+  note: string;
+}
+
 export interface AppSettingsPayload {
   settings: {
     storage: {
@@ -170,6 +179,7 @@ export interface AppSettingsPayload {
       openlist: { url: string; token: string; root: string; perUser: boolean; timeoutMs: number };
       local: { root: string };
     };
+    background: BackgroundSettings;
   };
   effective: {
     storage: {
@@ -177,6 +187,7 @@ export interface AppSettingsPayload {
       openlist: { url: string; token: string; root: string; perUser: boolean; timeoutMs: number };
       local: { root: string };
     };
+    background: BackgroundSettings;
     sources: Record<string, 'env' | 'file' | 'default'>;
   };
   paths: {

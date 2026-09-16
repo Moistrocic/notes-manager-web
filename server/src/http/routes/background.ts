@@ -10,8 +10,9 @@ const log = createLogger('routes:background');
  *
  * Deliberately not behind requireAuth: the sign-in screen shows the background
  * too, and it is the one thing on the page that has to arrive before anybody
- * has a session. It exposes a file the administrator chose to publish, and
- * nothing else - the file has to be one the store has already listed.
+ * has a session. It is how the layer learns what to show and how to show it -
+ * the file it may load has to be one the store already listed, and the rest is
+ * the administrator's choices about framing and darkness.
  */
 export function backgroundRoutes(services: Services): Router {
   const router = Router();
@@ -19,15 +20,28 @@ export function backgroundRoutes(services: Services): Router {
   router.get(
     '/',
     handler(async (_req, res) => {
+      const settings = services.settings.effective().background;
       const files = services.backgrounds.list();
-      const picked = services.backgrounds.pick();
+      const file = services.backgrounds.find(settings.file);
+      // A file kind without a usable file is not a background: an administrator
+      // who deleted the file leaves everybody with their own choice rather than
+      // a locked, broken page.
+      const kind = settings.kind === 'off' ? null : settings.kind === 'aurora' ? 'aurora' : file ? settings.kind : null;
       res.json({
-        configured: Boolean(picked),
-        file: picked?.name ?? null,
-        kind: picked?.kind ?? null,
-        bytes: picked?.bytes ?? 0,
-        available: files.map((f) => ({ name: f.name, kind: f.kind, bytes: f.bytes })),
-        note: services.backgrounds.manifest().note ?? null,
+        configured: kind !== null,
+        kind,
+        file: file?.name ?? null,
+        bytes: file?.bytes ?? 0,
+        note: settings.note || null,
+        options: {
+          crop: settings.crop,
+          blur: settings.blur,
+          dim: settings.dim,
+          dynamic: settings.dynamic,
+          auroraA: settings.auroraA,
+          auroraB: settings.auroraB,
+        },
+        available: files.map((entry) => ({ name: entry.name, kind: entry.kind, bytes: entry.bytes })),
       });
     }),
   );
@@ -36,8 +50,11 @@ export function backgroundRoutes(services: Services): Router {
     '/file',
     handler(async (req, res) => {
       const wanted = typeof req.query.name === 'string' && req.query.name ? req.query.name : null;
-      const picked = services.backgrounds.pick();
-      const file = wanted ? services.backgrounds.list().find((f) => f.name === wanted) : picked;
+      const settings = services.settings.effective().background;
+      // Without a name this is the configured background, whatever that is;
+      // with one it is a preview of a file in the folder, which is what the
+      // settings dialog asks for while the choice is still being made.
+      const file = wanted ? services.backgrounds.find(wanted) : services.backgrounds.find(settings.file);
       if (!file) {
         res.status(404).json({ error: { message: '没有可用的背景', code: 'no_background' } });
         return;

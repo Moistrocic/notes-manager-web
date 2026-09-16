@@ -182,5 +182,118 @@ try {
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Default background                                                          */
+/* -------------------------------------------------------------------------- */
+const { BackgroundStore, adoptManifest, kindOf } = await import(
+  `file://${path.join(HERE, '..', 'server', 'dist', 'backgrounds', 'store.js').replace(/\\/g, '/')}`,
+);
+const { SettingsStore } = await import(`file://${path.join(HERE, '..', 'server', 'dist', 'config.js').replace(/\\/g, '/')}`);
+const { mkdirSync } = await import('node:fs');
+
+console.log('');
+console.log('default background');
+
+check('a picture is a picture', kindOf('wall.jpg'), 'image');
+check('a video is a video', kindOf('loop.webm'), 'video');
+check('a container is a scene', kindOf('scene.pkg'), 'scene');
+check('extension match is case insensitive', kindOf('WALL.PNG'), 'image');
+check('anything else is nothing', kindOf('notes.md'), null);
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-bg-'));
+  try {
+    const store = new BackgroundStore(dir);
+    mkdirSync(store.dir, { recursive: true });
+    writeFileSync(path.join(store.dir, 'loop.mp4'), Buffer.alloc(2048));
+    writeFileSync(path.join(store.dir, 'still.png'), Buffer.alloc(1024));
+    writeFileSync(path.join(store.dir, 'rossi.pkg'), Buffer.alloc(4096));
+    writeFileSync(path.join(store.dir, 'notes.txt'), 'ignore me');
+    writeFileSync(path.join(store.dir, '.hidden.png'), Buffer.alloc(8));
+
+    const listed = store.list();
+    check('only the files it can serve are listed', listed.map((f) => f.name), ['rossi.pkg', 'loop.mp4', 'still.png']);
+    check('the scene comes first', listed[0].kind, 'scene');
+    check('sizes come from disk', listed[0].bytes, 4096);
+    check('a name finds its file', store.find('loop.mp4')?.kind, 'video');
+    check('an absent name finds nothing', store.find('nope.png'), null);
+    check('a path is not a name', store.resolve('../secret.png'), null);
+    check('a listed name resolves inside the folder', path.basename(store.resolve('still.png') ?? ''), 'still.png');
+    check('a pkg is served as bytes', store.contentType(store.find('rossi.pkg')), 'application/octet-stream');
+    check('a video keeps its own type', store.contentType(store.find('loop.mp4')), 'video/mp4');
+
+    // What the settings dialog saves, and what the layer reads back.
+    const settings = new SettingsStore(dir);
+    check('a fresh install has no default background', settings.effective().background.kind, 'off');
+    check('and therefore locks nobody', settings.effective().background.file, '');
+
+    settings.update({
+      background: {
+        kind: 'scene',
+        file: 'rossi.pkg',
+        note: '洛茜 Rossi',
+        crop: { x: -1, y: 0.9, w: 0.001, h: 0.5 },
+        blur: 400,
+        dim: 9,
+        dynamic: true,
+        auroraA: '#AABBCC',
+        auroraB: 'not a colour',
+      },
+    });
+    const saved = new SettingsStore(dir).effective().background;
+    check('the choice is remembered', [saved.kind, saved.file, saved.note], ['scene', 'rossi.pkg', '洛茜 Rossi']);
+    check('a wild selection is clamped into the picture', saved.crop, { x: 0, y: 0.5, w: 0.05, h: 0.5 });
+    check('blur is clamped to something a screen can show', saved.blur, 40);
+    check('so is the dim', saved.dim, 0.85);
+    check('a colour is normalised', saved.auroraA, '#aabbcc');
+    check('and a non-colour falls back to the theme', saved.auroraB, '');
+    check('a full height selection cannot be moved vertically', (() => {
+      settings.update({ background: { ...settings.effective().background, crop: { x: 0.5, y: 0.9, w: 1, h: 1 } } });
+      return settings.effective().background.crop;
+    })(), { x: 0, y: 0, w: 1, h: 1 });
+    check('an unknown kind is ignored', (() => {
+      settings.update({ background: { ...saved, kind: 'hologram' } });
+      return settings.effective().background.kind;
+    })(), 'scene');
+
+    // A hand written background.json predates the settings section.
+    const legacy = mkdtempSync(path.join(os.tmpdir(), 'nm-bg-legacy-'));
+    try {
+      const legacyStore = new BackgroundStore(legacy);
+      mkdirSync(legacyStore.dir, { recursive: true });
+      writeFileSync(path.join(legacyStore.dir, 'rossi.pkg'), Buffer.alloc(16));
+      writeFileSync(path.join(legacyStore.dir, 'background.json'), JSON.stringify({ file: 'rossi.pkg', kind: 'scene', note: '旧文件' }), 'utf8');
+      const legacySettings = new SettingsStore(legacy);
+      adoptManifest(legacySettings, legacyStore);
+      const adopted = legacySettings.effective().background;
+      check('background.json is imported once', [adopted.kind, adopted.file, adopted.note], ['scene', 'rossi.pkg', '旧文件']);
+      check('and marked as taken', existsSync(path.join(legacyStore.dir, 'background.json')), false);
+      check('nothing is read a second time', existsSync(path.join(legacyStore.dir, 'background.json.imported')), true);
+
+      // Choosing 「不设置」 afterwards must not bring the old file back.
+      legacySettings.update({ background: { ...adopted, kind: 'off', file: '' } });
+      writeFileSync(path.join(legacyStore.dir, 'background.json.imported'), JSON.stringify({ file: 'rossi.pkg' }), 'utf8');
+      adoptManifest(legacySettings, legacyStore);
+      check('turning it off stays off', legacySettings.effective().background.kind, 'off');
+
+      const missing = mkdtempSync(path.join(os.tmpdir(), 'nm-bg-missing-'));
+      try {
+        const missingStore = new BackgroundStore(missing);
+        mkdirSync(missingStore.dir, { recursive: true });
+        writeFileSync(path.join(missingStore.dir, 'background.json'), JSON.stringify({ file: 'gone.pkg' }), 'utf8');
+        const missingSettings = new SettingsStore(missing);
+        adoptManifest(missingSettings, missingStore);
+        check('a manifest naming a missing file configures nothing', missingSettings.effective().background.kind, 'off');
+      } finally {
+        rmSync(missing, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1,4 +1,5 @@
 import { ApiError } from './types';
+import type { BackgroundFile, BackgroundOptions } from './admin-background';
 import type {
   AuthProviders,
   FontRecord,
@@ -167,14 +168,16 @@ export const api = {
       `/notes/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`,
       { method: 'DELETE' },
     ),
-  /** What the administrator put in the server's backgrounds directory. */
+  /** The administrator's default background: which file, and how to show it. */
   background: () =>
     request<{
       configured: boolean;
       file: string | null;
-      kind: 'image' | 'scene' | null;
+      kind: 'aurora' | 'image' | 'video' | 'scene' | null;
       bytes: number;
       note: string | null;
+      options: BackgroundOptions;
+      available: BackgroundFile[];
     }>('/background'),
 
   listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),

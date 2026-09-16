@@ -24,8 +24,85 @@ export interface StorageSettings {
   local: { root: string };
 }
 
+/**
+ * What everyone sees behind the app when the administrator has chosen.
+ *
+ * `off` is not a background: it hands the choice back to each user, which is
+ * what an install that has never configured one does. `aurora` is the theme's
+ * own background, which takes two colours rather than a file.
+ */
+export type BackgroundKind = 'off' | 'aurora' | 'image' | 'video' | 'scene';
+
+/** Which part of the picture fills the screen, in fractions of the picture. */
+export interface BackgroundCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface BackgroundSettings {
+  kind: BackgroundKind;
+  /** File name inside the data directory's `backgrounds/` folder. */
+  file: string;
+  /** One line about where it came from, shown to whoever finds it later. */
+  note: string;
+  crop: BackgroundCrop;
+  /** Blur radius in pixels, and how dark the scrim over it is. */
+  blur: number;
+  dim: number;
+  /** Scenes only: render live, or composite a single frame. */
+  dynamic: boolean;
+  /** The theme's own background takes two colours; empty means the theme's. */
+  auroraA: string;
+  auroraB: string;
+}
+
 export interface AppSettings {
   storage: StorageSettings;
+  background: BackgroundSettings;
+}
+
+const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene'];
+/** The smallest selection the crop editor can produce, as a server side floor. */
+const MIN_CROP = 0.05;
+
+export const DEFAULT_BACKGROUND: BackgroundSettings = {
+  kind: 'off',
+  file: '',
+  note: '',
+  crop: { x: 0, y: 0, w: 1, h: 1 },
+  blur: 0,
+  // Dark enough that the glass panels read over a photograph, which is what
+  // the user side defaults to as well.
+  dim: 0.35,
+  dynamic: false,
+  auroraA: '',
+  auroraB: '',
+};
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(max, Math.max(min, number));
+}
+
+/** A colour the browser will accept, or nothing so the theme keeps its own. */
+function colour(value: unknown, fallback: string): string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim().toLowerCase() : fallback;
+}
+
+function readCrop(value: unknown, fallback: BackgroundCrop): BackgroundCrop {
+  if (!value || typeof value !== 'object') return fallback;
+  const raw = value as Partial<BackgroundCrop>;
+  const w = clampNumber(raw.w, MIN_CROP, 1, fallback.w);
+  const h = clampNumber(raw.h, MIN_CROP, 1, fallback.h);
+  return {
+    x: clampNumber(raw.x, 0, 1 - w, fallback.x),
+    y: clampNumber(raw.y, 0, 1 - h, fallback.y),
+    w,
+    h,
+  };
 }
 
 export interface EffectiveSettings extends AppSettings {
@@ -46,6 +123,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     // Empty means "derive from DATA_DIR" (see SettingsStore.effective()).
     local: { root: '' },
   },
+  background: DEFAULT_BACKGROUND,
 };
 
 export interface ServerConfig {
@@ -218,6 +296,7 @@ export class SettingsStore {
         },
         local: { root: localRoot ? resolveFromRoot(localRoot) : path.join(serverConfig.dataDir, 'notes') },
       },
+      background: structuredClone(this.data.background),
       sources,
     };
   }
@@ -245,6 +324,19 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
       if (typeof o.timeoutMs === 'number' && o.timeoutMs > 0) out.storage.openlist.timeoutMs = o.timeoutMs;
     }
     if (s.local && typeof s.local.root === 'string') out.storage.local.root = s.local.root;
+  }
+  if (patch.background) {
+    const b = (patch.background ?? {}) as Partial<BackgroundSettings>;
+    const current = out.background;
+    if (b.kind && BACKGROUND_KINDS.includes(b.kind)) current.kind = b.kind;
+    if (typeof b.file === 'string') current.file = b.file.trim();
+    if (typeof b.note === 'string') current.note = b.note.trim().slice(0, 200);
+    if (b.crop) current.crop = readCrop(b.crop, current.crop);
+    if (b.blur !== undefined) current.blur = Math.round(clampNumber(b.blur, 0, 40, current.blur));
+    if (b.dim !== undefined) current.dim = clampNumber(b.dim, 0, 0.85, current.dim);
+    if (typeof b.dynamic === 'boolean') current.dynamic = b.dynamic;
+    if (b.auroraA !== undefined) current.auroraA = colour(b.auroraA, '');
+    if (b.auroraB !== undefined) current.auroraB = colour(b.auroraB, '');
   }
   return out;
 }
