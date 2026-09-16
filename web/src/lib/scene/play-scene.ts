@@ -22,14 +22,88 @@ export interface ScenePlayer {
   resume(): void;
 }
 
-/** The browser can do this here and now? */
-export function canPlayScenes(): boolean {
-  if (typeof document === 'undefined' || typeof HTMLCanvasElement === 'undefined') return false;
+/**
+ * The largest drawing buffer a live scene may ask the GPU for.
+ *
+ * The renderer sizes its buffer from the element, and the crop sizes the
+ * element, so selecting a tenth of the picture asked for a hundred times the
+ * pixels - every frame, plus render targets the same size again. Past the
+ * screen's own resolution none of it is visible: those pixels are interpolated
+ * from the ones the scene's own textures have. What it does buy is a driver
+ * that runs out of memory and takes the context with it. Cap it, and let the
+ * browser magnify what was drawn instead.
+ */
+const MAX_BUFFER_SIDE = 8192;
+const MAX_BUFFER_PIXELS = 16_000_000;
+
+function devicePixelRatio(): number {
+  if (typeof window === 'undefined') return 1;
+  return window.devicePixelRatio || 1;
+}
+
+/**
+ * The ratio to hand the renderer: the screen's, unless that would ask for more
+ * pixels than a wallpaper is worth.
+ */
+export function scenePixelRatio(canvas: HTMLCanvasElement): number {
+  const ratio = devicePixelRatio();
+  // The element is already the size the crop makes it, which is exactly what
+  // the renderer would measure; the fallbacks are the library's own.
+  const width = (canvas.clientWidth || canvas.width || 1920) * ratio;
+  const height = (canvas.clientHeight || canvas.height || 1080) * ratio;
+  const shrink = Math.max(1, Math.max(width, height) / MAX_BUFFER_SIDE, Math.sqrt((width * height) / MAX_BUFFER_PIXELS));
+  return ratio / shrink;
+}
+
+/** Builds one context to find out, and gives it back before returning. */
+export function probeSceneSupport(): boolean {
+  if (typeof document === 'undefined') return false;
   try {
     const probe = document.createElement('canvas');
-    return Boolean(probe.getContext('webgl2'));
+    const gl = probe.getContext('webgl2') as WebGL2RenderingContext | null;
+    releaseContext(probe, gl);
+    return Boolean(gl);
   } catch {
     return false;
+  }
+}
+
+/** The answer, remembered: a browser does not grow a WebGL2 out of nothing. */
+let sceneSupport: boolean | null = null;
+
+/**
+ * Whether this browser can run a scene at all.
+ *
+ * The question is asked on every render of the appearance dialog, which is
+ * every step of a crop drag - and the probe used to allocate a WebGL context
+ * each time it was asked. A browser keeps only a handful of live contexts and
+ * drops the oldest to make room, so a drag ended with the wallpaper's own
+ * context evicted: the scene stopped rendering, and nothing but a new canvas
+ * could bring it back, because a canvas whose context has been lost is never
+ * given another one. Ask once, and hand the probe's context straight back.
+ */
+export function canPlayScenes(): boolean {
+  if (sceneSupport === null) sceneSupport = probeSceneSupport();
+  return sceneSupport;
+}
+
+/**
+ * Gives a canvas's WebGL context back to the browser.
+ *
+ * A canvas nobody will draw on again holds its context until the garbage
+ * collector happens to run, and there are only a handful to go round. The
+ * thumbnail canvases are used once, so this is what keeps a run of still
+ * renders from evicting the context of the wallpaper that is on screen.
+ *
+ * Only ever for canvases that are finished with: a lost context cannot be
+ * replaced, so this is not something to do to the layer's own canvas.
+ */
+export function releaseContext(canvas: HTMLCanvasElement, known?: WebGL2RenderingContext | null): void {
+  try {
+    const gl = known === undefined ? (canvas.getContext('webgl2') as WebGL2RenderingContext | null) : known;
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch {
+    /* no context to give back */
   }
 }
 
@@ -59,6 +133,7 @@ export async function playScene(
     fit: 'cover',
     autoStart: true,
     trackMouse: false,
+    pixelRatio: scenePixelRatio(canvas),
     onDiagnostic: (message: string) => options.onDiagnostic?.(message),
   });
 

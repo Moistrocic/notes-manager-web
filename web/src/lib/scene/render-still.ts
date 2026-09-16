@@ -10,6 +10,7 @@
 
 import { createRossiWallpaper } from 'wallpaper-scene-layers';
 import { idbGet, idbPut } from '../wallpaper';
+import { releaseContext } from './play-scene';
 
 export interface SceneStill {
   blob: Blob;
@@ -84,5 +85,10 @@ export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOpt
     return still;
   } finally {
     wallpaper.dispose();
+    // The canvas is finished with; its WebGL context is a browser wide resource
+    // that would otherwise sit there until a garbage collection happened to
+    // collect it, and the wallpaper's own context is the one that pays when
+    // they run out.
+    releaseContext(canvas);
   }
 }

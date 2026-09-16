@@ -894,7 +894,7 @@ console.log('\nwallpaper accent (jsdom)');
 }
 
 /* --- a live scene wallpaper draws into a canvas ---------------------------- */
-const { canPlayScenes } = await import('./src/lib/scene/play-scene');
+const { canPlayScenes, probeSceneSupport, scenePixelRatio } = await import('./src/lib/scene/play-scene');
 
 console.log('\nlive scene wallpaper (jsdom)');
 {
@@ -919,6 +919,58 @@ console.log('\nlive scene wallpaper (jsdom)');
   // Still by default: a live scene holds a GPU context and draws forever.
   check('dynamic scenes are off by default', DEFAULT_WALLPAPER.dynamicScene, false);
   check('and the browser check is honest here', canPlayScenes(), false);
+
+  // A browser keeps only a handful of live WebGL contexts and drops the oldest
+  // to make room. The question above is asked on every render of the dialog -
+  // every step of a crop drag - so a probe that allocated a context per call
+  // evicted the wallpaper's, and the scene never drew again.
+  {
+    // HTMLCanvasElement is not one of the globals this file installs, but the
+    // element is real, so its prototype is where the method lives.
+    const canvasProto = Object.getPrototypeOf(document.createElement('canvas')) as {
+      getContext: (kind: string, ...rest: unknown[]) => unknown;
+    };
+    const original = canvasProto.getContext;
+    let asked = 0;
+    let released = 0;
+    canvasProto.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+      if (kind !== 'webgl2') return original.call(this, kind, ...rest);
+      asked += 1;
+      return {
+        getExtension: (name: string) =>
+          name === 'WEBGL_lose_context' ? { loseContext: () => { released += 1; } } : null,
+      } as unknown as WebGL2RenderingContext;
+    };
+    try {
+      check('the browser is asked for one WebGL2 context', probeSceneSupport(), true);
+      check('exactly one, for the question', asked, 1);
+      check('and it is handed straight back', released, 1);
+      const remembered = canPlayScenes();
+      check('asking again uses the remembered answer', [asked, remembered], [1, false]);
+    } finally {
+      canvasProto.getContext = original;
+    }
+  }
+
+  // The renderer sizes its drawing buffer from the element, and the crop sizes
+  // the element, so the selection decides how many pixels a live scene asks the
+  // GPU for - at every frame. Past the screen's own resolution there is nothing
+  // to see and a driver to lose.
+  {
+    const sized = (width: number, height: number) => {
+      const canvas = document.createElement('canvas');
+      Object.defineProperty(canvas, 'clientWidth', { value: width, configurable: true });
+      Object.defineProperty(canvas, 'clientHeight', { value: height, configurable: true });
+      return canvas;
+    };
+    const dpr = window.devicePixelRatio || 1;
+    check('a scene that fits the screen is rendered at the screen ratio', scenePixelRatio(sized(1600, 900)), dpr);
+    const magnified = scenePixelRatio(sized(16000, 9000));
+    check('a magnified selection is not rendered at its own size', magnified < dpr, true);
+    check('and its buffer fits the pixel budget', 16000 * magnified * 9000 * magnified <= 16_000_001, true);
+    check('and the side limit', 16000 * magnified <= 8192, true);
+    check('a tiny element is never scaled up', scenePixelRatio(sized(100, 60)) <= dpr, true);
+  }
 
   appStore.setState({
     wallpaper: { ...DEFAULT_WALLPAPER, kind: 'scene', source: 'library', dynamicScene: true },
