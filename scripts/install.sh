@@ -546,7 +546,7 @@ copy_application() {
   chmod +x "$dst"/scripts/*.sh 2>/dev/null || true
 }
 
-# we-scene is a git submodule. A clone made without --recursive - which is what
+# The scene library is a git submodule. A clone made without --recursive - which
 # "git clone <url>" gives you - leaves that directory empty, so fetch it before
 # the copy. verify_tree() below then checks it really arrived, because the only
 # other symptom would be a bundle error naming a module nobody recognises.
@@ -556,7 +556,7 @@ if [ -f "$SRC_DIR/.gitmodules" ] && command -v git >/dev/null 2>&1; then
     ok "submodules up to date"
   else
     warn "could not update submodules (offline?). If the build fails on a"
-    warn "we-scene import, run: git -C $SRC_DIR submodule update --init --recursive"
+    warn "wallpaper-scene-layers import, run: git -C $SRC_DIR submodule update --init --recursive"
   fi
 fi
 

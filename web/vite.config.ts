@@ -94,10 +94,9 @@ export default defineConfig({
       },
     },
   },
-  // No worker any more: the scene library takes an HTMLCanvasElement and draws
-  // on the main thread. The worker existed because the previous renderer
-  // transferred an OffscreenCanvas, and it cost the ability to read the canvas
-  // back - which is how a frozen scene went unnoticed for so long.
+  // No worker configuration: the scene library bundles its own render worker,
+  // which the app pulls in through `wallpaper-scene-layers/worker?worker`, so
+  // Vite emits it without being told where it lives.
   build: {
     outDir: 'dist',
     sourcemap: false,

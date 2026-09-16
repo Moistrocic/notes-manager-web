@@ -10,9 +10,9 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "resolveJsonModule": true,
-    // we-scene is a submodule of plain ES modules with no types of their own.
-    // allowJs lets TypeScript read them; checkJs stays off, so their internals
-    // are inferred rather than reported on.
+    // The scene library is a submodule whose sources are read here rather than
+    // their declarations being consulted; allowJs lets TypeScript read them and
+    // checkJs stays off, so its internals are inferred rather than reported on.
     "allowJs": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -32,5 +32,5 @@
   // The submodules are other repositories with their own configs and their own
   // strictness. Reading their sources with ours reports their dead parameters
   // as our errors, which says nothing about this project.
-  "exclude": ["src/lib/wallpaper-scene-layers", "src/lib/we-scene"]
+  "exclude": ["src/lib/wallpaper-scene-layers"]
 }

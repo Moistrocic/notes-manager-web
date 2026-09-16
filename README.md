@@ -174,14 +174,15 @@ sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次�
 ### 第三方项目
 
 场景壁纸（`scene.pkg`）的容器解析、纹理解码与渲染使用了
-[**we-scene**](https://github.com/wangkaxds/we-scene)（MIT 许可，著作权归其作者）。
+[**wallpaper-scene-layers**](https://github.com/Moistrocic/wallpaper-scene-layers)
+（MIT 许可）——本项目作者自己维护的库，不在 npm 上，所以工作区直接依赖它这个目录。
 
-它通过 **git 子模块**引入到 `web/src/lib/we-scene`，**父仓库记录的是确切的提交**，
+它通过 **git 子模块**引入到 `web/src/lib/wallpaper-scene-layers`，**父仓库记录的是确切的提交**，
 所以用的是哪个版本一目了然，而不是散落一份无法追溯的复制文件：
 
 ```bash
-git submodule status                       # 当前签出的提交
-git ls-tree HEAD web/src/lib/we-scene      # 本仓库钉住的提交
+git submodule status                                    # 当前签出的提交
+git ls-tree HEAD web/src/lib/wallpaper-scene-layers     # 本仓库钉住的提交
 ```
 
 因此克隆时必须带上子模块：
@@ -192,5 +193,8 @@ git clone --recursive https://github.com/Moistrocic/notes-manager-web.git
 
 已经克隆过的、或从 GitHub 下载 ZIP 的，需要补一条
 `git submodule update --init --recursive`（安装脚本会自动执行，构建时若仍缺失会直接报错说明）。
+
+库的包入口（`packages/we-scene/dist`）是**构建产物、不在仓库里**：克隆后要构建一次，
+`npm run build:scene`（`npm install` 之后会自动执行，安装脚本也会构建）。
 
 本项目的其余部分均为自有实现。
