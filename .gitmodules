@@ -1,3 +1,6 @@
 [submodule "web/src/lib/we-scene"]
 	path = web/src/lib/we-scene
 	url = https://github.com/wangkaxds/we-scene.git
+[submodule "web/src/lib/wallpaper-scene-layers"]
+	path = web/src/lib/wallpaper-scene-layers
+	url = https://github.com/Moistrocic/wallpaper-scene-layers.git
