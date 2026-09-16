@@ -5,18 +5,26 @@ import { CROP_PRESETS, cropForRatio, resizeCrop, type CropHandle, type CropRect 
 /** Eight handles: four edges change one axis, four corners change both. */
 type Handle = Exclude<CropHandle, 'move'>;
 
+/**
+ * Handles sit inside the selection, not straddling its outline.
+ *
+ * They used to hang half outside it, which is the usual look and reads well -
+ * until the selection reaches the edge of the picture. The preview clips its
+ * contents, so there the handle was cut off, and the one place you most want to
+ * grab it was the one place it was not there.
+ */
 const CORNERS: { id: Handle; className: string }[] = [
-  { id: 'nw', className: '-left-1.5 -top-1.5 cursor-nwse-resize' },
-  { id: 'ne', className: '-right-1.5 -top-1.5 cursor-nesw-resize' },
-  { id: 'sw', className: '-bottom-1.5 -left-1.5 cursor-nesw-resize' },
-  { id: 'se', className: '-bottom-1.5 -right-1.5 cursor-nwse-resize' },
+  { id: 'nw', className: 'left-0 top-0 cursor-nwse-resize' },
+  { id: 'ne', className: 'right-0 top-0 cursor-nesw-resize' },
+  { id: 'sw', className: 'bottom-0 left-0 cursor-nesw-resize' },
+  { id: 'se', className: 'bottom-0 right-0 cursor-nwse-resize' },
 ];
 
 const EDGES: { id: Handle; className: string }[] = [
-  { id: 'n', className: 'left-1/2 -top-1 h-2 w-6 -translate-x-1/2 cursor-ns-resize' },
-  { id: 's', className: 'left-1/2 -bottom-1 h-2 w-6 -translate-x-1/2 cursor-ns-resize' },
-  { id: 'w', className: 'top-1/2 -left-1 h-6 w-2 -translate-y-1/2 cursor-ew-resize' },
-  { id: 'e', className: 'top-1/2 -right-1 h-6 w-2 -translate-y-1/2 cursor-ew-resize' },
+  { id: 'n', className: 'left-1/2 top-0 h-2 w-6 -translate-x-1/2 cursor-ns-resize' },
+  { id: 's', className: 'bottom-0 left-1/2 h-2 w-6 -translate-x-1/2 cursor-ns-resize' },
+  { id: 'w', className: 'left-0 top-1/2 h-6 w-2 -translate-y-1/2 cursor-ew-resize' },
+  { id: 'e', className: 'right-0 top-1/2 h-6 w-2 -translate-y-1/2 cursor-ew-resize' },
 ];
 
 /**

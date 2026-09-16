@@ -1044,10 +1044,19 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
 
   setWallpaper: (patch) => {
-    const next = { ...get().wallpaper, ...patch };
+    const before = get().wallpaper;
+    const next = { ...before, ...patch };
     saveWallpaperSettings(next);
     set({ wallpaper: next });
-    void get().refreshWallpaperUrl();
+
+    // Only the fields that decide *what* is on screen need the url rebuilt.
+    // Refreshing it for every change - and the crop editor changes on every
+    // drag - revoked the blob and made a new one, so an image reloaded and a
+    // video restarted from zero with its aspect ratio briefly unknown, which
+    // is what made the crop frame jump while the selection was being dragged.
+    const reloads =
+      before.kind !== next.kind || before.source !== next.source || before.url !== next.url;
+    if (reloads) void get().refreshWallpaperUrl();
   },
 
   setWallpaperFile: async (file, source = 'file', explicitKind) => {
