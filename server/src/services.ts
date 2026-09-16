@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { AuthService } from './auth/service.js';
 import { SessionStore } from './auth/sessions.js';
 import { SettingsStore, StateStore, serverConfig, type ServerConfig } from './config.js';
+import { BackgroundStore } from './backgrounds/store.js';
 import { FontStore } from './fonts/store.js';
 import { createLogger } from './logger.js';
 import { NotesRepository } from './notes/repository.js';
@@ -18,6 +19,8 @@ export interface Services {
   notes: NotesRepository;
   auth: AuthService;
   fonts: FontStore;
+  /** The administrator's default background, read from the data directory. */
+  backgrounds: BackgroundStore;
 }
 
 export function createServices(): Services {
@@ -33,7 +36,8 @@ export function createServices(): Services {
   auth.bootstrap();
   const fonts = new FontStore(config.dataDir);
 
-  return { config, settings, state, sessions, storage, notes, auth, fonts };
+  const backgrounds = new BackgroundStore(config.dataDir);
+  return { config, settings, state, sessions, storage, notes, auth, fonts, backgrounds };
 }
 
 let cached: Services | null = null;
