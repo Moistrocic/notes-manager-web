@@ -1,49 +1,40 @@
 /**
- * Gets one frame of a scene wallpaper and remembers it.
+ * One frame of a scene wallpaper, for the static background.
  *
- * The frame comes from the same WebGL renderer the live wallpaper uses - see
- * scene.worker.ts. It used to come from a second, CPU rasteriser, and the two
- * disagreed about which textures resolved and which layers to hide, so a scene
- * could look one way as a still and another way once it was animated.
- *
- * This is the default: one frame, cached, no ongoing cost. The live version
- * lives in play-scene.ts.
+ * The frame comes from the same renderer the live wallpaper uses - the library
+ * exposes renderFrame(time) for exactly this - so a scene cannot look one way
+ * as a still and another way once it animates. It used to be composited by a
+ * second, CPU rasteriser, and the two disagreed about which textures resolved
+ * and which layers to hide.
  */
 
+import { createRossiWallpaper } from 'wallpaper-scene-layers';
 import { idbGet, idbPut } from '../wallpaper';
-import type { LayerOverrides, StillRequest, StillResponse } from './protocol';
-import { awaitReply, getSceneWorker, nextRequestId } from './worker';
 
 export interface SceneStill {
   blob: Blob;
   width: number;
   height: number;
+  /** Layers in the scene, after the preset's filter. */
   drawn: number;
   resolved: number;
   skipped: number;
 }
 
 /**
- * Bumped whenever the renderer's output changes - the layer loader, the
- * rasteriser, the vendored code. Without it a wallpaper keeps showing the frame
- * an older build produced, which is how white boxes survived the fix that
- * removed them.
+ * Bumped whenever the renderer's output changes. Without it a wallpaper keeps
+ * showing the frame an older build produced, which is how white boxes survived
+ * the fix that removed them.
  *
- * It has to be bumped for every change that alters what a scene looks like,
- * including the ones that only remove something. v3: the still comes from the
- * WebGL renderer rather than the CPU rasteriser, and the layers Wallpaper
- * Engine would have hidden at run time are hidden.
+ * v4: drawn by wallpaper-scene-layers, with its particle simulation and text
+ * rasterisation, rather than by the renderer whose unsupported layers were
+ * painted as white rectangles.
  */
-const RENDER_VERSION = 'v3';
+const RENDER_VERSION = 'v4';
 const CACHE_PREFIX = `scene-still:${RENDER_VERSION}:`;
 
-/** The browser can do this here and now? */
 export function canRenderScenes(): boolean {
-  return (
-    typeof Worker !== 'undefined' &&
-    typeof OffscreenCanvas !== 'undefined' &&
-    typeof createImageBitmap === 'function'
-  );
+  return typeof document !== 'undefined' && typeof HTMLCanvasElement !== 'undefined';
 }
 
 export interface RenderOptions {
@@ -51,16 +42,8 @@ export interface RenderOptions {
   cacheKey: string;
   maxWidth?: number;
   quality?: number;
-  /**
-   * Whether a remembered frame may be reused.
-   *
-   * On in the app, where the same wallpaper is drawn over and over. Off in the
-   * test bench, where the whole point is to see what the current code produces
-   * - and where a cache hit is indistinguishable from a fix that did nothing.
-   */
+  /** Whether a remembered frame may be reused. */
   useCache?: boolean;
-  /** Per-layer draw decisions, overriding the loader's rules. */
-  overrides?: LayerOverrides;
 }
 
 export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOptions): Promise<SceneStill> {
@@ -70,32 +53,36 @@ export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOpt
     if (cached?.blob) return cached;
   }
 
-  const id = nextRequestId();
-  const worker = getSceneWorker();
-  const reply = awaitReply<StillResponse>(id, worker);
+  const width = options.maxWidth ?? 2560;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = Math.round((width * 9) / 16);
 
-  const request: StillRequest = {
-    kind: 'still',
-    id,
-    bytes: pkgBytes,
-    maxWidth: options.maxWidth ?? 2560,
-    quality: options.quality ?? 0.92,
-    overrides: options.overrides,
-  };
-  // The buffer is transferred, so the caller's copy is gone afterwards.
-  worker.postMessage(request, [pkgBytes]);
+  const wallpaper = await createRossiWallpaper({
+    canvas,
+    source: pkgBytes,
+    fit: 'cover',
+    autoStart: false,
+    trackMouse: false,
+  });
+  try {
+    wallpaper.renderFrame(0);
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, 'image/jpeg', options.quality ?? 0.92),
+    );
+    if (!blob) throw new Error('场景帧导出失败');
 
-  const response = await reply;
-  if (!response.ok || !response.blob) throw new Error(response.error ?? '场景渲染失败');
-
-  const still: SceneStill = {
-    blob: response.blob,
-    width: response.width ?? 0,
-    height: response.height ?? 0,
-    drawn: response.drawn ?? 0,
-    resolved: response.resolved ?? 0,
-    skipped: response.skipped ?? 0,
-  };
-  void idbPut(key, still);
-  return still;
+    const still: SceneStill = {
+      blob,
+      width: canvas.width,
+      height: canvas.height,
+      drawn: wallpaper.layers.length,
+      resolved: wallpaper.layers.length,
+      skipped: 0,
+    };
+    void idbPut(key, still);
+    return still;
+  } finally {
+    wallpaper.dispose();
+  }
 }

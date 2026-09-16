@@ -310,7 +310,7 @@ server/src/notes/repository.ts
 web/src/main.tsx
 web/src/App.tsx
 web/package.json
-web/src/lib/we-scene/src/pkg/container.js
+web/src/lib/wallpaper-scene-layers/packages/we-scene/src/index.ts
 "
 
 # verify_tree <directory> <label>
@@ -673,6 +673,24 @@ ok "all declared dependencies are present"
 if [ "$SKIP_BUILD" = "1" ]; then
   warn "skipping the build (--skip-build)"
 else
+  # The scene library is a submodule and is not on npm, so it is built here,
+  # before anything that imports it. tsc comes from the root install rather
+  # than a second npm install inside the submodule.
+  SCENE_LIB="$INSTALL_DIR/web/src/lib/wallpaper-scene-layers"
+  if [ -f "$SCENE_LIB/package.json" ]; then
+    step "building the scene wallpaper library"
+    if [ -x "$INSTALL_DIR/node_modules/.bin/tsc" ]; then
+      ( cd "$SCENE_LIB" && "$INSTALL_DIR/node_modules/.bin/tsc" -p packages/we-scene ) \
+        || die "the scene library failed to build"
+      [ -f "$SCENE_LIB/packages/we-scene/dist/index.js" ] \
+        || die "the scene library built nothing (packages/we-scene/dist/index.js)"
+      ok "scene library built"
+    else
+      warn "typescript is not installed; skipping the scene library build"
+      warn "dynamic scene wallpapers will not work until it is built"
+    fi
+  fi
+
   step "building the front-end and the server"
   cd "$INSTALL_DIR"
   # BASE_PATH has to be known at build time so that asset URLs stay correct.

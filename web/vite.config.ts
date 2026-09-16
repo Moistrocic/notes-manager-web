@@ -6,20 +6,23 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 /**
- * we-scene is a git submodule, so a clone made without --recursive, or a ZIP
- * downloaded from the repository page, leaves that directory empty and every
- * import from it unresolved. Say so plainly here instead of letting the bundler
- * produce a wall of resolution errors.
+ * wallpaper-scene-layers is a git submodule and is not published to npm, so it
+ * has to be present *and built* before anything can import it. A clone made
+ * without --recursive leaves the directory empty, and one that was never built
+ * leaves dist/ missing; both produce a wall of resolution errors that says
+ * nothing about the cause. Say it plainly instead.
  */
-const WE_SCENE_ENTRY = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  'src/lib/we-scene/src/pkg/container.js',
-);
-if (!fs.existsSync(WE_SCENE_ENTRY)) {
-  throw new Error(
-    `we-scene submodule is missing (${WE_SCENE_ENTRY} not found).\n` +
-      'Run:  git submodule update --init --recursive',
-  );
+const LIB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'src/lib/wallpaper-scene-layers');
+for (const [file, fix] of [
+  ['packages/we-scene/dist/index.js', 'git submodule update --init --recursive && npm install'],
+]) {
+  if (!fs.existsSync(path.join(LIB_DIR, file))) {
+    throw new Error(
+      `wallpaper-scene-layers is not ready (${file} not found).\n` +
+        `Run:  ${fix}\n` +
+        '(the library is not on npm; it is built in place from the submodule)',
+    );
+  }
 }
 
 const API_TARGET = process.env.VITE_API_TARGET ?? 'http://127.0.0.1:8080';
@@ -91,14 +94,10 @@ export default defineConfig({
       },
     },
   },
-  // The scene worker pulls the WebGL renderer and the HLSL translator in
-  // through a dynamic import, so only people who turn dynamic scenes on pay for
-  // them. That makes the worker a code-splitting build, which the default
-  // "iife" worker format cannot express - hence module workers. Every browser
-  // this app supports has them.
-  worker: {
-    format: 'es',
-  },
+  // No worker any more: the scene library takes an HTMLCanvasElement and draws
+  // on the main thread. The worker existed because the previous renderer
+  // transferred an OffscreenCanvas, and it cost the ability to read the canvas
+  // back - which is how a frozen scene went unnoticed for so long.
   build: {
     outDir: 'dist',
     sourcemap: false,

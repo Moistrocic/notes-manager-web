@@ -141,13 +141,15 @@ echo app  > "$SRC/web/src/App.tsx"
 echo wpkg > "$SRC/web/package.json"
 echo spkg > "$SRC/server/package.json"
 
-# The we-scene submodule: a directory with its own .git file, which the copy
-# must walk into for the source but leave the git metadata behind.
-mkdir -p "$SRC/web/src/lib/we-scene/src/pkg" "$SRC/web/src/lib/we-scene/src/render"
-echo gitfile > "$SRC/web/src/lib/we-scene/.git"
-echo repo    > "$SRC/web/src/lib/we-scene/package.json"
-echo parser  > "$SRC/web/src/lib/we-scene/src/pkg/container.js"
-echo shaders > "$SRC/web/src/lib/we-scene/src/render/renderer.js"
+# The scene library submodule: a directory with its own .git file, which the
+# copy must walk into for the source but leave the git metadata behind. Its
+# dist/ is a build product, not something the repository carries.
+mkdir -p "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/src" \
+         "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/dist"
+echo gitfile > "$SRC/web/src/lib/wallpaper-scene-layers/.git"
+echo repo    > "$SRC/web/src/lib/wallpaper-scene-layers/package.json"
+echo entry   > "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/src/index.ts"
+echo built   > "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/dist/index.js"
 
 echo stale > "$DST/obsolete-module.js"
 mkdir -p "$DST/node_modules/keepme"
@@ -158,8 +160,8 @@ copy_application "$SRC" "$DST"
 verify_tree "$DST" "copied tree"
 
 check "nested server/src/integrations/openlist/client.ts copied" "$(exists "$DST/server/src/integrations/openlist/client.ts")" "yes"
-check "submodule sources copied"                                 "$(exists "$DST/web/src/lib/we-scene/src/pkg/container.js")" "yes"
-check "submodule working tree metadata left behind"              "$(exists "$DST/web/src/lib/we-scene/.git")" "no"
+check "submodule sources copied"                                 "$(exists "$DST/web/src/lib/wallpaper-scene-layers/packages/we-scene/src/index.ts")" "yes"
+check "submodule working tree metadata left behind"              "$(exists "$DST/web/src/lib/wallpaper-scene-layers/.git")" "no"
 check "root reference clone openlist/ excluded"                  "$(exists "$DST/openlist")" "no"
 check ".git excluded"                                            "$(exists "$DST/.git")" "no"
 check ".npm-cache excluded"                                      "$(exists "$DST/.npm-cache")" "no"

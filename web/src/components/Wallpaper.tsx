@@ -71,7 +71,9 @@ export function Wallpaper() {
       try {
         const bytes = await (await fetch(url)).arrayBuffer();
         if (cancelled) return;
-        player = await playScene(canvas, bytes, { maxWidth: 1920, fps: 30, onError: report });
+        // No size hints: the library sizes itself from the canvas, which the
+        // layer has already laid out at the size the screen needs.
+        player = await playScene(canvas, bytes, { onError: report });
         if (cancelled) {
           player.stop();
           return;
@@ -96,14 +98,10 @@ export function Wallpaper() {
           }
         }, 1200);
 
-        const info = player.info;
-        if (info.skipped > 0) {
-          pushToast({
-            title: '动态场景已渲染',
-            message: `${info.resolved} 个图层已解析，${info.skipped} 个未能解析`,
-            tone: 'info',
-          });
-        }
+        // Nothing to warn about any more: the library keeps only the layers its
+        // preset asks for and draws all of them, so there is no count of layers
+        // that failed to resolve.
+        void player.info;
       } catch (err) {
         report((err as Error).message);
       }
