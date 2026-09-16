@@ -33,8 +33,28 @@ export function Wallpaper() {
   const locked = wallpaper !== settings;
   const url = locked ? wallpaper.url : ownUrl;
   // A blob URL is different on every page load; a file in the server's
-  // backgrounds folder is not, so the composed frame is remembered by name.
-  const identityKey = locked ? `admin:${admin?.file ?? ''}:${admin?.bytes ?? 0}` : identity;
+  // backgrounds folder is not, so the composed frame is remembered by name - and
+  // by the server's hash of its contents when there is one, which is what says a
+  // replaced file is a different wallpaper rather than the same name again.
+  const identityKey = locked
+    ? `admin:${admin?.hash ?? `${admin?.file ?? ''}:${admin?.bytes ?? 0}`}`
+    : identity;
+  /**
+   * What the container may be remembered as, if anything.
+   *
+   * Only identities that come from the bytes: the administrator's file has a
+   * hash from the server, and a file kept in this browser has its name, size and
+   * timestamp. A plain URL has neither - the same address can serve something
+   * else tomorrow - so those are downloaded as before and left to the browser's
+   * own cache, which revalidates.
+   */
+  const containerIdentity = locked
+    ? admin?.hash
+      ? `admin:${admin.hash}`
+      : null
+    : identity && !/^https?:/i.test(identity)
+      ? identity
+      : null;
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
   const setLoading = useAppStore((s) => s.setWallpaperLoading);
@@ -142,6 +162,7 @@ export function Wallpaper() {
       try {
         player = await playScene(canvas, url, {
           signal: controller.signal,
+          cacheIdentity: containerIdentity,
           onProgress: (loaded, total) => {
             if (cancelled) return;
             const finished = total !== null && loaded >= total;
@@ -184,7 +205,7 @@ export function Wallpaper() {
       player?.stop();
       setLoading(null);
     };
-  }, [live, url, pushToast, setLoading]);
+  }, [live, url, containerIdentity, pushToast, setLoading]);
 
   /**
    * A scene that is not playing: one frame of the same container.

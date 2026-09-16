@@ -13,7 +13,7 @@
  */
 
 import { createRossiWorkerWallpaper, supportsWorkerRendering, type WorkerWallpaper } from 'wallpaper-scene-layers';
-import { fetchWithProgress, type DownloadProgress } from '../download';
+import { fetchContainer, type DownloadProgress } from '../download';
 import type { WallpaperKind } from '../wallpaper';
 // Vite bundles this: the library's own worker URL points next to its module,
 // which a build has no way to copy into the app's assets.
@@ -149,6 +149,14 @@ export interface PlayOptions {
    */
   onProgress?: DownloadProgress;
   /**
+   * What the container is, for the browser's copy of it.
+   *
+   * Given this, a container that has not changed is read from disk instead of
+   * the network; a changed one is downloaded and replaces it. Null means the
+   * bytes cannot be identified - a plain URL - and then every visit downloads.
+   */
+  cacheIdentity?: string | null;
+  /**
    * Called when something goes wrong that stops the scene.
    *
    * Not the same as a diagnostic, which is the library saying it could not do
@@ -191,8 +199,11 @@ export async function playScene(
   // Bytes rather than a URL when progress was asked for: the worker's own
   // download is invisible from here, and it is the longest part of the wait.
   let payload: string | ArrayBuffer = source;
-  if (options.onProgress) {
-    payload = await Promise.race([fetchWithProgress(source, options.onProgress), aborted]);
+  if (options.onProgress || options.cacheIdentity) {
+    payload = await Promise.race([
+      fetchContainer(source, options.cacheIdentity ?? null, options.onProgress),
+      aborted,
+    ]);
     if (signal?.aborted) throw new Error(ABORTED);
   }
 

@@ -71,9 +71,16 @@ export function noteDownloadUrl(id: string): string {
  * an error anybody sees. Without a name it is whatever the administrator
  * configured; with one it is that file, which is what the settings dialog
  * previews while a choice is still being made.
+ *
+ * `version` is the file's content hash when the server knows one. It is what
+ * lets the URL - and the browser's copy of it - mean one particular version
+ * rather than "whatever is at this address today".
  */
-export function backgroundFileUrl(name?: string | null): string {
-  return name ? `${API_ROOT}/background/file?name=${encodeURIComponent(name)}` : `${API_ROOT}/background/file`;
+export function backgroundFileUrl(name?: string | null, version?: string | null): string {
+  if (!name) return `${API_ROOT}/background/file`;
+  const query = new URLSearchParams({ name });
+  if (version) query.set('v', version);
+  return `${API_ROOT}/background/file?${query.toString()}`;
 }
 
 export const api = {
@@ -189,6 +196,8 @@ export const api = {
       file: string | null;
       kind: 'aurora' | 'image' | 'video' | 'scene' | null;
       bytes: number;
+      /** Content hash of the configured file, for cache keys. */
+      hash: string | null;
       note: string | null;
       options: BackgroundOptions;
       available: BackgroundFile[];

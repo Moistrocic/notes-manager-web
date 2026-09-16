@@ -350,5 +350,37 @@ console.log('guest access');
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Content hashes                                                              */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('background hashes');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-hash-'));
+  try {
+    const store = new BackgroundStore(dir);
+    mkdirSync(store.dir, { recursive: true });
+    writeFileSync(path.join(store.dir, 'scene.pkg'), Buffer.alloc(4096, 7));
+
+    const first = await store.hash('scene.pkg');
+    check('a file has a hash', typeof first === 'string' && first.length > 0, true);
+    check('asking again gives the same one', await store.hash('scene.pkg'), first);
+    check('and a file it does not have gives none', await store.hash('nope.pkg'), null);
+
+    // The point of hashing: the same name with different bytes is a different
+    // wallpaper, and the browser has to be told so.
+    writeFileSync(path.join(store.dir, 'scene.pkg'), Buffer.alloc(4096, 8));
+    const second = await store.hash('scene.pkg');
+    check('different contents are a different hash', second !== first, true);
+
+    // Same contents, different name: the hash follows the bytes, not the path.
+    writeFileSync(path.join(store.dir, 'copy.pkg'), Buffer.alloc(4096, 8));
+    check('the same contents hash the same', await store.hash('copy.pkg'), second);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

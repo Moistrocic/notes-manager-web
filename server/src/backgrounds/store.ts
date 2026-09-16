@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createLogger } from '../logger.js';
@@ -59,6 +60,8 @@ export function kindOf(name: string): BackgroundFileKind | null {
  */
 export class BackgroundStore {
   readonly dir: string;
+  /** Content hashes, keyed by name, size and modification time. */
+  private readonly hashes = new Map<string, string>();
 
   constructor(dataDir: string) {
     this.dir = path.join(dataDir, BACKGROUNDS_DIRNAME);
@@ -100,6 +103,43 @@ export class BackgroundStore {
     if (!name || name.includes('/') || name.includes('\\') || name.startsWith('.')) return null;
     const found = this.find(name);
     return found ? path.join(this.dir, found.name) : null;
+  }
+
+  /**
+   * A fingerprint of a file's contents, for cache keys.
+   *
+   * A wallpaper is 45 MB, so the browser must be able to keep it and know when
+   * it is out of date - which a name cannot say (the file can be replaced under
+   * the same name) and a timestamp cannot say reliably. The hash is computed
+   * once per version and kept in memory: the answer only depends on the size and
+   * modification time, so a request for an unchanged file is a stat.
+   */
+  hash(name: string): Promise<string | null> {
+    const found = this.find(name);
+    if (!found) return Promise.resolve(null);
+    const absolute = path.join(this.dir, found.name);
+    const stamp = `${found.name}:${found.bytes}:${this.mtimeOf(absolute)}`;
+    const remembered = this.hashes.get(stamp);
+    if (remembered) return Promise.resolve(remembered);
+    return new Promise((resolve) => {
+      const digest = crypto.createHash('sha256');
+      const stream = fs.createReadStream(absolute);
+      stream.on('data', (chunk) => digest.update(chunk));
+      stream.on('error', () => resolve(null));
+      stream.on('end', () => {
+        const value = digest.digest('hex').slice(0, 32);
+        this.hashes.set(stamp, value);
+        resolve(value);
+      });
+    });
+  }
+
+  private mtimeOf(absolute: string): number {
+    try {
+      return fs.statSync(absolute).mtimeMs;
+    } catch {
+      return 0;
+    }
   }
 
   contentType(file: BackgroundFile): string {

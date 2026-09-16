@@ -26,6 +26,8 @@ export interface AdminBackground {
   kind: 'aurora' | 'image' | 'video' | 'scene' | null;
   file: string | null;
   bytes: number;
+  /** Content hash of the file, as the server reports it. */
+  hash: string | null;
   /** Where the layer loads the file from. */
   url: string;
   note: string | null;

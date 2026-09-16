@@ -27,11 +27,17 @@ export function backgroundRoutes(services: Services): Router {
       // who deleted the file leaves everybody with their own choice rather than
       // a locked, broken page.
       const kind = settings.kind === 'off' ? null : settings.kind === 'aurora' ? 'aurora' : file ? settings.kind : null;
+      // What the browser keys its copy of the file on: the same bytes keep the
+      // same hash however the file was replaced, and a different file is a
+      // different hash - so a wallpaper is downloaded when it changes rather
+      // than once per visit.
+      const hash = file ? await services.backgrounds.hash(file.name) : null;
       res.json({
         configured: kind !== null,
         kind,
         file: file?.name ?? null,
         bytes: file?.bytes ?? 0,
+        hash,
         note: settings.note || null,
         options: {
           crop: settings.crop,
@@ -65,9 +71,17 @@ export function backgroundRoutes(services: Services): Router {
         return;
       }
       res.setHeader('Content-Type', services.backgrounds.contentType(file));
-      // Long-lived but revalidated: an administrator replacing the file should
-      // not have to wonder why nobody sees the new one.
-      res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
+      // With the hash in the query this URL names a particular version of the
+      // file, so it can be kept for as long as the browser likes. Without one -
+      // a hand written URL, a proxy that dropped it - the old short life and a
+      // revalidation stay, because then nobody knows what this address means.
+      const version = typeof req.query.v === 'string' ? req.query.v : '';
+      const current = version ? await services.backgrounds.hash(file.name) : null;
+      if (version && current && version === current) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=300, must-revalidate');
+      }
       log.info(`serving background ${file.name}`);
       res.sendFile(absolute);
     }),

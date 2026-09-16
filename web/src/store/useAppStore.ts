@@ -919,12 +919,14 @@ export const appStore = createStore<AppState>((set, get) => ({
           configured: payload.configured,
           kind: payload.kind,
           // Named, so it is a URL at a file rather than at "whatever is
-          // configured", and built from the API root so a deployment under a
-          // sub path asks the right server.
-          url: payload.configured && payload.file ? backgroundFileUrl(payload.file) : '',
+          // configured"; versioned by the file's hash, so it is a URL at one
+          // version of it that the browser may keep; and built from the API root
+          // so a deployment under a sub path asks the right server.
+          url: payload.configured && payload.file ? backgroundFileUrl(payload.file, payload.hash) : '',
           note: payload.note,
           file: payload.file,
           bytes: payload.bytes,
+          hash: payload.hash,
           options: payload.options,
           available: payload.available,
         },

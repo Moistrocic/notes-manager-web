@@ -779,6 +779,7 @@ console.log('\nappearance dialog (jsdom)');
           kind: 'scene',
           file: 'rossi.pkg',
           bytes: 1024,
+          hash: 'abc123',
           url: '/api/background/file?v=rossi.pkg',
           note: null,
           options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
@@ -1411,6 +1412,7 @@ console.log('\ndefault background (jsdom)');
       kind: 'scene',
       file: 'rossi.pkg',
       bytes: 45_562_692,
+      hash: 'abc123',
       url: '/api/background/file?v=rossi.pkg',
       note: '洛茜 Rossi',
       options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
@@ -1565,6 +1567,47 @@ console.log('\nguest browsing (jsdom)');
   }
 }
 
+/* --- the background is downloaded once ------------------------------------- */
+console.log('\nbackground caching (jsdom)');
+{
+  const { backgroundFileUrl } = await import('./src/lib/api');
+
+  // A URL at one version of the file: that is what the browser is allowed to
+  // keep for a year, and what the app uses to key its own copies.
+  check('a background URL names the file', backgroundFileUrl('rossi.pkg'), '/api/background/file?name=rossi.pkg');
+  check('and carries the hash when there is one', backgroundFileUrl('rossi.pkg', 'abc123'), '/api/background/file?name=rossi.pkg&v=abc123');
+  check('a name with a space survives', backgroundFileUrl('my scene.pkg'), '/api/background/file?name=my+scene.pkg');
+  check('with no name it is whatever is configured', backgroundFileUrl(null), '/api/background/file');
+
+  // The store builds the layer's URL from the payload, hash included.
+  {
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          configured: true,
+          kind: 'scene',
+          file: 'rossi.pkg',
+          bytes: 45_562_692,
+          hash: 'deadbeef',
+          note: null,
+          options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
+          available: [],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as typeof fetch;
+    try {
+      await appStore.getState().refreshAdminBackground();
+      const admin = appStore.getState().adminBackground;
+      check('the layer is given the versioned URL', admin?.url, '/api/background/file?name=rossi.pkg&v=deadbeef');
+      check('and the hash to key its own copy on', admin?.hash, 'deadbeef');
+    } finally {
+      globalThis.fetch = realFetch;
+      appStore.setState({ adminBackground: hold.adminBackground });
+    }
+  }
+}
 /* --- the wallpaper says what it is doing ----------------------------------- */
 console.log('\nwallpaper loading (jsdom)');
 {
