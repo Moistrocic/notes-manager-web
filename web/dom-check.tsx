@@ -460,7 +460,8 @@ console.log('\nSteam wallpaper detection (jsdom)');
 const { Wallpaper } = await import('./src/components/Wallpaper');
 const { SessionFooter } = await import('./src/components/Sidebar');
 
-const { clampCrop, cropForRatio, DEFAULT_WALLPAPER, MIN_CROP, resizeCrop } = await import('./src/lib/wallpaper');
+const { acceptFor, clampCrop, cropForRatio, DEFAULT_WALLPAPER, MIN_CROP, resizeCrop } =
+  await import('./src/lib/wallpaper');
 
 console.log('\nwallpaper framing and hover labels (jsdom)');
 {
@@ -756,6 +757,12 @@ console.log('\nappearance dialog (jsdom)');
   check('with both role pickers', markup.includes('代码 / 编辑器字体'), true);
   // The little thumbnail at the bottom repeated what the crop editor shows.
   check('the redundant preview at the bottom is gone', markup.includes('效果已实时应用'), false);
+  // The three kinds that were asked for, and a .pkg that can be picked as one
+  // of them rather than only arriving through the folder scan.
+  check('the background offers three kinds', ['极光', '本地图片', '场景壁纸'].every((k) => markup.includes(k)), true);
+  check('and a .pkg is recognised as a scene', wallpaperKindOf('rossi.pkg'), 'scene');
+  check('with the picker filtered to .pkg files', acceptFor('scene'), '.pkg');
+  check('the administrator background switch is offered', markup.includes('使用管理员设置的默认背景'), true);
   check('and explains that a path cannot be read directly', markup.includes('steamapps'), true);
   check('and offers the standard Steam locations', markup.includes('431960'), true);
 

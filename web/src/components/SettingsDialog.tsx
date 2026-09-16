@@ -6,6 +6,7 @@ import {
   Database,
   FileCog,
   HardDrive,
+  Image as ImageIcon,
   KeyRound,
   RefreshCw,
   Save,
@@ -21,6 +22,13 @@ import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
 
 type Driver = 'auto' | 'openlist' | 'local';
 
+/** A file name inside a sentence, so the paths read as paths. */
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="rounded bg-[color-mix(in_srgb,var(--text)_8%,transparent)] px-1">{children}</code>
+  );
+}
+
 export function SettingsDialog() {
   const open = useAppStore((s) => s.settingsOpen);
   const setOpen = useAppStore((s) => s.setSettingsOpen);
@@ -29,6 +37,8 @@ export function SettingsDialog() {
   const refreshNotes = useAppStore((s) => s.refreshNotes);
   const providers = useAppStore((s) => s.providers);
   const status = useAppStore((s) => s.status);
+  const adminBackground = useAppStore((s) => s.adminBackground);
+  const refreshAdminBackground = useAppStore((s) => s.refreshAdminBackground);
 
   const [payload, setPayload] = useState<AppSettingsPayload | null>(null);
   const [driver, setDriver] = useState<Driver>('auto');
@@ -176,6 +186,41 @@ export function SettingsDialog() {
             <div className="mt-2">
               <StatusDetail status={status?.storage} />
             </div>
+          </div>
+        </section>
+
+        {/* The background everyone gets, and where to put it. Read-only: the
+            administrator manages it with a file manager rather than a form. */}
+        <section>
+          <SectionTitle icon={ImageIcon} title="默认背景" hint="所有人打开面板时看到的背景" />
+          <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
+            {adminBackground?.configured ? (
+              <div className="flex items-center gap-2 text-[12.5px]">
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
+                <span className="text-[var(--text)]">已设置</span>
+                {adminBackground.note ? (
+                  <span className="min-w-0 truncate text-[var(--faint)]">· {adminBackground.note}</span>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto shrink-0"
+                  onClick={() => void refreshAdminBackground()}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  重新读取
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2 text-[12px] leading-relaxed text-[var(--faint)]">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  还没有设置。把 <Code>scene.pkg</Code> 或一张图片放进服务器数据目录下的{' '}
+                  <Code>backgrounds/</Code>，重启服务即可；也可以放一个 <Code>background.json</Code>{' '}
+                  指定用哪个文件。
+                </span>
+              </div>
+            )}
           </div>
         </section>
 

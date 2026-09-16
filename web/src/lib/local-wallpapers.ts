@@ -25,6 +25,18 @@ import { idbDelete, idbGet, idbPut, wallpaperKindOf } from './wallpaper';
 
 const HANDLE_KEY = 'wallpaper-folder';
 
+/**
+ * Whether the browser can put this file on screen by itself.
+ *
+ * Kept apart from wallpaperKindOf, which also answers "is this a scene" - a
+ * question whose answer is no as far as a plain <img> or <video> is concerned,
+ * and which decides whether a folder has to fall back to its preview still.
+ */
+function displayable(name: string): boolean {
+  const kind = wallpaperKindOf(name);
+  return kind === 'image' || kind === 'video';
+}
+
 /** Wallpaper Engine's Steam application id. */
 export const WALLPAPER_ENGINE_APP_ID = '431960';
 
@@ -91,7 +103,7 @@ export interface WallpaperEntry {
   type?: string;
   /** Path of the file to apply, relative to the root. Absent if unusable. */
   file?: string;
-  kind?: 'image' | 'video';
+  kind?: 'image' | 'video' | 'scene';
   /** Path of the preview image, relative to the root. */
   preview?: string;
   /**
@@ -323,13 +335,13 @@ async function readEngineWallpaper(
 
   // project.json names the artwork. Fall back to the conventional names, then
   // to anything in the folder a browser can actually open.
-  const preferred = project.file && wallpaperKindOf(project.file) && byName.has(project.file) ? project.file : undefined;
+  const preferred = project.file && displayable(project.file) && byName.has(project.file) ? project.file : undefined;
   const playable =
     preferred ??
-    PLAYABLE_NAMES.find((name) => byName.has(name) && wallpaperKindOf(name)) ??
+    PLAYABLE_NAMES.find((name) => byName.has(name) && displayable(name)) ??
     // Anything a browser can open, but never the preview still: that is the
     // thumbnail, and using it would silently downgrade the wallpaper.
-    [...byName.keys()].find((name) => wallpaperKindOf(name) && !PREVIEW_NAMES.includes(name));
+    [...byName.keys()].find((name) => displayable(name) && !PREVIEW_NAMES.includes(name));
 
   const kind = playable ? wallpaperKindOf(playable) : null;
   // Nothing playable: fall back to the preview still rather than leaving the
@@ -575,8 +587,8 @@ export function libraryFromFiles(files: FileList | File[], label: string): Wallp
       const byName = new Map(folderFiles.map((file) => [file.name, file]));
       const previewFile = PREVIEW_NAMES.map((name) => byName.get(name)).find(Boolean);
       const playableName =
-        PLAYABLE_NAMES.find((name) => byName.has(name) && wallpaperKindOf(name)) ??
-        [...byName.keys()].find((name) => wallpaperKindOf(name) && !PREVIEW_NAMES.includes(name));
+        PLAYABLE_NAMES.find((name) => byName.has(name) && displayable(name)) ??
+        [...byName.keys()].find((name) => displayable(name) && !PREVIEW_NAMES.includes(name));
       const playableFile = playableName ? byName.get(playableName) : undefined;
       const previewKey = previewFile ? `${folder}/${previewFile.name}` : undefined;
       // Same fallback as the handle path: a scene is offered as its still.

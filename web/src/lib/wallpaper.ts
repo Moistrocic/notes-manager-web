@@ -372,6 +372,7 @@ export async function clearWallpaperFile(): Promise<void> {
  */
 export function acceptFor(kind: WallpaperKind): string {
   if (kind === 'video') return 'video/*';
+  if (kind === 'scene') return '.pkg';
   return 'image/*';
 }
 
@@ -379,9 +380,12 @@ export function acceptFor(kind: WallpaperKind): string {
 export const WALLPAPER_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'svg'];
 export const WALLPAPER_VIDEO_EXTENSIONS = ['mp4', 'webm', 'm4v', 'mov', 'ogv'];
 
-/** image, video, or null when the file is not something a browser can show. */
-export function wallpaperKindOf(name: string): 'image' | 'video' | null {
-  if (name.toLowerCase().endsWith('.pkg')) return null;
+/** image, video, scene, or null when the file is not something we can show. */
+export function wallpaperKindOf(name: string): 'image' | 'video' | 'scene' | null {
+  // A .pkg is a scene wallpaper: the container the library reads. It used to be
+  // reported as unshowable, which is why scenes could only arrive through the
+  // folder scan rather than by picking the file.
+  if (name.toLowerCase().endsWith('.pkg')) return 'scene';
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
   if (WALLPAPER_IMAGE_EXTENSIONS.includes(ext)) return 'image';
   if (WALLPAPER_VIDEO_EXTENSIONS.includes(ext)) return 'video';

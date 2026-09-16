@@ -26,10 +26,17 @@ import { WallpaperCrop } from './WallpaperCrop';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Field, Input, Modal, Switch } from './ui/primitives';
 
+/**
+ * The three kinds of background.
+ *
+ * Video is not a fourth button: a video file is picked, stored and shown by the
+ * same path as a picture, so it lives under 本地图片 rather than taking a slot
+ * that would have to be explained.
+ */
 const KINDS: { value: WallpaperKind; label: string; icon: typeof ImageIcon; hint: string }[] = [
-  { value: 'none', label: '无', icon: X, hint: '使用主题自带的极光背景' },
-  { value: 'image', label: '图片', icon: ImageIcon, hint: 'JPG / PNG / WebP / GIF' },
-  { value: 'video', label: '视频', icon: MonitorPlay, hint: 'MP4 / WebM，静音循环播放' },
+  { value: 'none', label: '极光', icon: X, hint: '主题自带的动态背景，可调色' },
+  { value: 'image', label: '本地图片', icon: ImageIcon, hint: 'JPG / PNG / WebP，也支持 MP4 / WebM' },
+  { value: 'scene', label: '场景壁纸', icon: MonitorPlay, hint: 'Wallpaper Engine 的 .pkg，不保证都能加载' },
 ];
 
 const SOURCES: { value: WallpaperSource; label: string }[] = [
