@@ -58,9 +58,21 @@ export interface BackgroundSettings {
   auroraB: string;
 }
 
+export interface GuestSettings {
+  /**
+   * Whether a visitor who has not signed in may browse read-only.
+   *
+   * On OpenList that is its own anonymous access; on a deployment whose notes
+   * live on this server's disk it is a real decision, because there is no
+   * folder permission anywhere to fall back on.
+   */
+  enabled: boolean;
+}
+
 export interface AppSettings {
   storage: StorageSettings;
   background: BackgroundSettings;
+  guest: GuestSettings;
 }
 
 const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene'];
@@ -124,6 +136,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     local: { root: '' },
   },
   background: DEFAULT_BACKGROUND,
+  guest: { enabled: true },
 };
 
 export interface ServerConfig {
@@ -297,6 +310,7 @@ export class SettingsStore {
         local: { root: localRoot ? resolveFromRoot(localRoot) : path.join(serverConfig.dataDir, 'notes') },
       },
       background: structuredClone(this.data.background),
+      guest: structuredClone(this.data.guest),
       sources,
     };
   }
@@ -325,6 +339,7 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
     }
     if (s.local && typeof s.local.root === 'string') out.storage.local.root = s.local.root;
   }
+  if (patch.guest && typeof patch.guest.enabled === 'boolean') out.guest.enabled = patch.guest.enabled;
   if (patch.background) {
     const b = (patch.background ?? {}) as Partial<BackgroundSettings>;
     const current = out.background;

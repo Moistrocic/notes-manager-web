@@ -139,6 +139,21 @@ export function AppearanceDialog() {
     };
   }, [open]);
 
+  /**
+   * Picking a kind is picking your own background.
+   *
+   * While the administrator's background is showing these buttons used to be
+   * inert, so clicking 极光 did nothing at all and the picture stayed - which
+   * reads as the dialog being broken. A click now means what it says: the
+   * switch goes off and the choice is taken.
+   */
+  const chooseKind = (kind: WallpaperKind) => {
+    setWallpaper(locked ? { useAdminBackground: false, kind } : { kind });
+    // The built-in background has no file behind it, and keeping a 45 MB one
+    // around for a background nobody is looking at helps nobody.
+    if (kind === 'none') void clearWallpaper();
+  };
+
   const chooseFolder = async () => {
     setScanning(true);
     try {
@@ -249,6 +264,8 @@ export function AppearanceDialog() {
       title="外观"
       subtitle="壁纸只保存在这台浏览器中，不会上传到服务器"
       width="max-w-2xl"
+      // The wallpaper is what is being chosen, so it has to stay visible.
+      backdrop="light"
       footer={
         <div className="flex items-center justify-between">
           <p className="text-[11px] text-[var(--faint)]">换一台设备需要重新设置</p>
@@ -285,7 +302,7 @@ export function AppearanceDialog() {
             />
           </section>
 
-          <div className={cn('grid grid-cols-3 gap-2', locked && 'pointer-events-none opacity-40')}>
+          <div className="grid grid-cols-3 gap-2">
             {KINDS.map((kind) => {
               const Icon = kind.icon;
               const active = wallpaper.kind === kind.value;
@@ -293,15 +310,15 @@ export function AppearanceDialog() {
                 <button
                   key={kind.value}
                   type="button"
-                  onClick={() => {
-                    setWallpaper({ kind: kind.value });
-                    if (kind.value === 'none') void clearWallpaper();
-                  }}
+                  onClick={() => chooseKind(kind.value)}
                   className={cn(
                     'focus-ring relative rounded-2xl border p-3 text-left transition-all',
                     active
                       ? 'border-[color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[var(--accent-soft)]'
                       : 'border-[var(--line)] hover:border-[var(--line-strong)]',
+                    // Dimmed while the administrator's background is the one
+                    // showing, but still clickable: see chooseKind().
+                    locked && !active && 'opacity-40',
                   )}
                 >
                   {active ? (
@@ -318,6 +335,12 @@ export function AppearanceDialog() {
               );
             })}
           </div>
+
+          {locked ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-[var(--faint)]">
+              上面任意一项点一下，就会关掉「使用管理员设置的默认背景」，改用你自己的选择。
+            </p>
+          ) : null}
 
           {/* The built-in background is the theme's two accents, so this is
               where they can be changed - the accent setting colours the whole

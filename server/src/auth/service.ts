@@ -73,7 +73,10 @@ export class AuthService {
 
   async login(input: LoginInput): Promise<LoginResult> {
     const provider = input.provider ?? 'auto';
-    if (provider === 'guest') return { user: await this.loginAsGuest(), provider: 'openlist' };
+    if (provider === 'guest') {
+      const user = await this.loginAsGuest();
+      return { user, provider: user.provider };
+    }
     const username = (input.username ?? '').trim();
     if (!username || !input.password) throw new AuthError('Username and password are required', 400, 'invalid_credentials');
 
@@ -155,14 +158,18 @@ export class AuthService {
   }
 
   /**
-   * Signs in as the anonymous OpenList visitor.
+   * Signs in as the anonymous visitor.
    *
-   * No token is stored on purpose: the session then talks to OpenList without an
-   * Authorization header, which is exactly what "guest" means there.
+   * On OpenList that means no token at all: the session then talks to OpenList
+   * without an Authorization header, which is exactly what "guest" means there.
+   * Where there is no OpenList - the notes live on this server's disk - it means
+   * the same thing minus the backend: read-only, and refused in writing by the
+   * routes rather than by a folder's permissions, because there are none.
    */
   async loginAsGuest(): Promise<SessionUser> {
+    if (!this.guestEnabled) throw new AuthError('Guest access is turned off on this server', 403, 'guest_disabled');
     const cfg = this.settings.effective().storage.openlist;
-    if (!cfg.url) throw new AuthError('No OpenList instance is configured', 503, 'openlist_unreachable');
+    if (!cfg.url) return this.loginAsLocalGuest();
     const client = new OpenListClient({ baseUrl: cfg.url, timeoutMs: cfg.timeoutMs });
     const guest = await client.guestAccess();
     if (!guest.available) {
@@ -177,6 +184,7 @@ export class AuthService {
       provider: 'openlist',
       openlistBasePath: guest.user?.base_path ?? '',
       openlistIsAdmin: false,
+      guest: true,
       openlistGuest: true,
       permissions: {
         write: (permission & PERM_WRITE) !== 0,
@@ -189,9 +197,30 @@ export class AuthService {
     return user;
   }
 
+  /** The visitor a deployment without OpenList can offer: read-only, local. */
+  private loginAsLocalGuest(): SessionUser {
+    log.info('local sign-in: guest (read-only)');
+    return {
+      id: 'local:guest',
+      username: 'guest',
+      displayName: '游客',
+      role: 'user',
+      provider: 'local',
+      guest: true,
+      permissions: { write: false, rename: false, move: false, remove: false },
+    };
+  }
+
+  get guestEnabled(): boolean {
+    return this.settings.effective().guest.enabled;
+  }
+
+  /** Whether the sign-in screen should offer it at all. */
   async guestAvailable(): Promise<boolean> {
+    if (!this.guestEnabled) return false;
     const cfg = this.settings.effective().storage.openlist;
-    if (!cfg.url) return false;
+    // No OpenList: the notes are this server's own, and a guest is a local one.
+    if (!cfg.url) return true;
     const client = new OpenListClient({ baseUrl: cfg.url, timeoutMs: Math.min(cfg.timeoutMs, 6000) });
     const guest = await client.guestAccess();
     return guest.available;

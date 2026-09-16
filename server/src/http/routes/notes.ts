@@ -46,6 +46,19 @@ export function notesRoutes(services: Services): Router {
   const router = Router();
   router.use(requireAuth);
 
+// A guest browses. On OpenList that is enforced by the folder's permissions; the
+// notes on this server's own disk have none, so writing is refused here. It is a
+// rule about the session rather than about a route, so it sits above all of them
+// instead of being remembered in each one.
+router.use((req, res, next) => {
+  const guest = req.session?.guest === true && req.session.provider === 'local';
+  if (!guest || req.method === 'GET' || req.method === 'HEAD') {
+    next();
+    return;
+  }
+  res.status(403).json({ error: { message: '游客只能查看，不能修改', code: 'guest_readonly' } });
+});
+
   /* ------------------------------ collections ---------------------------- */
 
   router.get(
@@ -109,7 +122,7 @@ export function notesRoutes(services: Services): Router {
               username: user.username,
               provider: user.provider,
               role: user.role,
-              guest: Boolean(user.openlistGuest),
+              guest: Boolean(user.openlistGuest || user.guest),
               permissions: user.permissions ?? null,
               basePath: user.openlistBasePath ?? null,
             }

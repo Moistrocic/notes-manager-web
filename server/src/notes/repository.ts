@@ -415,11 +415,15 @@ export class NotesRepository {
     const storage = await this.storageManager.resolve(user);
     const permissions = user?.permissions;
     const byPermission = permissions ? permissions.write && permissions.remove : true;
+    // A local guest reads somebody else's disk: the local driver has no
+    // per-user permissions to consult, so the route's refusal is reflected here
+    // rather than left for the interface to discover by being told no.
+    const readOnlyGuest = user?.guest === true && user.provider === 'local';
     return {
       driver: storage.kind,
       root: storage.displayRoot,
       // the backend's own answer wins; the permission bits are the fallback
-      writable: storage.driver.writable ?? byPermission,
+      writable: readOnlyGuest ? false : (storage.driver.writable ?? byPermission),
       permissions,
     };
   }

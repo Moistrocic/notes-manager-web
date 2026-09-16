@@ -19,6 +19,8 @@ export interface SessionUser {
   /** OpenList base path of the account (users can be jailed to a sub folder). */
   openlistBasePath?: string;
   openlistIsAdmin?: boolean;
+  /** Anonymous visitor: nobody signed in. */
+  guest?: boolean;
   /** Anonymous OpenList visitor - must never fall back to the service token. */
   openlistGuest?: boolean;
   permissions?: { write: boolean; rename: boolean; move: boolean; remove: boolean };
@@ -108,6 +110,23 @@ export class SessionStore {
     found.expiresAt = Math.min(found.expiresAt + 60_000, Date.now() + this.ttlMs);
     this.scheduleSave();
     return found;
+  }
+
+  /**
+   * Signs out every visitor who never signed in.
+   *
+   * Turning guest access off has to mean something to the people already
+   * browsing, or the switch would only apply to the next visitor.
+   */
+  destroyGuests(): number {
+    let removed = 0;
+    for (const [sid, record] of [...this.sessions]) {
+      if (!record.guest) continue;
+      this.sessions.delete(sid);
+      removed += 1;
+    }
+    if (removed) this.scheduleSave();
+    return removed;
   }
 
   update(sid: string, patch: Partial<SessionRecord>): void {

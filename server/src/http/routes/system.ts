@@ -133,6 +133,12 @@ export function systemRoutes(services: Services): Router {
       const effective = services.settings.update(body);
       services.storage.invalidateProbe();
       services.notes.clearCaches();
+      // Turning guest access off signs out whoever is browsing as a guest now,
+      // rather than leaving them inside until their session happens to expire.
+      if (body.guest?.enabled === false) {
+        const signedOut = services.sessions.destroyGuests();
+        if (signedOut) log.info(`guest access disabled: signed out ${signedOut} guest session(s)`);
+      }
       log.info(`settings saved (driver=${effective.storage.driver}, openlist=${effective.storage.openlist.url || 'none'})`);
       res.json({ settings: services.settings.raw(), effective, status: await services.storage.status() });
     }),

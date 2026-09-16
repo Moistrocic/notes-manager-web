@@ -767,6 +767,47 @@ console.log('\nappearance dialog (jsdom)');
   check('with the picker filtered to .pkg files', acceptFor('scene'), '.pkg');
   check('the administrator background switch is offered', markup.includes('使用管理员设置的默认背景'), true);
 
+  // While the administrator's background is on, the kinds used to be inert:
+  // the click landed on the section behind them and nothing changed at all.
+  {
+    const before = appStore.getState().wallpaper;
+    try {
+      appStore.setState({
+        wallpaper: { ...before, kind: 'scene', useAdminBackground: true },
+        adminBackground: {
+          configured: true,
+          kind: 'scene',
+          file: 'rossi.pkg',
+          bytes: 1024,
+          url: '/api/background/file?v=rossi.pkg',
+          note: null,
+          options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
+          available: [],
+        },
+      });
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(React.createElement(AppearanceDialog));
+      });
+      await flush();
+      const aurora = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim().startsWith('极光'));
+      await act(async () => {
+        aurora?.click();
+      });
+      await flush();
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      const after = appStore.getState().wallpaper;
+      check('clicking 极光 while the administrator background shows takes the choice', after.kind, 'none');
+      check('and turns that switch off', after.useAdminBackground, false);
+    } finally {
+      appStore.setState({ wallpaper: before, adminBackground: null });
+    }
+  }
   // The kind buttons are a choice of background, not a reset: switching to the
   // built-in one used to restore every default, which quietly turned the
   // administrator-background switch back on - and the picture the user had just
@@ -1471,6 +1512,57 @@ console.log('\ndefault background (jsdom)');
   host.remove();
   globalThis.fetch = realFetch;
   appStore.setState(hold);
+}
+
+/* --- browsing without an account ------------------------------------------- */
+console.log('\nguest browsing (jsdom)');
+{
+  const renderOnce = async (node: React.ReactElement) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const r = createRoot(host);
+    await act(async () => {
+      r.render(node);
+    });
+    await flush();
+    const html = host.innerHTML;
+    await act(async () => {
+      r.unmount();
+    });
+    host.remove();
+    return html;
+  };
+
+  const hold = appStore.getState();
+  try {
+    // No OpenList: the notes are this server's own, and the visitor is a local
+    // one. The sign-in screen has to offer it and say what it can do.
+    appStore.setState({
+      providers: {
+        local: true,
+        openlist: false,
+        openlistConfigured: false,
+        openlistUrl: null,
+        openlistInitialized: false,
+        guest: true,
+      },
+    });
+    const login = await renderOnce(React.createElement(LoginScreen));
+    check('a deployment without OpenList offers guest browsing', login.includes('以游客身份浏览'), true);
+    check('and says it is read-only', login.includes('只读浏览本机的笔记目录'), true);
+    check('and marks it in the status row', login.includes('游客可只读浏览'), true);
+
+    appStore.setState({ providers: { ...appStore.getState().providers!, guest: false } });
+    const closed = await renderOnce(React.createElement(LoginScreen));
+    check('with guest access off there is no way in', closed.includes('以游客身份浏览'), false);
+
+    // The switch that decides it lives in the server settings.
+    appStore.setState({ settingsOpen: true });
+    const settings = await renderOnce(React.createElement(SettingsDialog));
+    check('the settings dialog decides who may browse', settings.includes('允许游客只读浏览'), true);
+  } finally {
+    appStore.setState(hold);
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

@@ -295,5 +295,60 @@ check('anything else is nothing', kindOf('notes.md'), null);
   }
 }
 
+/* -------------------------------------------------------------------------- */
+/* Guest access                                                                */
+/* -------------------------------------------------------------------------- */
+const { AuthService } = await import(`file://${path.join(HERE, '..', 'server', 'dist', 'auth', 'service.js').replace(/\\/g, '/')}`);
+const { StorageManager } = await import(`file://${path.join(HERE, '..', 'server', 'dist', 'storage', 'manager.js').replace(/\\/g, '/')}`);
+const { StateStore } = await import(`file://${path.join(HERE, '..', 'server', 'dist', 'config.js').replace(/\\/g, '/')}`);
+
+console.log('');
+console.log('guest access');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-guest-'));
+  try {
+    const settings = new SettingsStore(dir);
+    const storage = new StorageManager(settings, dir);
+    const state = new StateStore(dir);
+    const config = { adminUsername: 'admin', authLocalEnabled: true, adminPasswordEnv: undefined, sessionTtlMs: 60_000 };
+    const auth = new AuthService(config, state, settings, storage);
+
+    // No OpenList at all: the notes are this server's own, and the visitor a
+    // deployment like that can offer is a read-only local one.
+    check('a deployment without OpenList offers a guest', await auth.guestAvailable(), true);
+    const guest = await auth.loginAsGuest();
+    check('who is anonymous', [guest.guest, guest.provider, guest.role], [true, 'local', 'user']);
+    check('and cannot write anywhere', guest.permissions, { write: false, rename: false, move: false, remove: false });
+    const result = await auth.login({ provider: 'guest', username: '', password: '' });
+    check('signing in as a guest says where it happened', result.provider, 'local');
+    check('and hands back the same visitor', result.user.guest, true);
+
+    settings.update({ guest: { enabled: false } });
+    check('turning guest access off withdraws the offer', await auth.guestAvailable(), false);
+    check(
+      'and refuses the sign-in',
+      await auth.loginAsGuest().then(
+        () => 'signed in',
+        (err) => err.code,
+      ),
+      'guest_disabled',
+    );
+
+    settings.update({ guest: { enabled: true } });
+    check('and turning it back on restores it', await auth.guestAvailable(), true);
+
+    // The switch is about guests, not about the administrator.
+    const admin = await auth
+      .login({ provider: 'local', username: 'admin', password: 'wrong' })
+      .then(() => 'signed in',
+        (err) => err.message,
+      );
+    check('the administrator still cannot sign in with the wrong password', admin, 'Invalid username or password');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

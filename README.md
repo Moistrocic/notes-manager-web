@@ -78,6 +78,11 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
   之后填上地址即可无缝切换
 - `OPENLIST_ROOT` 填 OpenList 里的绝对路径；如果它不在账号的基础路径之内，
   面板会明确提示权限不足
+- **不登录也能看**：登录页提供「以游客身份浏览」
+  - 没有配置 OpenList 时，游客是这台服务器上的**只读**访客：可以浏览、搜索、打开笔记，
+    任何写入（新建 / 编辑 / 移动 / 删除）都会在服务端被拒绝，界面上会标注只读
+  - 配置了 OpenList 时，游客用 OpenList 自己的匿名访问权限（公开目录可读）
+  - 默认开启；**设置 → 访问 → 允许游客只读浏览**可以关掉，关掉时会同时登出正在浏览的游客
 
 ## 安装与卸载
 

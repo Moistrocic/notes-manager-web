@@ -10,6 +10,7 @@ import {
   KeyRound,
   RefreshCw,
   Save,
+  UserRound,
   Wand2,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -72,6 +73,7 @@ export function SettingsDialog() {
   const status = useAppStore((s) => s.status);
   const adminBackground = useAppStore((s) => s.adminBackground);
   const refreshAdminBackground = useAppStore((s) => s.refreshAdminBackground);
+  const refreshProviders = useAppStore((s) => s.refreshProviders);
 
   const [payload, setPayload] = useState<AppSettingsPayload | null>(null);
   const [driver, setDriver] = useState<Driver>('auto');
@@ -86,6 +88,8 @@ export function SettingsDialog() {
   const [newPassword, setNewPassword] = useState('');
   /** The default background being edited, saved with the rest of the form. */
   const [background, setBackground] = useState<BackgroundSettings>(DEFAULT_BACKGROUND);
+  /** Whether visitors who never sign in may browse read-only. */
+  const [guestEnabled, setGuestEnabled] = useState(true);
   /** A composited frame of the scene being picked, for the crop editor. */
   const [cropStill, setCropStill] = useState<string | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
@@ -104,6 +108,7 @@ export function SettingsDialog() {
         setRoot(data.settings.storage.openlist.root);
         setPerUser(data.settings.storage.openlist.perUser);
         setBackground(data.settings.background ?? DEFAULT_BACKGROUND);
+        setGuestEnabled(data.settings.guest?.enabled ?? true);
       })
       .catch((err: Error) => pushToast({ title: '读取设置失败', message: err.message, tone: 'error' }));
   }, [open, pushToast]);
@@ -117,9 +122,15 @@ export function SettingsDialog() {
           openlist: { url: url.trim(), token: token.trim(), root: root.trim() || '/notes', perUser },
         },
         background,
+        guest: { enabled: guestEnabled },
       });
       pushToast({ title: '设置已保存', tone: 'success' });
-      await Promise.all([refreshStatus(), refreshNotes({ silent: true }), refreshAdminBackground()]);
+      await Promise.all([
+        refreshStatus(),
+        refreshNotes({ silent: true }),
+        refreshAdminBackground(),
+        refreshProviders(),
+      ]);
       const data = await api.settings();
       setPayload(data);
     } catch (err) {
@@ -559,6 +570,25 @@ export function SettingsDialog() {
                 <span className="truncate">{value ?? '—'}</span>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* Who may come in without an account. */}
+        <section>
+          <SectionTitle icon={UserRound} title="访问" hint="不登录的人能做什么" />
+          <div className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
+            <div className="min-w-0">
+              <div className="text-[12px] text-[var(--muted)]">允许游客只读浏览</div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                {!guestEnabled
+                  ? '已关闭：登录页不再提供游客入口，正在浏览的游客会立刻被登出。'
+                  : providers?.openlistConfigured
+                    ? '登录页会出现「以游客身份浏览」，用的是 OpenList 自己的匿名访问权限。'
+                    : '登录页会出现「以游客身份浏览」：不用账号就能只读浏览这台服务器上的笔记，任何修改都会被服务器拒绝。'}{' '}
+                关掉后保存即可生效。
+              </p>
+            </div>
+            <Switch checked={guestEnabled} onChange={setGuestEnabled} className="mt-0.5 shrink-0" />
           </div>
         </section>
 

@@ -54,6 +54,8 @@ export interface SessionUser {
   provider: 'local' | 'openlist';
   openlistBasePath?: string;
   openlistIsAdmin?: boolean;
+  /** Nobody signed in: a visitor browsing read-only. */
+  guest?: boolean;
   /** Anonymous OpenList visitor (no credentials). */
   openlistGuest?: boolean;
   permissions?: { write: boolean; rename: boolean; move: boolean; remove: boolean };
@@ -180,6 +182,7 @@ export interface AppSettingsPayload {
       local: { root: string };
     };
     background: BackgroundSettings;
+    guest: { enabled: boolean };
   };
   effective: {
     storage: {
@@ -188,6 +191,7 @@ export interface AppSettingsPayload {
       local: { root: string };
     };
     background: BackgroundSettings;
+    guest: { enabled: boolean };
     sources: Record<string, 'env' | 'file' | 'default'>;
   };
   paths: {

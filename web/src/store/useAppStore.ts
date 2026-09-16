@@ -180,6 +180,8 @@ interface AppState {
    */
   adminBackground: AdminBackground | null;
   refreshAdminBackground: () => Promise<void>;
+  /** Re-asks which sign-in methods the server offers. */
+  refreshProviders: () => Promise<void>;
   /** The interface colour taken from the wallpaper, when that is turned on. */
   accent: string | null;
   setAccent: (colour: string | null) => void;
@@ -951,6 +953,14 @@ export const appStore = createStore<AppState>((set, get) => ({
     set({ wallpaperUrl: blob ? URL.createObjectURL(blob) : null, wallpaperIdentity: identity });
   },
 
+  refreshProviders: async () => {
+    try {
+      set({ providers: await api.providers() });
+    } catch {
+      /* the sign-in screen asks again when it is shown */
+    }
+  },
+
   refreshMeta: async () => {
     try {
       const payload = await api.listNotes();
@@ -1252,7 +1262,7 @@ export function useReadOnlyReason(): string | null {
 
   const reasons: string[] = [];
   if (user?.permissions && !user.permissions.write) {
-    reasons.push(user.openlistGuest ? '游客账号没有写入权限' : '当前 OpenList 账号没有写入权限');
+    reasons.push(user.guest || user.openlistGuest ? '游客账号没有写入权限' : '当前 OpenList 账号没有写入权限');
   }
   if (capabilities && !capabilities.writable) {
     reasons.push(`OpenList 报告 ${capabilities.root} 不可写`);

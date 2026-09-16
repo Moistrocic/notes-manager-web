@@ -12,7 +12,9 @@ export function authRoutes(services: Services): Router {
     '/providers',
     handler(async (_req, res) => {
       const probe = await services.storage.probeOpenList();
-      const guest = probe.reachable ? await services.auth.guestAvailable() : false;
+      // Asked whether or not OpenList is reachable: a deployment without one
+      // offers a read-only local guest, and the sign-in screen needs to know.
+      const guest = await services.auth.guestAvailable();
       res.json({
         local: services.auth.localEnabled,
         openlist: probe.reachable,

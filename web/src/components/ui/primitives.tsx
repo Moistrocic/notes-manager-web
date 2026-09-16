@@ -193,6 +193,7 @@ export function Modal({
   children,
   footer,
   width = 'max-w-2xl',
+  backdrop = 'default',
 }: {
   open: boolean;
   onClose: () => void;
@@ -201,6 +202,14 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   width?: string;
+  /**
+   * How much of the page behind the dialog is left showing.
+   *
+   * `light` is for the dialog that is choosing a wallpaper: the thing being
+   * chosen is behind the dialog, and a backdrop dark enough to hide it makes
+   * every change look as though it did not happen.
+   */
+  backdrop?: 'default' | 'light';
 }) {
   useEffect(() => {
     if (!open) return;
@@ -221,7 +230,10 @@ export function Modal({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
             onClick={onClose}
-            className="absolute inset-0 bg-[rgba(4,7,16,0.55)] backdrop-blur-md"
+            className={cn(
+              'absolute inset-0',
+              backdrop === 'light' ? 'bg-[rgba(4,7,16,0.28)] backdrop-blur-[2px]' : 'bg-[rgba(4,7,16,0.55)] backdrop-blur-md',
+            )}
           />
           <motion.div
             initial={{ opacity: 0, y: 24, scale: 0.97 }}

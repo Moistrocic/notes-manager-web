@@ -23,7 +23,13 @@ export function SessionFooter() {
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12px] font-medium">{user?.displayName ?? user?.username ?? '—'}</div>
           <div className="truncate text-[10px] text-[var(--faint)]">
-            {user?.openlistGuest ? 'OpenList 游客' : user?.provider === 'openlist' ? 'OpenList 账户' : '本地管理员'}
+            {user?.guest
+              ? user.openlistGuest
+                ? 'OpenList 游客'
+                : '游客（只读）'
+              : user?.provider === 'openlist'
+                ? 'OpenList 账户'
+                : '本地管理员'}
             {user?.role === 'admin' ? ' · 管理员' : ''}
             {user?.openlistBasePath && user.openlistBasePath !== '/' ? ` · ${user.openlistBasePath}` : ''}
           </div>
