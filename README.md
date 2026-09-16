@@ -3,10 +3,9 @@
 一个自托管的 Markdown 笔记管理面板：笔记以普通 `.md` 文件直接存放在 OpenList 目录里，
 可以用你自己的 OpenList 账户登录；服务器上没装 OpenList 时也能正常运行。
 
-## AI 开发提示
+## AI 开发
 
-> 这个项目由 AI 结对开发：绝大部分代码是在与 AI 助手的对话中写成的，人类负责提需求、
-> 验收与决策。所以注释、测试与提交信息都写得比较"自解释"，不必先把全部代码读一遍。
+> 这个项目完全由 AI 开发：人类负责提需求、验收与决策。所以注释、测试与提交信息都写得比较"自解释"。
 
 **改完必须跑**（CI 会原样执行这一整套）：
 
@@ -63,7 +62,7 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
   - 场景壁纸（`scene.pkg`）默认**合成一张完整背景图**：它旁边的 `preview.jpg` 只是方形
     缩略图，真正的宽幅画面在容器里，由各图层合成得到（在后台线程完成，结果会缓存）
   - 也可以打开「动态场景壁纸」，让场景在浏览器里**实时渲染**（有动画，较耗电）
-- 背景加载时屏幕正上方显示一张进度卡：下载容器阶段有百分比（静态合成与实时渲染都是），
+- 加载服务器设置好的壁纸时，屏幕正上方显示一张进度卡：下载容器阶段有百分比（静态合成与实时渲染都是），
   之后的解析 / 合成阶段换成走动进度条并说明在做什么——那几步是库内部的单次调用，测不出百分比，
   所以不编数字；浏览器缓存命中时不会闪一下
 - 壁纸只存在浏览器本地，不上传服务器
@@ -170,9 +169,8 @@ sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次�
 
 本项目使用 MIT 许可，完整条款见仓库根目录的 `LICENSE` 文件。
 
-本项目**没有使用 OpenList 的代码**：不包含它的源码、不修改它、不链接也不内嵌它，
-只通过 HTTP 调用它的公开接口。仓库里的 `openlist/` 目录只是开发期用于阅读其 API 实现的
-只读参考，已被 `.gitignore` 忽略，不随本仓库分发。
+本项目不包含 OpenList 的代码，只通过 HTTP 调用它的公开接口。
+仓库里的 `openlist/` 目录只是开发期用于阅读其 API 实现的只读参考，已被 `.gitignore` 忽略，不随本仓库分发。
 
 ### 第三方项目
 
@@ -180,8 +178,7 @@ sudo ./scripts/uninstall.sh --purge   # 额外删除配置、数据（会二次�
 [**wallpaper-scene-layers**](https://github.com/Moistrocic/wallpaper-scene-layers)
 （MIT 许可）——本项目作者自己维护的库，不在 npm 上，所以工作区直接依赖它这个目录。
 
-它通过 **git 子模块**引入到 `web/src/lib/wallpaper-scene-layers`，**父仓库记录的是确切的提交**，
-所以用的是哪个版本一目了然，而不是散落一份无法追溯的复制文件：
+它通过 **git 子模块**引入到 `web/src/lib/wallpaper-scene-layers`：
 
 ```bash
 git submodule status                                    # 当前签出的提交
@@ -193,11 +190,5 @@ git ls-tree HEAD web/src/lib/wallpaper-scene-layers     # 本仓库钉住的提�
 ```bash
 git clone --recursive https://github.com/Moistrocic/notes-manager-web.git
 ```
-
-已经克隆过的、或从 GitHub 下载 ZIP 的，需要补一条
-`git submodule update --init --recursive`（安装脚本会自动执行，构建时若仍缺失会直接报错说明）。
-
-库的包入口（`packages/we-scene/dist`）是**构建产物、不在仓库里**：克隆后要构建一次，
-`npm run build:scene`（`npm install` 之后会自动执行，安装脚本也会构建）。
 
 本项目的其余部分均为自有实现。
