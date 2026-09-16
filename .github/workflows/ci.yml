@@ -24,6 +24,12 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      # The scene library is a submodule whose package entry (dist/index.js) is
+      # built rather than committed, and every step below imports it. `npm ci`
+      # runs it through "prepare" as well; this says so out loud.
+      - name: Build the scene library
+        run: npm run build:scene
+
       # Guards against over-broad .gitignore patterns silently dropping source
       # files from the repository.
       - name: Repository file check

@@ -13,9 +13,11 @@
     "web"
   ],
   "scripts": {
-    "build": "npm run build --workspace web && npm run build --workspace server",
+    "build": "npm run build:scene && npm run build --workspace web && npm run build --workspace server",
+    "build:scene": "node scripts/build-scene-library.mjs",
     "build:web": "npm run build --workspace web",
     "build:server": "npm run build --workspace server",
+    "prepare": "node scripts/build-scene-library.mjs",
     "dev:server": "npm run dev --workspace server",
     "dev:web": "npm run dev --workspace web",
     "scene-lab": "node scripts/scene-lab.mjs",

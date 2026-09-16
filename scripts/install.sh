@@ -312,6 +312,7 @@ web/src/App.tsx
 web/package.json
 web/src/lib/wallpaper-scene-layers/packages/we-scene/src/index.ts
 web/src/lib/wallpaper-scene-layers/packages/we-scene/src/worker/render-worker.ts
+scripts/build-scene-library.mjs
 "
 
 # verify_tree <directory> <label>

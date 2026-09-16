@@ -92,7 +92,9 @@ let sceneSupport: boolean | null = null;
  */
 export function canPlayScenes(): boolean {
   if (sceneSupport === null) sceneSupport = supportsWorkerRendering() || probeSceneSupport();
-  return sceneSupport;
+  // Spelled out rather than relying on narrowing: with the library unresolved,
+  // the assignment above stops narrowing and this is `boolean | null`.
+  return Boolean(sceneSupport);
 }
 
 /**
