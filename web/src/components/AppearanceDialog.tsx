@@ -98,9 +98,18 @@ export function AppearanceDialog() {
     void (async () => {
       try {
         const bytes = await (await fetch(wallpaperUrl)).arrayBuffer();
+        // Let the dialog paint before the heavy part. The library renders on the
+        // main thread, so parsing a 45 MB container and decoding its textures
+        // freezes the page for as long as it takes - and a page that does not
+        // respond looks exactly like a server that does not.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (cancelled) return;
         const still = await renderSceneStill(bytes, {
           cacheKey: `preview:${wallpaperUrl}`,
-          maxWidth: 1600,
+          // Half the pixels of 1600, and it is only ever shown behind a box in a
+          // dialog. The first render is the expensive part either way; this is
+          // the one paid again for every wallpaper.
+          maxWidth: 1024,
         });
         if (!cancelled) setScenePreview(URL.createObjectURL(still.blob));
       } catch {
