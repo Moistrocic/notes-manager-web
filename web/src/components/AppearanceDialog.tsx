@@ -57,6 +57,7 @@ export function AppearanceDialog() {
   const pushToast = useAppStore((s) => s.pushToast);
   const accent = useAppStore((s) => s.accent);
   const scenePreview = useAppStore((s) => s.scenePreview);
+  const setScenePreview = useAppStore((s) => s.setScenePreview);
 
   const fileRef = useRef<HTMLInputElement | null>(null);
   const folderRef = useRef<HTMLInputElement | null>(null);
@@ -70,6 +71,35 @@ export function AppearanceDialog() {
   const [askPermission, setAskPermission] = useState(false);
   const [applying, setApplying] = useState<string | null>(null);
   const [busyNote, setBusyNote] = useState<string | null>(null);
+
+  /**
+   * The crop editor's picture of a live scene.
+   *
+   * Rendered from the container into a canvas of its own, at the scene's own
+   * shape, rather than read off the wallpaper canvas. That one is sized by the
+   * selection, so capturing it made the editor's frame change whenever the
+   * selection did - the selection was being drawn against a moving frame, and
+   * narrowing it made the frame shorter, which made the next drag land wrong.
+   */
+  useEffect(() => {
+    if (!open || wallpaper.kind !== 'scene' || !wallpaperUrl) return undefined;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const bytes = await (await fetch(wallpaperUrl)).arrayBuffer();
+        const still = await renderSceneStill(bytes, {
+          cacheKey: `preview:${wallpaperUrl}`,
+          maxWidth: 1600,
+        });
+        if (!cancelled) setScenePreview(URL.createObjectURL(still.blob));
+      } catch {
+        /* nothing to draw over; the editor says so instead */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, wallpaper.kind, wallpaperUrl, setScenePreview]);
 
   useEffect(() => {
     if (!open) return;

@@ -15,7 +15,6 @@ export function Wallpaper() {
   const url = useAppStore((s) => s.wallpaperUrl);
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
-  const setScenePreview = useAppStore((s) => s.setScenePreview);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
@@ -81,22 +80,12 @@ export function Wallpaper() {
         playerRef.current = player;
         if (document.hidden) player.pause();
 
-        // One frame, for the crop editor: the container itself is not
-        // displayable, and the dialog needs something to draw a box over.
-        window.setTimeout(() => {
-          if (cancelled) return;
-          try {
-            const shot = document.createElement('canvas');
-            shot.width = 640;
-            shot.height = Math.round((640 * canvas.height) / Math.max(1, canvas.width)) || 360;
-            const ctx = shot.getContext('2d');
-            if (!ctx) return;
-            ctx.drawImage(canvas, 0, 0, shot.width, shot.height);
-            setScenePreview(shot.toDataURL('image/jpeg', 0.72));
-          } catch {
-            /* nothing to show; the editor explains instead */
-          }
-        }, 1200);
+        // The crop editor's picture is rendered by the dialog now, from the
+        // container itself. Capturing this canvas instead made the editor's
+        // frame depend on the selection: the canvas is sized by the crop, so
+        // narrowing the selection widened the canvas, which widened the capture,
+        // which reshaped the frame the selection was being drawn in. Every drag
+        // moved the ground it was measured against.
 
         // Nothing to warn about any more: the library keeps only the layers its
         // preset asks for and draws all of them, so there is no count of layers
