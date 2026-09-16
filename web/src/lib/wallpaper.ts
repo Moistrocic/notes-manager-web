@@ -125,10 +125,28 @@ export function resizeCrop(start: CropRect, handle: CropHandle, dx: number, dy: 
   const north = handle.includes('n');
   const south = handle.includes('s');
 
+  // How far the selection may grow before the side being dragged would leave
+  // the picture. The opposite side is anchored, so the room available is
+  // measured from it rather than from the picture's edge in general.
+  const roomW = west ? start.x + start.w : 1 - start.x;
+  const roomH = north ? start.y + start.h : 1 - start.y;
+
   if ((west || east) && (north || south)) {
-    const wanted = west ? start.w - dx : start.w + dx;
-    // Never below the minimum in either axis, so the shape is always kept.
-    const factor = Math.max(MIN_CROP / start.w, MIN_CROP / start.h, wanted / start.w);
+    // One factor for both axes, so it has to answer to whichever of them the
+    // pointer is asking for more. Reading only the horizontal delta made a
+    // corner dragged straight down do nothing at all.
+    const scaleX = (west ? start.w - dx : start.w + dx) / start.w;
+    const scaleY = (north ? start.h - dy : start.h + dy) / start.h;
+    const asked = Math.abs(scaleX - 1) >= Math.abs(scaleY - 1) ? scaleX : scaleY;
+    // And it has to satisfy both axes at once. Capping only the width
+    // afterwards - which is what clamping the result did - left the height at
+    // the size the factor asked for, so a corner held against an edge kept
+    // growing the other way.
+    const factor = Math.max(
+      MIN_CROP / start.w,
+      MIN_CROP / start.h,
+      Math.min(asked, roomW / start.w, roomH / start.h),
+    );
     const w = start.w * factor;
     const h = start.h * factor;
     return clampCrop({
@@ -140,18 +158,20 @@ export function resizeCrop(start: CropRect, handle: CropHandle, dx: number, dy: 
   }
 
   let { x, y, w, h } = start;
+  // An edge moves one side and holds the other. Without the cap, dragging the
+  // west edge left past the picture's edge pushed the east edge along with it.
   if (west) {
-    x = start.x + dx;
-    w = start.w - dx;
+    w = Math.min(start.w - dx, roomW);
+    x = start.x + start.w - w;
   }
-  if (east) w = start.w + dx;
+  if (east) w = Math.min(start.w + dx, roomW);
   if (north) {
-    y = start.y + dy;
-    h = start.h - dy;
+    h = Math.min(start.h - dy, roomH);
+    y = start.y + start.h - h;
   }
-  if (south) h = start.h + dy;
-  // A side dragged past the opposite one stops at the minimum instead of
-  // turning the rectangle inside out.
+  if (south) h = Math.min(start.h + dy, roomH);
+  // Applied after the caps, so a side dragged past the opposite one stops at
+  // the minimum instead of turning the rectangle inside out.
   if (w < MIN_CROP) {
     w = MIN_CROP;
     if (west) x = start.x + start.w - MIN_CROP;

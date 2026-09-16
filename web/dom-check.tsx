@@ -557,6 +557,31 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
   check('the opposite corner scales about its own corner', ratio(nw), ratio(box));
   check('and its far edge stays put', [Number((nw.x + nw.w).toFixed(4)), Number((nw.y + nw.h).toFixed(4))], [0.6, 0.4]);
 
+  // A corner scales both axes by one factor, so it has to stop when either
+  // one reaches the picture. Capping the width afterwards left the height at
+  // whatever the factor asked for, so a corner held against an edge kept
+  // growing the other way - which is what a drag feels like when it will not
+  // settle.
+  const cornerBox: CropRect = { x: 0, y: 0, w: 0.5, h: 0.1 };
+  const stopped = resizeCrop(cornerBox, 'se', 5, 0);
+  check('a corner at the right edge stops both axes', [round4(stopped.w), round4(stopped.h)], [1, 0.2]);
+  const further = resizeCrop(cornerBox, 'se', 50, 0);
+  check('and dragging further changes nothing', [round4(further.w), round4(further.h)], [round4(stopped.w), round4(stopped.h)]);
+
+  const tallBox: CropRect = { x: 0, y: 0, w: 0.1, h: 0.5 };
+  const stoppedTall = resizeCrop(tallBox, 'se', 0, 5);
+  check('a corner at the bottom edge stops both axes too', [round4(stoppedTall.w), round4(stoppedTall.h)], [0.2, 1]);
+
+  // An edge moves one side and holds the other. Without a cap the far side
+  // came along for the ride once the near side left the picture.
+  const edgeBox: CropRect = { x: 0.3, y: 0.2, w: 0.4, h: 0.2 };
+  const pulled = resizeCrop(edgeBox, 'w', -5, 0);
+  check('the west edge stops at the picture, not past it', round4(pulled.w), 0.7);
+  check('and the east edge does not move', round4(pulled.x + pulled.w), round4(edgeBox.x + edgeBox.w));
+  const pushed = resizeCrop(edgeBox, 'e', 5, 0);
+  check('the east edge stops at the picture too', round4(pushed.x + pushed.w), 1);
+  check('and the west edge does not move', round4(pushed.x), round4(edgeBox.x));
+
   const squashed = resizeCrop(box, 'w', 5, 0);
   check('an edge dragged past the far side stops at the minimum', squashed.w, MIN_CROP);
   check('and does not turn inside out', squashed.x + squashed.w <= box.x + box.w + 0.0001, true);
