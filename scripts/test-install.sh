@@ -151,6 +151,15 @@ echo repo    > "$SRC/web/src/lib/wallpaper-scene-layers/package.json"
 echo entry   > "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/src/index.ts"
 echo built   > "$SRC/web/src/lib/wallpaper-scene-layers/packages/we-scene/dist/index.js"
 
+# Whatever the installer insists on, so a new entry in CRITICAL_SOURCES does
+# not need a matching line here as well. It grew twice today and this fixture
+# went red both times, which is a test failing for being out of date rather than
+# for finding anything.
+for required in $CRITICAL_SOURCES; do
+  mkdir -p "$SRC/$(dirname "$required")"
+  [ -e "$SRC/$required" ] || echo fixture > "$SRC/$required"
+done
+
 echo stale > "$DST/obsolete-module.js"
 mkdir -p "$DST/node_modules/keepme"
 echo keep > "$DST/node_modules/keepme/index.js"
