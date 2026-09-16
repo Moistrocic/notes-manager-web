@@ -9,6 +9,7 @@
  */
 
 import { createRossiWallpaper } from 'wallpaper-scene-layers';
+import { fetchWithProgress, type DownloadProgress } from '../download';
 import { idbGet, idbPut } from '../wallpaper';
 import { releaseContext } from './play-scene';
 
@@ -47,43 +48,6 @@ export interface RenderOptions {
   useCache?: boolean;
 }
 
-/** How far a download has got, when the server says how big it is. */
-export type DownloadProgress = (loaded: number, total: number | null) => void;
-
-/**
- * Reads a response body, saying how far along it is.
- *
- * A 45 MB container over a slow line is a long silence otherwise: `arrayBuffer()`
- * resolves once at the end and knows nothing in between. The length header is
- * what makes a percentage possible - the server sends the file itself, so it is
- * there - and it is treated as optional, because a proxy may drop it.
- */
-export async function readWithProgress(response: Response, onProgress?: DownloadProgress): Promise<ArrayBuffer> {
-  const total = Number(response.headers.get('content-length')) || null;
-  if (!response.body) {
-    const buffer = await response.arrayBuffer();
-    onProgress?.(buffer.byteLength, total);
-    return buffer;
-  }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let loaded = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    loaded += value.byteLength;
-    onProgress?.(loaded, total);
-  }
-  const bytes = new Uint8Array(loaded);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes.buffer;
-}
-
 /**
  * A frame of a scene that is on the other end of a URL.
  *
@@ -100,9 +64,7 @@ export async function renderSceneStillFrom(
     const remembered = await idbGet<SceneStill>(CACHE_PREFIX + options.cacheKey);
     if (remembered?.blob) return remembered;
   }
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
-  const bytes = await readWithProgress(response, onProgress);
+  const bytes = await fetchWithProgress(url, onProgress);
   return renderSceneStill(bytes, { ...options, useCache: false });
 }
 

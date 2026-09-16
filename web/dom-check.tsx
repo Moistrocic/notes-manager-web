@@ -1568,7 +1568,7 @@ console.log('\nguest browsing (jsdom)');
 /* --- the wallpaper says what it is doing ----------------------------------- */
 console.log('\nwallpaper loading (jsdom)');
 {
-  const { readWithProgress } = await import('./src/lib/scene/render-still');
+  const { readWithProgress } = await import('./src/lib/download');
   const { WallpaperLoading } = await import('./src/components/WallpaperLoading');
 
   // A 45 MB container arrives in chunks, and the length header is what turns
@@ -1586,7 +1586,7 @@ console.log('\nwallpaper loading (jsdom)');
 
   {
     const seen: string[] = [];
-    const buffer = await readWithProgress(streaming([10, 20, 30], 60), (loaded, total) => {
+    const buffer = await readWithProgress(streaming([10, 20, 30], 60), (loaded: number, total: number | null) => {
       seen.push(`${loaded}/${total}`);
     });
     check('every chunk is reported as it arrives', seen, ['10/60', '30/60', '60/60']);
@@ -1595,13 +1595,13 @@ console.log('\nwallpaper loading (jsdom)');
 
   {
     const seen: Array<number | null> = [];
-    await readWithProgress(streaming([5, 5], null), (_loaded, total) => seen.push(total));
+    await readWithProgress(streaming([5, 5], null), (_loaded: number, total: number | null) => seen.push(total));
     check('without a length there is no percentage to show', seen, [null, null]);
   }
 
   {
     const seen: string[] = [];
-    await readWithProgress(new Response(new Uint8Array(8)), (loaded, total) => seen.push(`${loaded}/${total}`));
+    await readWithProgress(new Response(new Uint8Array(8)), (loaded: number, total: number | null) => seen.push(`${loaded}/${total}`));
     check('a body with no stream still reports once', seen, ['8/null']);
   }
 
@@ -1645,6 +1645,18 @@ console.log('\nwallpaper loading (jsdom)');
     check('a slow load ends up saying what it is doing', host.innerHTML.includes('正在下载背景…'), true);
     check('with the percentage it has', host.innerHTML.includes('45%'), true);
     check('and a bar that is a bar', host.innerHTML.includes('width: 45%'), true);
+    check('it sits across the top of the screen', host.innerHTML.includes('inset-x-0 top-4'), true);
+
+    // The phases that cannot be measured say so with a moving bar rather than
+    // a number nobody has.
+    await act(async () => {
+      appStore.setState({ wallpaperLoading: { label: '正在合成背景…', ratio: null } });
+    });
+    await render();
+    check('a phase without a number shows the walking bar', host.innerHTML.includes('progress-unknown'), true);
+    // The class list has percentages of its own (colour-mix stops), so this
+    // looks for the number's own class rather than a digit followed by a sign.
+    check('and no percentage', host.innerHTML.includes('tabular-nums'), false);
 
     await act(async () => {
       appStore.setState({ wallpaperLoading: null });

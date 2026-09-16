@@ -236,6 +236,23 @@ select optgroup {
   background: #05070f;
   transition: opacity 0.25s ease;
 }
+
+/* A bar with no percentage to show: the highlight walks across it, so a phase
+   that cannot be measured still reads as "working" rather than "stuck". */
+.progress-unknown {
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 80%, #fff 20%),
+    transparent
+  );
+  animation: progress-walk 1.2s ease-in-out infinite;
+}
+@keyframes progress-walk {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+
 /* A wallpaper replaces the decorative aurora - two backgrounds fight each other. */
 .wallpaper-on .aurora {
   opacity: 0.25;

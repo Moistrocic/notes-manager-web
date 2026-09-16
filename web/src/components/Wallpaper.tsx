@@ -134,14 +134,23 @@ export function Wallpaper() {
       report(message);
     };
 
-    // The worker downloads and parses the container itself, so there is no
-    // percentage to show: it is one long step as far as this side can tell.
+    // The container is fetched here rather than by the worker, so that the wait
+    // has a number; the worker's own download would be invisible from this side.
     setLoading({ label: '正在载入动态场景…', ratio: null });
 
     void (async () => {
       try {
         player = await playScene(canvas, url, {
           signal: controller.signal,
+          onProgress: (loaded, total) => {
+            if (cancelled) return;
+            const finished = total !== null && loaded >= total;
+            setLoading(
+              finished
+                ? { label: '正在解析场景…', ratio: null }
+                : { label: '正在下载场景…', ratio: total ? loaded / total : null },
+            );
+          },
           onError: fail,
           // Said once, and nothing is stopped. A scene that uses an effect the
           // library cannot compile still renders the rest of itself, and the

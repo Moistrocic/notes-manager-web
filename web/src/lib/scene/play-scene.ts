@@ -13,6 +13,7 @@
  */
 
 import { createRossiWorkerWallpaper, supportsWorkerRendering, type WorkerWallpaper } from 'wallpaper-scene-layers';
+import { fetchWithProgress, type DownloadProgress } from '../download';
 import type { WallpaperKind } from '../wallpaper';
 // Vite bundles this: the library's own worker URL points next to its module,
 // which a build has no way to copy into the app's assets.
@@ -139,6 +140,15 @@ export interface PlayOptions {
    */
   signal?: AbortSignal;
   /**
+   * How far the container has been downloaded, when the caller wants to know.
+   *
+   * Asked for this, the bytes are fetched here and handed to the worker rather
+   * than the worker fetching them itself. That is one copy of 45 MB, and it buys
+   * the only progress figure there is on this side - the worker reports nothing
+   * until it is ready, which is the whole wait.
+   */
+  onProgress?: DownloadProgress;
+  /**
    * Called when something goes wrong that stops the scene.
    *
    * Not the same as a diagnostic, which is the library saying it could not do
@@ -152,8 +162,8 @@ export interface PlayOptions {
 }
 
 /**
- * @param source Where the scene.pkg is: a URL the worker downloads itself.
- *   Handing over bytes instead would copy 45 MB on the main thread first.
+ * @param source Where the scene.pkg is. The worker downloads it itself, unless
+ *   the caller asked for progress - then it arrives here first.
  */
 export async function playScene(
   canvas: HTMLCanvasElement,
@@ -178,12 +188,20 @@ export async function playScene(
     signal?.addEventListener('abort', () => reject(new Error(ABORTED)), { once: true });
   });
 
+  // Bytes rather than a URL when progress was asked for: the worker's own
+  // download is invisible from here, and it is the longest part of the wait.
+  let payload: string | ArrayBuffer = source;
+  if (options.onProgress) {
+    payload = await Promise.race([fetchWithProgress(source, options.onProgress), aborted]);
+    if (signal?.aborted) throw new Error(ABORTED);
+  }
+
   let wallpaper: WorkerWallpaper;
   try {
     wallpaper = await Promise.race([
       createRossiWorkerWallpaper({
         canvas,
-        source,
+        source: payload,
         fit: 'cover',
         autoStart: true,
         trackMouse: false,
