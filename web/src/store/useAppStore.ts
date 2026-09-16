@@ -925,21 +925,30 @@ export const appStore = createStore<AppState>((set, get) => ({
   refreshWallpaperUrl: async () => {
     const settings = get().wallpaper;
     const previous = get().wallpaperUrl;
-    if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+    const dropPrevious = () => {
+      if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+    };
     if (settings.kind === 'none') {
+      dropPrevious();
       set({ wallpaperUrl: null, wallpaperIdentity: null });
       return;
     }
     if (settings.source === 'url') {
       const url = settings.url.trim();
+      if (previous === (url || null)) return;
+      dropPrevious();
       set({ wallpaperUrl: url || null, wallpaperIdentity: url || null });
       return;
     }
     const blob = await loadWallpaperFile();
-    set({
-      wallpaperUrl: blob ? URL.createObjectURL(blob) : null,
-      wallpaperIdentity: blob ? fileIdentity(blob) : null,
-    });
+    const identity = blob ? fileIdentity(blob) : null;
+    // The same file is already what is on screen. Handing the layer a fresh
+    // blob URL for it would only make it throw away its renderer and build the
+    // whole background again - and for a scene that is a 45 MB parse, every
+    // time. Choosing the same file from a different source tab is not a change.
+    if (identity && identity === get().wallpaperIdentity && previous?.startsWith('blob:')) return;
+    dropPrevious();
+    set({ wallpaperUrl: blob ? URL.createObjectURL(blob) : null, wallpaperIdentity: identity });
   },
 
   refreshMeta: async () => {
@@ -1095,9 +1104,21 @@ export const appStore = createStore<AppState>((set, get) => ({
     get().pushToast({ title: '壁纸已更新', message: file.name, tone: 'success' });
   },
 
+  /**
+   * Back to the defaults: no wallpaper of the user's own, nothing stored.
+   *
+   * The administrator-background switch is deliberately not part of that. It
+   * says *whose* background wins rather than which one, so resetting the
+   * wallpaper used to turn it back on behind the user's back - and with the
+   * administrator's background configured, the picture they had just chosen
+   * never appeared.
+   */
   clearWallpaper: async () => {
     await clearWallpaperFile();
-    const next: WallpaperSettings = { ...DEFAULT_WALLPAPER };
+    const next: WallpaperSettings = {
+      ...DEFAULT_WALLPAPER,
+      useAdminBackground: get().wallpaper.useAdminBackground,
+    };
     saveWallpaperSettings(next);
     set({ wallpaper: next, wallpaperUrl: null, wallpaperIdentity: null });
   },

@@ -39,6 +39,9 @@ export interface ScenePlayer {
  * that runs out of memory and takes the context with it. Cap it, and let the
  * browser magnify what was drawn instead.
  */
+/** What a caller sees when it gave up on a load before it finished. */
+const ABORTED = '场景载入已取消';
+
 const MAX_BUFFER_SIDE = 8192;
 const MAX_BUFFER_PIXELS = 16_000_000;
 
@@ -125,6 +128,15 @@ export function releaseContext(canvas: HTMLCanvasElement, known?: WebGL2Renderin
 
 export interface PlayOptions {
   /**
+   * Gives up on a load nobody is waiting for any more.
+   *
+   * Switching wallpapers used to leave the previous container downloading,
+   * parsing and decoding in the background - two 45 MB scenes at once is what
+   * made the page look like it had hung. Aborting stops that worker there and
+   * then.
+   */
+  signal?: AbortSignal;
+  /**
    * Called when something goes wrong that stops the scene.
    *
    * Not the same as a diagnostic, which is the library saying it could not do
@@ -146,16 +158,47 @@ export async function playScene(
   source: string,
   options: PlayOptions = {},
 ): Promise<ScenePlayer> {
-  const wallpaper: WorkerWallpaper = await createRossiWorkerWallpaper({
-    canvas,
-    source,
-    fit: 'cover',
-    autoStart: true,
-    trackMouse: false,
-    pixelRatio: scenePixelRatio(canvas),
-    worker: () => new RenderWorker({ name: 'we-scene-renderer' }),
-    onDiagnostic: (message: string) => options.onDiagnostic?.(message),
+  const signal = options.signal;
+  if (signal?.aborted) throw new Error(ABORTED);
+
+  // The worker is kept in hand so that giving up can stop it: the library's
+  // own promise only settles when the worker says it is ready, and a worker
+  // that never gets there would load a scene nobody asked for any more.
+  let worker: Worker | null = null;
+  const stopWorker = () => {
+    try {
+      worker?.terminate();
+    } catch {
+      /* already gone */
+    }
+  };
+  const aborted = new Promise<never>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => reject(new Error(ABORTED)), { once: true });
   });
+
+  let wallpaper: WorkerWallpaper;
+  try {
+    wallpaper = await Promise.race([
+      createRossiWorkerWallpaper({
+        canvas,
+        source,
+        fit: 'cover',
+        autoStart: true,
+        trackMouse: false,
+        pixelRatio: scenePixelRatio(canvas),
+        worker: () => (worker = new RenderWorker({ name: 'we-scene-renderer' })),
+        onDiagnostic: (message: string) => options.onDiagnostic?.(message),
+      }),
+      aborted,
+    ]);
+  } catch (err) {
+    stopWorker();
+    throw err;
+  }
+  if (signal?.aborted) {
+    wallpaper.dispose();
+    throw new Error(ABORTED);
+  }
 
   return {
     info: {

@@ -767,6 +767,71 @@ console.log('\nappearance dialog (jsdom)');
   check('with the picker filtered to .pkg files', acceptFor('scene'), '.pkg');
   check('the administrator background switch is offered', markup.includes('使用管理员设置的默认背景'), true);
 
+  // The kind buttons are a choice of background, not a reset: switching to the
+  // built-in one used to restore every default, which quietly turned the
+  // administrator-background switch back on - and the picture the user had just
+  // asked for never appeared. These checks drive the store, so they put it back
+  // the way the rest of this block expects to find it.
+  {
+    const before = appStore.getState().wallpaper;
+    const beforeUrl = appStore.getState().wallpaperUrl;
+    try {
+      appStore.setState({ wallpaper: { ...before, kind: 'scene', useAdminBackground: false } });
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(React.createElement(AppearanceDialog));
+      });
+      await flush();
+      const aurora = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim().startsWith('极光'));
+      await act(async () => {
+        aurora?.click();
+      });
+      await flush();
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      const after = appStore.getState().wallpaper;
+      check('choosing the theme background changes the kind', after.kind, 'none');
+      check('and leaves the administrator background switch alone', after.useAdminBackground, false);
+
+      // Resetting the wallpaper is about the wallpaper. Whose background wins
+      // is a separate choice, and restoring defaults used to make it for you.
+      appStore.setState({ wallpaper: { ...appStore.getState().wallpaper, useAdminBackground: false } });
+      await appStore.getState().clearWallpaper();
+      check('restoring defaults clears the wallpaper', appStore.getState().wallpaper.kind, 'none');
+      check('without re-enabling the administrator background', appStore.getState().wallpaper.useAdminBackground, false);
+
+      // Handing the layer the same URL it already has is not a change: a fresh
+      // blob URL for the same file makes it throw the background away and
+      // build the whole thing again.
+      appStore.setState({
+        wallpaper: { ...appStore.getState().wallpaper, kind: 'image', source: 'url', url: 'https://cdn.example.com/a.png' },
+      });
+      await appStore.getState().refreshWallpaperUrl();
+      const first = appStore.getState().wallpaperUrl;
+      await appStore.getState().refreshWallpaperUrl();
+      check('a URL wallpaper keeps the URL it already has', appStore.getState().wallpaperUrl, first);
+      check('and it is the configured one', first, 'https://cdn.example.com/a.png');
+
+      // A load nobody is waiting for any more must never start: two 45 MB
+      // scenes being parsed at once is what a hang looks like from outside.
+      const { playScene } = await import('./src/lib/scene/play-scene');
+      const controller = new AbortController();
+      controller.abort();
+      const started = await playScene(document.createElement('canvas'), 'blob:scene', {
+        signal: controller.signal,
+      }).then(
+        () => 'started',
+        (err: Error) => err.message,
+      );
+      check('a scene that was given up on is never loaded', started, '场景载入已取消');
+    } finally {
+      appStore.setState({ wallpaper: before, wallpaperUrl: beforeUrl });
+    }
+  }
   // With a library open: the detection trail, the grid, and the preview-only case.
   libraryFromFiles(
     [

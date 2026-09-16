@@ -110,6 +110,8 @@ export function Wallpaper() {
 
     let cancelled = false;
     let player: ScenePlayer | null = null;
+    /** Stops a load that is no longer the one being shown. */
+    const controller = new AbortController();
 
     // A failure after the first frame used to be invisible: nothing was
     // listening, and the canvas simply froze on its last frame looking like a
@@ -122,6 +124,7 @@ export function Wallpaper() {
     void (async () => {
       try {
         player = await playScene(canvas, url, {
+          signal: controller.signal,
           onError: fail,
           // Said once, and nothing is stopped. A scene that uses an effect the
           // library cannot compile still renders the rest of itself, and the
@@ -146,6 +149,9 @@ export function Wallpaper() {
 
     return () => {
       cancelled = true;
+      // A scene that is still loading is stopped where it stands: letting it
+      // finish means two containers being parsed for one background.
+      controller.abort();
       playerRef.current = null;
       player?.stop();
     };
