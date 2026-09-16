@@ -37,39 +37,23 @@ function displayable(name: string): boolean {
   return kind === 'image' || kind === 'video';
 }
 
-/** Wallpaper Engine's Steam application id. */
-export const WALLPAPER_ENGINE_APP_ID = '431960';
 
 /**
- * Where the library sits under a Steam installation. The casing of Steam's own
- * folder varies by platform and by how it was installed, and a library on
- * another drive has the same shape, so all of these are tried in order.
+ * Works out which folder the wallpapers are actually in.
+ *
+ * Whatever the user hands over is searched, at any depth: a folder of
+ * Wallpaper Engine projects, one wallpaper folder on its own, or a whole
+ * drive. It used to guess at Steam's own layout first - looking for 431960
+ * under the paths Steam normally uses, then walking the tree for a folder with
+ * that name. The guessing is gone. It only ever helped people who keep Steam
+ * where Steam puts it, and it made every other folder slower to open.
  */
-export const STEAM_LIBRARY_PATHS: string[][] = [
-  ['steamapps', 'workshop', 'content', WALLPAPER_ENGINE_APP_ID],
-  ['SteamApps', 'workshop', 'content', WALLPAPER_ENGINE_APP_ID],
-  ['workshop', 'content', WALLPAPER_ENGINE_APP_ID],
-  ['content', WALLPAPER_ENGINE_APP_ID],
-];
-
-/** Typical locations, shown so the first pick is a paste and an Enter. */
-export function steamPathHints(): string[] {
-  const platform = typeof navigator === 'undefined' ? '' : navigator.platform || '';
-  const tail = [WALLPAPER_ENGINE_APP_ID];
-  if (/mac/i.test(platform)) {
-    return [`~/Library/Application Support/Steam/${['steamapps', 'workshop', 'content', ...tail].join('/')}`];
-  }
-  if (/linux/i.test(platform)) {
-    return [
-      `~/.steam/steam/${['steamapps', 'workshop', 'content', ...tail].join('/')}`,
-      `~/.local/share/Steam/${['steamapps', 'workshop', 'content', ...tail].join('/')}`,
-    ];
-  }
-  return [
-    `C:\\Program Files (x86)\\Steam\\${['steamapps', 'workshop', 'content', ...tail].join('\\')}`,
-    `C:\\Program Files\\Steam\\${['steamapps', 'workshop', 'content', ...tail].join('\\')}`,
-    `D:\\SteamLibrary\\${['steamapps', 'workshop', 'content', ...tail].join('\\')}`,
-  ];
+async function resolveRoot(picked: DirHandleLike): Promise<ResolvedRoot> {
+  // Whatever was picked is the root, and the search starts there. There is no
+  // second guess to make: the recursion looks for wallpaper folders and falls
+  // back to loose pictures on its own, so both a Steam directory and a folder
+  // of holiday photos come out right.
+  return { handle: picked, trail: [picked.name], detected: false, engine: true };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -137,7 +121,13 @@ export interface WallpaperLibrary {
 }
 
 /** How deep to walk a plain folder. Wallpaper Engine nests one level. */
-const MAX_DEPTH = 3;
+/**
+ * How deep to look. Eight covers the layouts people have without being one
+ * they have to think about: a wallpaper is five levels below a Steam folder,
+ * so this also reaches it from a folder above that - "Games", or a drive root.
+ * The entry budget is what really bounds the work.
+ */
+const MAX_DEPTH = 8;
 /** More than this and the grid stops being useful. */
 const MAX_ENTRIES = 240;
 
@@ -165,26 +155,7 @@ export function canPickDirectory(): boolean {
 /* Finding the library                                                        */
 /* -------------------------------------------------------------------------- */
 /** Walks a chain of folder names, or gives up quietly. */
-async function descend(start: DirHandleLike, segments: string[]): Promise<DirHandleLike | null> {
-  let current = start;
-  for (const segment of segments) {
-    try {
-      current = await current.getDirectoryHandle(segment);
-    } catch {
-      return null;
-    }
-  }
-  return current;
-}
 
-async function listFiles(dir: DirHandleLike): Promise<{ name: string; handle: FileHandleLike }[]> {
-  const out: { name: string; handle: FileHandleLike }[] = [];
-  for await (const [name, handle] of dir.entries()) {
-    if (name.startsWith('.')) continue;
-    if (handle.kind === 'file') out.push({ name, handle });
-  }
-  return out;
-}
 
 interface ResolvedRoot {
   handle: DirHandleLike;
@@ -194,73 +165,6 @@ interface ResolvedRoot {
   engine: boolean;
 }
 
-/** How deep to hunt for the library, and how many folders to open doing it. */
-const MAX_SEARCH_DEPTH = 5;
-const MAX_SEARCH_FOLDERS = 600;
-
-/**
- * Looks for a folder called 431960 at any depth.
- *
- * The conventions cover the usual layouts, but Steam is regularly somewhere
- * else entirely - `C:\Games\Steam`, a second drive, a library folder with a
- * custom name - and a page cannot read the registry or ask the browser where
- * Steam lives. So when the conventional paths come up empty and the user has
- * granted something broad, the tree is searched instead. The budget keeps that
- * from turning into a full disk scan.
- */
-async function findLibrary(
-  dir: DirHandleLike,
-  depth: number,
-  budget: { folders: number },
-): Promise<string[] | null> {
-  if (depth > MAX_SEARCH_DEPTH || budget.folders <= 0) return null;
-  let seen = 0;
-  for await (const [name, handle] of dir.entries()) {
-    if (handle.kind !== 'directory' || name.startsWith('.')) continue;
-    if (budget.folders-- <= 0) return null;
-    if (name === WALLPAPER_ENGINE_APP_ID) return [name];
-    // Only descend into folders that could plausibly contain a Steam library,
-    // so a directory of holiday photos does not eat the whole budget.
-    if (++seen > 40 || !/^(steam|steamapps|steamlibrary|games|program files.*|workshop|content)$/i.test(name)) continue;
-    const found = await findLibrary(handle, depth + 1, budget);
-    if (found) return [name, ...found];
-  }
-  return null;
-}
-
-/**
- * Works out which folder the wallpapers are actually in.
- *
- * The user is expected to hand over something above the library - their Steam
- * folder or a drive - and we walk down to it. Pointing straight at the library
- * works too, and so does an ordinary folder of pictures, or one wallpaper
- * folder on its own.
- */
-async function resolveRoot(picked: DirHandleLike): Promise<ResolvedRoot> {
-  if (picked.name === WALLPAPER_ENGINE_APP_ID) {
-    return { handle: picked, trail: [picked.name], detected: false, engine: true };
-  }
-
-  for (const segments of STEAM_LIBRARY_PATHS) {
-    const found = await descend(picked, segments);
-    if (found) return { handle: found, trail: [picked.name, ...segments], detected: true, engine: true };
-  }
-
-  // Not where the conventions say. Search, in case the user granted a drive or
-  // a parent folder and Steam is installed somewhere unexpected.
-  const trail = await findLibrary(picked, 1, { folders: MAX_SEARCH_FOLDERS });
-  if (trail) {
-    const found = await descend(picked, trail);
-    if (found) return { handle: found, trail: [picked.name, ...trail], detected: true, engine: true };
-  }
-
-  const files = await listFiles(picked);
-  const engine = files.some((entry) => entry.name === 'project.json');
-  return { handle: picked, trail: [picked.name], detected: false, engine };
-}
-
-/* -------------------------------------------------------------------------- */
-/* Listing                                                                    */
 /* -------------------------------------------------------------------------- */
 interface EngineProject {
   title?: string;
@@ -393,6 +297,65 @@ async function walk(
   }
 }
 
+/** Names that mark a folder as a wallpaper rather than a folder of them. */
+const WALLPAPER_MARKERS = ['project.json', SCENE_PACK];
+
+/**
+ * Recurses until it finds folders that are wallpapers.
+ *
+ * This is the whole of the search now that the guessing at Steam's layout is
+ * gone: whatever the user pointed at is walked, at any depth, and every folder
+ * that holds a wallpaper is an entry. A folder that is one is not descended
+ * into, or its textures would be listed as wallpapers too.
+ */
+async function collect(
+  dir: DirHandleLike,
+  prefix: string,
+  depth: number,
+  files: Map<string, FileHandleLike | File>,
+  entries: WallpaperEntry[],
+): Promise<void> {
+  if (depth > MAX_DEPTH || entries.length >= MAX_ENTRIES) return;
+
+  const children: [string, DirHandleLike | FileHandleLike][] = [];
+  for await (const [name, handle] of dir.entries()) {
+    if (name.startsWith('.')) continue;
+    children.push([name, handle]);
+  }
+
+  const folders = children.filter((pair): pair is [string, DirHandleLike] => pair[1].kind === 'directory');
+
+  // A folder with a project or a scene in it is one wallpaper. Checked at the
+  // root as well: pointing straight at a wallpaper is an ordinary thing to do,
+  // and descending into it would list its textures as wallpapers of their own.
+  if (children.some(([name]) => WALLPAPER_MARKERS.includes(name))) {
+    entries.push(await readEngineWallpaper(dir, prefix, files));
+    return;
+  }
+
+  // A folder with folders in it is a container, whatever else it holds: a Steam
+  // directory has loose files scattered through it, and a library folder has
+  // one per wallpaper.
+  if (folders.length > 0) {
+    for (const [name, handle] of folders) {
+      if (entries.length >= MAX_ENTRIES) return;
+      await collect(handle, prefix ? `${prefix}/${name}` : name, depth + 1, files, entries);
+    }
+    return;
+  }
+
+  // Nothing but files: each picture is a wallpaper of its own, which is what a
+  // folder someone assembled by hand looks like.
+  for (const [name, handle] of children) {
+    if (entries.length >= MAX_ENTRIES) return;
+    const kind = wallpaperKindOf(name);
+    if (!kind || handle.kind !== 'file') continue;
+    const path = prefix ? `${prefix}/${name}` : name;
+    files.set(path, handle);
+    entries.push({ path, title: tidyName(name), file: path, kind });
+  }
+}
+
 function sortEntries(entries: WallpaperEntry[]): WallpaperEntry[] {
   return entries.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }));
 }
@@ -407,15 +370,15 @@ async function listRoot(resolved: ResolvedRoot): Promise<{
   const entries: WallpaperEntry[] = [];
 
   if (resolved.engine) {
-    let sawFolder = false;
-    for await (const [name, handle] of resolved.handle.entries()) {
-      if (entries.length >= MAX_ENTRIES) break;
-      if (name.startsWith('.') || handle.kind !== 'directory') continue;
-      sawFolder = true;
-      entries.push(await readEngineWallpaper(handle, name, files));
-    }
-    // The root can be one wallpaper folder rather than a library of them.
-    if (!sawFolder) entries.push(await readEngineWallpaper(resolved.handle, '', files));
+    // The picked folder may be one wallpaper, a folder of them, or something
+    // well above both - a Steam directory, a drive. Walk down until a folder
+    // looks like a wallpaper; that one is an entry and its insides are not
+    // searched further, which is what keeps a wallpaper's own files from being
+    // offered as wallpapers of their own.
+    await collect(resolved.handle, '', 1, files, entries);
+    // Nothing that looked like a wallpaper: fall back to loose pictures, which
+    // is what an ordinary folder of images is.
+    if (entries.length === 0) await walk(resolved.handle, '', 1, files, entries);
   } else {
     await walk(resolved.handle, '', 1, files, entries);
   }
@@ -549,15 +512,17 @@ function relativePath(file: File): string {
 }
 
 /**
- * Where a file sits inside a Wallpaper Engine library, or null when it is not
- * in one. The chosen folder may *be* the library, may be the Steam folder above
- * it, or anything in between, so the id is looked for anywhere in the path.
+/**
+ * A file's path inside the chosen folder, or null when it is not under it.
+ *
+ * It used to return null unless the path ran through Wallpaper Engine's
+ * Steam id, which quietly hid every wallpaper in a folder that was not laid
+ * out the way Steam lays one out. Anything the user pointed at is fair game
+ * now; the search is what decides whether it is a wallpaper.
  */
 function insideLibrary(file: File): string | null {
-  const marker = `/${WALLPAPER_ENGINE_APP_ID}/`;
-  const path = `/${fullPath(file)}`;
-  const at = path.indexOf(marker);
-  return at < 0 ? null : path.slice(at + marker.length - 1);
+  const path = fullPath(file);
+  return path ? path : null;
 }
 
 /**

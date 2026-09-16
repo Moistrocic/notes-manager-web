@@ -13,8 +13,6 @@ import {
   readLibraryFile,
   readPreview,
   restoreLibrary,
-  STEAM_LIBRARY_PATHS,
-  steamPathHints,
   type WallpaperEntry,
   type WallpaperLibrary,
 } from '../lib/local-wallpapers';
@@ -711,79 +709,22 @@ function WallpaperLibraryPanel({
       ) : !askPermission && library ? (
         <div className="space-y-2">
           <p className="text-[11px] leading-relaxed text-[var(--warn)]">
-            没有在这里找到 Wallpaper Engine 壁纸库。你选择的是「{library.label}」，
-            应用会在其中查找 {STEAM_LIBRARY_PATHS[0].join('/')}。
+            没有在「{library.label}」里找到壁纸。场景壁纸需要文件夹里有 scene.pkg，
+            其它壁纸需要 preview.jpg 之类的图片。
           </p>
-          <SteamPathHints />
         </div>
       ) : null}
 
-      {!library ? <SteamPathHints /> : null}
-
       <p className="text-[11px] leading-relaxed text-[var(--faint)]">
         {canPickDirectory()
-          ? '浏览器不允许网页按路径读取磁盘，所以需要你授权一次。授权时可以选中 Steam 目录、某个盘符，或者直接选中 431960 这个总文件夹——选完之后应用会自动往下找到壁纸库，并记住它。文件不会上传，只有点中的那一张会存进浏览器。'
+          ? '浏览器不允许网页按路径读取磁盘，所以需要你授权一次。选中任意一个文件夹即可——它以及它下面的所有子文件夹都会被搜索，找到壁纸就列出来，并记住这个文件夹。文件不会上传，只有点中的那一张会存进浏览器。'
           : '当前浏览器不支持直接读取文件夹，选择后会通过文件选择器读取其中的图片和视频。文件不会上传。'}
       </p>
     </div>
   );
 }
 
-/** The standard locations, so the first pick is a paste and an Enter. */
-function SteamPathHints() {
-  const hints = steamPathHints();
-  const [copied, setCopied] = useState<string | null>(null);
 
-  return (
-    <div className="rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] p-2.5">
-      <p className="text-[11px] leading-relaxed text-[var(--muted)]">
-        在文件夹选择框里可以直接把路径粘贴进去。常见位置：
-      </p>
-      <ul className="mt-1.5 space-y-1">
-        {hints.map((hint) => (
-          <li key={hint} className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 break-all font-mono text-[10.5px] text-[var(--text)]">{hint}</code>
-            <button
-              type="button"
-              onClick={() => {
-                void copyText(hint).then((ok) => setCopied(ok ? hint : null));
-              }}
-              className="focus-ring shrink-0 rounded-lg border border-[var(--line)] px-1.5 py-0.5 text-[10.5px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-            >
-              {copied === hint ? '已复制' : '复制'}
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-/** Clipboard access needs a secure context, so keep a fallback for plain http. */
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    /* fall through to the legacy path */
-  }
-  try {
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.setAttribute('readonly', '');
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
-    document.body.appendChild(area);
-    area.select();
-    const ok = document.execCommand('copy');
-    area.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
 
 /** One grid cell. The file is only read once the cell scrolls into view. */
 function LocalThumb({ entry, busy, onClick }: { entry: WallpaperEntry; busy: boolean; onClick: () => void }) {

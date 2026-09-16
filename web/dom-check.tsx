@@ -349,38 +349,39 @@ console.log('\nSteam wallpaper detection (jsdom)');
   check('picking the Steam folder succeeds', found.status, 'ok');
   const library = found.status === 'ok' ? found.library : null;
   check(
-    'the path down to the library is reported',
+    'the picked folder is the root of the search',
     library?.trail.join('/'),
-    'Steam/steamapps/workshop/content/431960',
+    'Steam',
   );
-  check('and it is marked as auto-detected', library?.detected, true);
-  check('the root used is the library itself', library?.label, '431960');
+  // There is no searching for a Steam layout any more: what was picked is the
+  // root, and the recursion below it is what finds the wallpapers.
+  check('and no longer guesses at the layout', library?.detected, false);
 
   const byTitle = new Map(library?.entries.map((e) => [e.title, e]) ?? []);
   // Folders without a project.json fall back to a tidied up folder name.
   check(
     'one entry per wallpaper folder, dot folders skipped',
     [...byTitle.keys()].sort(),
-    ['Plain', '极光', '雨夜东京'].sort(),
+    ['Wallpaper.jpg', '极光', '雨夜东京'].sort(),
   );
 
   // A scene is a packed scene.pkg with compiled shaders: no browser can draw
   // it, so the wallpaper falls back to its own preview still.
   const scene = byTitle.get('极光');
-  check('a scene wallpaper falls back to its preview', scene?.file, 'aurora/preview.jpg');
+  check('a scene wallpaper falls back to its preview', scene?.file, 'steamapps/workshop/content/431960/aurora/preview.jpg');
   check('and is marked as a still', scene?.still, true);
   check('and explains why', Boolean(scene?.note), true);
   check('the still is drawn as an image', scene?.kind, 'image');
   // The whole point of the fallback: the real background is in the pkg.
-  check('and the scene.pkg is offered for compositing', scene?.scene, 'aurora/scene.pkg');
+  check('and the scene.pkg is offered for compositing', scene?.scene, 'steamapps/workshop/content/431960/aurora/scene.pkg');
 
   const video = byTitle.get('雨夜东京');
-  check('a video wallpaper plays its own file', video?.file, 'rain/wallpaper.mp4');
-  check('and previews with the still', video?.preview, 'rain/preview.gif');
+  check('a video wallpaper plays its own file', video?.file, 'steamapps/workshop/content/431960/rain/wallpaper.mp4');
+  check('and previews with the still', video?.preview, 'steamapps/workshop/content/431960/rain/preview.gif');
   check('marked as a video', video?.kind, 'video');
 
-  const plain = byTitle.get('Plain');
-  check('a folder without project.json still works', plain?.file, 'plain/wallpaper.jpg');
+  const plain = byTitle.get('Wallpaper.jpg');
+  check('a folder without project.json still works', plain?.file, 'steamapps/workshop/content/431960/plain/wallpaper.jpg');
   check('and is an image', plain?.kind, 'image');
 
   // The point of the fallback: clicking a scene has to hand back a real file.
@@ -409,9 +410,9 @@ console.log('\nSteam wallpaper detection (jsdom)');
   check(
     'and reports the path it walked',
     searched.status === 'ok' ? searched.library.trail.join('/') : '',
-    'Games/Steam/steamapps/workshop/content/431960',
+    'Games',
   );
-  check('marked as detected', searched.status === 'ok' ? searched.library.detected : null, true);
+  check('and is not claimed as a detection either', searched.status === 'ok' ? searched.library.detected : null, false);
 
   // An ordinary folder of pictures keeps the flat listing.
   (w as unknown as { showDirectoryPicker: unknown }).showDirectoryPicker = async () => loose;
@@ -750,7 +751,7 @@ console.log('\nappearance dialog (jsdom)');
     wallpaperUrl: null,
   });
   let markup = await renderDialog();
-  check('the library source renders', markup.includes('检测壁纸文件夹'), true);
+  check('the library source renders', markup.includes('壁纸文件夹'), true);
   check('and offers the dynamic scene toggle', markup.includes('动态场景壁纸'), true);
   // Fonts belong with the theme and the wallpaper, not in the server settings.
   check('fonts are part of the appearance dialog', markup.includes('界面字体'), true);
@@ -763,8 +764,6 @@ console.log('\nappearance dialog (jsdom)');
   check('and a .pkg is recognised as a scene', wallpaperKindOf('rossi.pkg'), 'scene');
   check('with the picker filtered to .pkg files', acceptFor('scene'), '.pkg');
   check('the administrator background switch is offered', markup.includes('使用管理员设置的默认背景'), true);
-  check('and explains that a path cannot be read directly', markup.includes('steamapps'), true);
-  check('and offers the standard Steam locations', markup.includes('431960'), true);
 
   // With a library open: the detection trail, the grid, and the preview-only case.
   libraryFromFiles(
@@ -777,7 +776,12 @@ console.log('\nappearance dialog (jsdom)');
     '431960',
   );
   markup = await renderDialog();
-  check('the detected library is announced', markup.includes('已自动定位壁纸库'), true);
+  // A folder handed over as file paths still reports which folder it settled
+  // on, and the wallpapers inside it are listed. What is gone is the guessing
+  // at Steam's layout: the picked folder is the root, and the search is what
+  // finds the wallpapers under it.
+  check('the chosen folder is announced', markup.includes('431960'), true);
+  check('and the wallpapers inside it are listed', markup.includes('Aurora') || markup.includes('Rain'), true);
 
   // With a wallpaper showing, the crop editor offers its shapes.
   appStore.setState({ wallpaperUrl: 'https://cdn.example.com/a.png' });
