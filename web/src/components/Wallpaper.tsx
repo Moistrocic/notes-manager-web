@@ -37,6 +37,7 @@ export function Wallpaper() {
   const identityKey = locked ? `admin:${admin?.file ?? ''}:${admin?.bytes ?? 0}` : identity;
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
+  const setLoading = useAppStore((s) => s.setWallpaperLoading);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerRef = useRef<ScenePlayer | null>(null);
@@ -133,6 +134,10 @@ export function Wallpaper() {
       report(message);
     };
 
+    // The worker downloads and parses the container itself, so there is no
+    // percentage to show: it is one long step as far as this side can tell.
+    setLoading({ label: '正在载入动态场景…', ratio: null });
+
     void (async () => {
       try {
         player = await playScene(canvas, url, {
@@ -154,8 +159,10 @@ export function Wallpaper() {
         }
         playerRef.current = player;
         if (document.hidden) player.pause();
+        setLoading(null);
       } catch (err) {
         fail((err as Error).message);
+        setLoading(null);
       }
     })();
 
@@ -166,8 +173,9 @@ export function Wallpaper() {
       controller.abort();
       playerRef.current = null;
       player?.stop();
+      setLoading(null);
     };
-  }, [live, url, pushToast]);
+  }, [live, url, pushToast, setLoading]);
 
   /**
    * A scene that is not playing: one frame of the same container.
@@ -184,9 +192,22 @@ export function Wallpaper() {
     }
     let cancelled = false;
     let made: string | null = null;
+    // A cached frame comes back at once; a first one is a download followed by
+    // the container being parsed and its textures decoded, which is where the
+    // seconds go. The bar covers the download, which is the part that has an
+    // answer; the rest says what it is doing.
+    setLoading({ label: '正在载入背景…', ratio: null });
     void (async () => {
       try {
-        made = await sceneStillUrl(url, `still:${identityKey ?? url}`);
+        made = await sceneStillUrl(url, `still:${identityKey ?? url}`, (loaded, total) => {
+          if (cancelled) return;
+          const finished = total !== null && loaded >= total;
+          setLoading(
+            finished
+              ? { label: '正在合成背景…', ratio: null }
+              : { label: '正在下载背景…', ratio: total ? loaded / total : null },
+          );
+        });
         if (cancelled) {
           URL.revokeObjectURL(made);
           return;
@@ -194,14 +215,30 @@ export function Wallpaper() {
         setStill(made);
       } catch (err) {
         if (!cancelled) report((err as Error).message);
+      } finally {
+        if (!cancelled) setLoading(null);
       }
     })();
     return () => {
       cancelled = true;
       if (made) URL.revokeObjectURL(made);
       setStill(null);
+      setLoading(null);
     };
-  }, [wallpaper.kind, live, url, identityKey, pushToast]);
+  }, [wallpaper.kind, live, url, identityKey, pushToast, setLoading]);
+
+  /**
+   * A picture or a video, while the browser is still fetching it.
+   *
+   * Nothing to measure here - the element is doing the loading - but a large
+   * file over a slow line is the same silence as a scene, so it says the same
+   * thing until it arrives.
+   */
+  useEffect(() => {
+    if (wallpaper.kind === 'none' || wallpaper.kind === 'scene' || !url) return undefined;
+    setLoading({ label: '正在载入背景…', ratio: null });
+    return () => setLoading(null);
+  }, [wallpaper.kind, url, setLoading]);
 
   /**
    * Take the interface colour from the picture.
@@ -280,7 +317,11 @@ export function Wallpaper() {
           loop
           muted
           playsInline
-          onError={() => setFailed(true)}
+          onLoadedData={() => setLoading(null)}
+          onError={() => {
+            setLoading(null);
+            setFailed(true);
+          }}
         />
       ) : (
         <img
@@ -289,7 +330,11 @@ export function Wallpaper() {
           style={mediaStyle}
           src={picture}
           alt=""
-          onError={() => setFailed(true)}
+          onLoad={() => setLoading(null)}
+          onError={() => {
+            setLoading(null);
+            setFailed(true);
+          }}
         />
       )}
       <div className="wallpaper-scrim" style={{ opacity: wallpaper.dim }} />

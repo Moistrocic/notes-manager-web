@@ -1565,5 +1565,99 @@ console.log('\nguest browsing (jsdom)');
   }
 }
 
+/* --- the wallpaper says what it is doing ----------------------------------- */
+console.log('\nwallpaper loading (jsdom)');
+{
+  const { readWithProgress } = await import('./src/lib/scene/render-still');
+  const { WallpaperLoading } = await import('./src/components/WallpaperLoading');
+
+  // A 45 MB container arrives in chunks, and the length header is what turns
+  // that into a percentage; without it the count is all there is.
+  const streaming = (parts: number[], length: number | null) => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of parts) controller.enqueue(new Uint8Array(size));
+        controller.close();
+      },
+    });
+    const headers = length === null ? undefined : { 'content-length': String(length) };
+    return new Response(body, { status: 200, headers });
+  };
+
+  {
+    const seen: string[] = [];
+    const buffer = await readWithProgress(streaming([10, 20, 30], 60), (loaded, total) => {
+      seen.push(`${loaded}/${total}`);
+    });
+    check('every chunk is reported as it arrives', seen, ['10/60', '30/60', '60/60']);
+    check('and the bytes add up', buffer.byteLength, 60);
+  }
+
+  {
+    const seen: Array<number | null> = [];
+    await readWithProgress(streaming([5, 5], null), (_loaded, total) => seen.push(total));
+    check('without a length there is no percentage to show', seen, [null, null]);
+  }
+
+  {
+    const seen: string[] = [];
+    await readWithProgress(new Response(new Uint8Array(8)), (loaded, total) => seen.push(`${loaded}/${total}`));
+    check('a body with no stream still reports once', seen, ['8/null']);
+  }
+
+  // The badge waits a moment before appearing: a wallpaper out of the browser
+  // cache would otherwise flash it on every page load.
+  {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const render = async () => {
+      await act(async () => {
+        root.render(React.createElement(WallpaperLoading));
+      });
+      await flush();
+    };
+
+    await act(async () => {
+      appStore.setState({ wallpaperLoading: null });
+    });
+    await render();
+    check('nothing is shown when nothing is loading', host.innerHTML, '');
+
+    await act(async () => {
+      appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio: 0.45 } });
+    });
+    await render();
+    check('and nothing the moment a load starts', host.innerHTML, '');
+
+    // Progress arrives many times a second, and each one is a new object: the
+    // badge has to appear anyway, which it did not when the delay restarted
+    // with every update.
+    await act(async () => {
+      for (const ratio of [0.05, 0.2, 0.35, 0.45]) {
+        appStore.setState({ wallpaperLoading: { label: '正在下载背景…', ratio } });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    });
+    check('a slow load ends up saying what it is doing', host.innerHTML.includes('正在下载背景…'), true);
+    check('with the percentage it has', host.innerHTML.includes('45%'), true);
+    check('and a bar that is a bar', host.innerHTML.includes('width: 45%'), true);
+
+    await act(async () => {
+      appStore.setState({ wallpaperLoading: null });
+    });
+    await render();
+    check('and it goes away when the wallpaper arrives', host.innerHTML, '');
+
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

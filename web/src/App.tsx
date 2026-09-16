@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { Aurora } from './components/Aurora';
 import { Wallpaper } from './components/Wallpaper';
+import { WallpaperLoading } from './components/WallpaperLoading';
 import { CommandPalette } from './components/CommandPalette';
 import { Editor } from './components/Editor';
 import { LoginScreen } from './components/LoginScreen';
@@ -92,6 +93,7 @@ export default function App() {
         )}
       </AnimatePresence>
       <Toasts />
+      <WallpaperLoading />
       <CommandPalette />
       <SettingsDialog />
       <AppearanceDialog />

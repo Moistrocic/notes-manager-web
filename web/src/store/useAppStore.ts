@@ -194,6 +194,16 @@ interface AppState {
    */
   scenePreview: string | null;
   setScenePreview: (preview: string | null) => void;
+  /**
+   * What the background layer is waiting for, if anything.
+   *
+   * A scene wallpaper is a 45 MB container that has to be fetched, parsed and
+   * decoded before anything appears, and on a remote server that is a long time
+   * to look at nothing. The layer reports what it is doing, and the indicator in
+   * the corner says so.
+   */
+  wallpaperLoading: { label: string; ratio: number | null } | null;
+  setWallpaperLoading: (state: { label: string; ratio: number | null } | null) => void;
   setWallpaper: (patch: Partial<WallpaperSettings>) => void;
   setWallpaperFile: (file: File, source?: WallpaperSource, kind?: WallpaperKind) => Promise<void>;
   clearWallpaper: () => Promise<void>;
@@ -422,6 +432,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   adminBackground: null,
   accent: null,
   scenePreview: null,
+  wallpaperLoading: null,
   appearanceOpen: false,
   theme: readLocal<Theme>(THEME_KEY, 'dark'),
   trash: [],
@@ -1086,6 +1097,8 @@ export const appStore = createStore<AppState>((set, get) => ({
   setScenePreview: (preview) => {
     if (get().scenePreview !== preview) set({ scenePreview: preview });
   },
+
+  setWallpaperLoading: (state) => set({ wallpaperLoading: state }),
 
   setWallpaper: (patch) => {
     const before = get().wallpaper;
