@@ -753,6 +753,8 @@ console.log('\nappearance dialog (jsdom)');
   let markup = await renderDialog();
   check('the library source renders', markup.includes('壁纸文件夹'), true);
   check('and offers the dynamic scene toggle', markup.includes('动态场景壁纸'), true);
+  // It used to promise that re-picking the wallpaper was what applied it.
+  check('and no longer asks for the wallpaper to be picked again', markup.includes('重新点一次'), false);
   // Fonts belong with the theme and the wallpaper, not in the server settings.
   check('fonts are part of the appearance dialog', markup.includes('界面字体'), true);
   check('with both role pickers', markup.includes('代码 / 编辑器字体'), true);
@@ -894,7 +896,7 @@ console.log('\nwallpaper accent (jsdom)');
 }
 
 /* --- a live scene wallpaper draws into a canvas ---------------------------- */
-const { canPlayScenes, probeSceneSupport, scenePixelRatio } = await import('./src/lib/scene/play-scene');
+const { canPlayScenes, playsScenesLive, probeSceneSupport, scenePixelRatio } = await import('./src/lib/scene/play-scene');
 
 console.log('\nlive scene wallpaper (jsdom)');
 {
@@ -972,13 +974,20 @@ console.log('\nlive scene wallpaper (jsdom)');
     check('a tiny element is never scaled up', scenePixelRatio(sized(100, 60)) <= dpr, true);
   }
 
+  // The switch is what decides, and the browser has the last word: this is the
+  // choice that makes turning the switch reload the background by itself,
+  // rather than the wallpaper having to be picked again.
+  check('a scene plays live only with the switch on', [playsScenesLive('scene', false), playsScenesLive('scene', true)], [false, canPlayScenes()]);
+  check('and only a scene can', playsScenesLive('image', true), false);
+
   appStore.setState({
     wallpaper: { ...DEFAULT_WALLPAPER, kind: 'scene', source: 'library', dynamicScene: true },
     wallpaperUrl: 'blob:scene',
   });
   const markup = await renderWallpaper();
-  check('a live scene uses a canvas, not an image', markup.includes('<canvas'), true);
-  check('and not an img', markup.includes('<img'), false);
+  // No WebGL2 and no worker here, so a scene is shown as a picture of itself -
+  // and in jsdom even that cannot be composited, so nothing is drawn at all.
+  check('a scene this browser cannot play is not given a live canvas', markup.includes('<canvas'), false);
 
   appStore.setState(hold);
 }

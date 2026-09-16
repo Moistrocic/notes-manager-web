@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { extractAccent } from '../lib/accent';
-import { canPlayScenes, playScene, type ScenePlayer } from '../lib/scene/play-scene';
+import { playScene, playsScenesLive, type ScenePlayer } from '../lib/scene/play-scene';
+import { sceneStillUrl } from '../lib/scene/render-still';
 import { cropMediaStyle } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 
@@ -13,11 +14,11 @@ import { useAppStore } from '../store/useAppStore';
 export function Wallpaper() {
   const settings = useAppStore((s) => s.wallpaper);
   const ownUrl = useAppStore((s) => s.wallpaperUrl);
+  const identity = useAppStore((s) => s.wallpaperIdentity);
   const admin = useAppStore((s) => s.adminBackground);
-  // While this is open the layer does not render: the dialog is rendering the
-  // same scene for its own preview, and there is one main thread.
+  // Held while the dialog is open: it is doing its own work, and a video that
+  // nobody is looking at is a video worth pausing.
   const appearanceOpen = useAppStore((s) => s.appearanceOpen);
-
   /**
    * The administrator's background takes over while the switch is on.
    *
@@ -30,6 +31,7 @@ export function Wallpaper() {
     ? { ...settings, kind: admin?.kind ?? 'image', source: 'url' as const, url: admin?.url ?? '' }
     : settings;
   const url = locked ? (admin?.url ?? '') : ownUrl;
+  const identityKey = locked ? (admin?.url ?? '') : identity;
   const pushToast = useAppStore((s) => s.pushToast);
   const setAccent = useAppStore((s) => s.setAccent);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -38,10 +40,26 @@ export function Wallpaper() {
   /** Diagnostics are worth saying once, not once per frame. */
   const diagnosticSaid = useRef(false);
   const [failed, setFailed] = useState(false);
+  const [still, setStill] = useState<string | null>(null);
   const [viewport, setViewport] = useState(() => ({
     w: typeof window === 'undefined' ? 1280 : window.innerWidth,
     h: typeof window === 'undefined' ? 800 : window.innerHeight,
   }));
+
+  /**
+   * A scene is played live only where the switch says so and the browser can.
+   *
+   * Otherwise it is shown as a picture of itself - the same container
+   * composited into one frame - which is the choice the switch is offering.
+   * Deciding that here, rather than once when the wallpaper is picked, is what
+   * lets the switch take effect on its own.
+   */
+  const live = playsScenesLive(wallpaper.kind, wallpaper.dynamicScene);
+
+  const report = (message: string) => {
+    setFailed(true);
+    pushToast({ title: '动态场景已停止', message, tone: 'error' });
+  };
 
   // Only the blur compensation needs this, but it has to be the real size.
   useEffect(() => {
@@ -59,9 +77,6 @@ export function Wallpaper() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || wallpaper.kind !== 'video') return;
-    // Held while the dialog is open, for the same reason the scene is: the
-    // dialog is doing its own work and the picture behind it is not being
-    // looked at.
     if (appearanceOpen) {
       video.pause();
       return;
@@ -74,42 +89,37 @@ export function Wallpaper() {
   /**
    * A live scene.
    *
-   * The renderer parses the container, decodes its textures and compiles its
-   * shaders on the main thread, and it is not cheap: tens of megabytes and a
-   * few seconds. The appearance dialog needs a picture of the same scene for
-   * its crop editor, which costs the same again - and running both at once is
-   * what made a wallpaper switch look like the server had died.
+   * The library downloads and parses the container, decodes its textures,
+   * compiles its shaders and draws every frame - in a worker, so the app's own
+   * interface is not competing with a wallpaper for the main thread. Nothing
+   * has to stand down while the appearance dialog is open: a worker renders
+   * whether or not anybody is watching, and the dialog's own picture of the
+   * scene is a separate, one-off render.
    *
-   * So the layer stands down while the dialog is up. It keeps whatever frame it
-   * last drew, which costs nothing, and starts again when the dialog closes.
-   * One render at a time, on the one thread there is.
+   * One canvas per player: handing a canvas to a worker is a one-time move, so
+   * the element is keyed on what it is showing and a new one is mounted for
+   * every player.
    */
   useEffect(() => {
-    if (wallpaper.kind !== 'scene' || !url) return undefined;
-    if (appearanceOpen) return undefined;
+    if (!live || !url) return undefined;
     const canvas = canvasRef.current;
-    if (!canvas || !canPlayScenes()) return undefined;
+    if (!canvas) return undefined;
 
     let cancelled = false;
     let player: ScenePlayer | null = null;
 
-    // A failure after the first frame used to be invisible: the worker reported
-    // it, nothing was listening, and the canvas simply froze on its last frame
-    // looking like a still. Say so instead.
-    const report = (message: string) => {
+    // A failure after the first frame used to be invisible: nothing was
+    // listening, and the canvas simply froze on its last frame looking like a
+    // still. Say so instead.
+    const fail = (message: string) => {
       if (cancelled) return;
-      setFailed(true);
-      pushToast({ title: '动态场景已停止', message, tone: 'error' });
+      report(message);
     };
 
     void (async () => {
       try {
-        const bytes = await (await fetch(url)).arrayBuffer();
-        if (cancelled) return;
-        // No size hints: the library sizes itself from the canvas, which the
-        // layer has already laid out at the size the screen needs.
-        player = await playScene(canvas, bytes, {
-          onError: report,
+        player = await playScene(canvas, url, {
+          onError: fail,
           // Said once, and nothing is stopped. A scene that uses an effect the
           // library cannot compile still renders the rest of itself, and the
           // alternative - reporting it as a failure - took the whole wallpaper
@@ -126,20 +136,8 @@ export function Wallpaper() {
         }
         playerRef.current = player;
         if (document.hidden) player.pause();
-
-        // The crop editor's picture is rendered by the dialog now, from the
-        // container itself. Capturing this canvas instead made the editor's
-        // frame depend on the selection: the canvas is sized by the crop, so
-        // narrowing the selection widened the canvas, which widened the capture,
-        // which reshaped the frame the selection was being drawn in. Every drag
-        // moved the ground it was measured against.
-
-        // Nothing to warn about any more: the library keeps only the layers its
-        // preset asks for and draws all of them, so there is no count of layers
-        // that failed to resolve.
-        void player.info;
       } catch (err) {
-        report((err as Error).message);
+        fail((err as Error).message);
       }
     })();
 
@@ -148,7 +146,41 @@ export function Wallpaper() {
       playerRef.current = null;
       player?.stop();
     };
-  }, [wallpaper.kind, url, appearanceOpen, pushToast]);
+  }, [live, url, pushToast]);
+
+  /**
+   * A scene that is not playing: one frame of the same container.
+   *
+   * The frame is remembered under the wallpaper's identity rather than its
+   * blob URL, which is different on every page load - remembered under that,
+   * it would never be found again and every visit would composite 45 MB on the
+   * main thread.
+   */
+  useEffect(() => {
+    if (wallpaper.kind !== 'scene' || live || !url) {
+      setStill(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let made: string | null = null;
+    void (async () => {
+      try {
+        made = await sceneStillUrl(url, `still:${identityKey ?? url}`);
+        if (cancelled) {
+          URL.revokeObjectURL(made);
+          return;
+        }
+        setStill(made);
+      } catch (err) {
+        if (!cancelled) report((err as Error).message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (made) URL.revokeObjectURL(made);
+      setStill(null);
+    };
+  }, [wallpaper.kind, live, url, identityKey, pushToast]);
 
   /**
    * Take the interface colour from the picture.
@@ -171,7 +203,7 @@ export function Wallpaper() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [url, wallpaper.kind, wallpaper.autoAccent, setAccent]);
+  }, [url, wallpaper.kind, wallpaper.autoAccent, live, still, setAccent]);
 
   // Nothing should animate in a tab nobody is looking at.
   useEffect(() => {
@@ -185,7 +217,8 @@ export function Wallpaper() {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  if (wallpaper.kind === 'none' || !url || failed) return null;
+  const picture = wallpaper.kind === 'scene' && !live ? still : url;
+  if (wallpaper.kind === 'none' || !picture || !url || failed) return null;
 
   // A blur samples past the element's edges, so the outer band fades to
   // transparent and the page background shows through: the picture looks like it
@@ -204,10 +237,17 @@ export function Wallpaper() {
 
   return (
     <div className="wallpaper-layer" aria-hidden>
-      {wallpaper.kind === 'scene' ? (
-        // Keyed by url: a canvas can only be handed to a worker once, ever, so
-        // each source needs its own element.
-        <canvas key={url} ref={canvasRef} className="wallpaper-media" style={mediaStyle} />
+      {live ? (
+        // Keyed by source and by mode: a canvas that has been handed to a
+        // worker cannot be handed to the next one, so every player gets an
+        // element of its own. The key changes exactly when the effect that
+        // creates the player runs.
+        <canvas
+          key={`${url}:live`}
+          ref={canvasRef}
+          className="wallpaper-media"
+          style={mediaStyle}
+        />
       ) : wallpaper.kind === 'video' ? (
         <video
           ref={videoRef}
@@ -223,10 +263,10 @@ export function Wallpaper() {
         />
       ) : (
         <img
-          key={url}
+          key={picture}
           className="wallpaper-media"
           style={mediaStyle}
-          src={url}
+          src={picture}
           alt=""
           onError={() => setFailed(true)}
         />

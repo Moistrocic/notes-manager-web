@@ -163,6 +163,14 @@ interface AppState {
   /** The URL the background layer should load (remote URL or blob URL). */
   wallpaperUrl: string | null;
   /**
+   * What those bytes *are*, for caches that have to outlive the page.
+   *
+   * A blob URL is different on every load, so anything remembered under it is
+   * remembered once and never found again. For a stored file this is its name,
+   * size and timestamp; for a remote URL the URL itself.
+   */
+  wallpaperIdentity: string | null;
+  /**
    * The administrator's default background, as the server reports it.
    *
    * Held separately from the user's own wallpaper rather than replacing it: the
@@ -289,6 +297,17 @@ function writeExpanded(paths: string[]): void {
   }
 }
 
+/**
+ * A stable name for the wallpaper file that is stored right now.
+ *
+ * The blob URL handed to the layer changes on every page load, so it is no use
+ * as a cache key; the file's own name, size and timestamp do not.
+ */
+function fileIdentity(blob: Blob): string {
+  const file = blob as File;
+  return `${file.name ?? 'wallpaper'}:${blob.size}:${file.lastModified ?? 0}`;
+}
+
 function applyTheme(theme: Theme): void {
   const root = document.documentElement;
   root.classList.toggle('dark', theme === 'dark');
@@ -401,6 +420,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   fontSelection: { sans: '', mono: '' },
   wallpaper: DEFAULT_WALLPAPER,
   wallpaperUrl: null,
+  wallpaperIdentity: null,
   adminBackground: null,
   accent: null,
   scenePreview: null,
@@ -907,15 +927,19 @@ export const appStore = createStore<AppState>((set, get) => ({
     const previous = get().wallpaperUrl;
     if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
     if (settings.kind === 'none') {
-      set({ wallpaperUrl: null });
+      set({ wallpaperUrl: null, wallpaperIdentity: null });
       return;
     }
     if (settings.source === 'url') {
-      set({ wallpaperUrl: settings.url.trim() || null });
+      const url = settings.url.trim();
+      set({ wallpaperUrl: url || null, wallpaperIdentity: url || null });
       return;
     }
     const blob = await loadWallpaperFile();
-    set({ wallpaperUrl: blob ? URL.createObjectURL(blob) : null });
+    set({
+      wallpaperUrl: blob ? URL.createObjectURL(blob) : null,
+      wallpaperIdentity: blob ? fileIdentity(blob) : null,
+    });
   },
 
   refreshMeta: async () => {
@@ -1075,7 +1099,7 @@ export const appStore = createStore<AppState>((set, get) => ({
     await clearWallpaperFile();
     const next: WallpaperSettings = { ...DEFAULT_WALLPAPER };
     saveWallpaperSettings(next);
-    set({ wallpaper: next, wallpaperUrl: null });
+    set({ wallpaper: next, wallpaperUrl: null, wallpaperIdentity: null });
   },
 
   setAppearanceOpen: (value) => set({ appearanceOpen: value }),

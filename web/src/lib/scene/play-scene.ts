@@ -1,22 +1,28 @@
 /**
  * Runs a scene wallpaper live.
  *
- * All of it is wallpaper-scene-layers now: it parses the container, decodes the
- * textures, compiles the shaders, simulates the particles and draws. This file
- * is the adapter that gives the rest of the app a smaller surface than the
- * library's - start, stop, pause, and what was loaded.
+ * All of it is wallpaper-scene-layers now. This file is the adapter that gives
+ * the rest of the app a smaller surface than the library's - start, stop,
+ * pause, and what was loaded - and it is where the rendering is put in a
+ * worker: a scene parses a 45 MB container, decodes its textures and compiles
+ * its shaders, and doing that on the main thread is what made switching
+ * wallpapers look like the server had died.
  *
- * The renderer takes an HTMLCanvasElement and draws on the main thread, so
- * there is no worker and nothing is transferred. That costs some main-thread
- * time while a scene loads, and it buys a canvas that can be read back - which
- * is how the test bench can tell a moving scene from a frozen one.
+ * The library falls back to the main thread by itself when a browser has no
+ * OffscreenCanvas, so there is one code path here either way.
  */
 
-import { createRossiWallpaper, type Wallpaper } from 'wallpaper-scene-layers';
+import { createRossiWorkerWallpaper, supportsWorkerRendering, type WorkerWallpaper } from 'wallpaper-scene-layers';
+import type { WallpaperKind } from '../wallpaper';
+// Vite bundles this: the library's own worker URL points next to its module,
+// which a build has no way to copy into the app's assets.
+import RenderWorker from 'wallpaper-scene-layers/worker?worker';
 
 export interface ScenePlayer {
   /** What the first frame reported, for the dialog to mention. */
   info: { width: number; height: number; resolved: number; skipped: number };
+  /** Whether the frames are drawn in a worker or on the main thread. */
+  offscreen: boolean;
   stop(): void;
   pause(): void;
   resume(): void;
@@ -74,17 +80,27 @@ let sceneSupport: boolean | null = null;
 /**
  * Whether this browser can run a scene at all.
  *
- * The question is asked on every render of the appearance dialog, which is
- * every step of a crop drag - and the probe used to allocate a WebGL context
- * each time it was asked. A browser keeps only a handful of live contexts and
- * drops the oldest to make room, so a drag ended with the wallpaper's own
- * context evicted: the scene stopped rendering, and nothing but a new canvas
- * could bring it back, because a canvas whose context has been lost is never
- * given another one. Ask once, and hand the probe's context straight back.
+ * A worker is enough on its own - the library renders there and falls back to
+ * the main thread, which then needs WebGL2. The question is asked on every
+ * render of the appearance dialog, which is every step of a crop drag, so the
+ * answer is remembered; asking it used to allocate a WebGL context per call,
+ * and the context a browser drops to make room for those is the wallpaper's
+ * own.
  */
 export function canPlayScenes(): boolean {
-  if (sceneSupport === null) sceneSupport = probeSceneSupport();
+  if (sceneSupport === null) sceneSupport = supportsWorkerRendering() || probeSceneSupport();
   return sceneSupport;
+}
+
+/**
+ * Whether a scene should be played live rather than shown as a picture of it.
+ *
+ * The switch is the whole answer where the browser can do it: deciding here,
+ * on every render, is what makes turning the switch reload the background
+ * instead of the wallpaper having to be picked again.
+ */
+export function playsScenesLive(kind: WallpaperKind, dynamic: boolean): boolean {
+  return kind === 'scene' && dynamic && canPlayScenes();
 }
 
 /**
@@ -108,7 +124,6 @@ export function releaseContext(canvas: HTMLCanvasElement, known?: WebGL2Renderin
 }
 
 export interface PlayOptions {
-  maxWidth?: number;
   /**
    * Called when something goes wrong that stops the scene.
    *
@@ -122,30 +137,37 @@ export interface PlayOptions {
   onDiagnostic?: (message: string) => void;
 }
 
+/**
+ * @param source Where the scene.pkg is: a URL the worker downloads itself.
+ *   Handing over bytes instead would copy 45 MB on the main thread first.
+ */
 export async function playScene(
   canvas: HTMLCanvasElement,
-  pkgBytes: ArrayBuffer,
+  source: string,
   options: PlayOptions = {},
 ): Promise<ScenePlayer> {
-  const wallpaper: Wallpaper = await createRossiWallpaper({
+  const wallpaper: WorkerWallpaper = await createRossiWorkerWallpaper({
     canvas,
-    source: pkgBytes,
+    source,
     fit: 'cover',
     autoStart: true,
     trackMouse: false,
     pixelRatio: scenePixelRatio(canvas),
+    worker: () => new RenderWorker({ name: 'we-scene-renderer' }),
     onDiagnostic: (message: string) => options.onDiagnostic?.(message),
   });
 
   return {
     info: {
-      width: canvas.width,
-      height: canvas.height,
+      width: canvas.clientWidth,
+      height: canvas.clientHeight,
       resolved: wallpaper.layers.length,
       skipped: 0,
     },
-    // dispose rather than stop: the canvas keeps whatever was last drawn, and
-    // the next request builds its own renderer.
+    offscreen: wallpaper.offscreen,
+    // dispose rather than stop: a canvas can only be handed to a worker once,
+    // so the element goes with the player - the layer keys it on what it is
+    // showing, and mounts a new one for the next player.
     stop: () => wallpaper.dispose(),
     pause: () => wallpaper.stop(),
     resume: () => wallpaper.start(),

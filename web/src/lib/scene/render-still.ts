@@ -47,6 +47,33 @@ export interface RenderOptions {
   useCache?: boolean;
 }
 
+/**
+ * A frame of a scene that is on the other end of a URL.
+ *
+ * The cache is checked before the download, so a wallpaper that has been seen
+ * before costs one IndexedDB read rather than 45 MB off the wire - which is
+ * the difference between an instant background and a pause on every page load.
+ */
+export async function renderSceneStillFrom(url: string, options: RenderOptions): Promise<SceneStill> {
+  if (options.useCache !== false) {
+    const remembered = await idbGet<SceneStill>(CACHE_PREFIX + options.cacheKey);
+    if (remembered?.blob) return remembered;
+  }
+  const bytes = await (await fetch(url)).arrayBuffer();
+  return renderSceneStill(bytes, { ...options, useCache: false });
+}
+
+/**
+ * A picture of a scene, ready to put on screen.
+ *
+ * Used when a scene is not being played live: one frame is composited and the
+ * result is a blob URL an img can show.
+ */
+export async function sceneStillUrl(url: string, cacheKey: string): Promise<string> {
+  const still = await renderSceneStillFrom(url, { cacheKey });
+  return URL.createObjectURL(still.blob);
+}
+
 export async function renderSceneStill(pkgBytes: ArrayBuffer, options: RenderOptions): Promise<SceneStill> {
   const key = CACHE_PREFIX + options.cacheKey;
   if (options.useCache !== false) {

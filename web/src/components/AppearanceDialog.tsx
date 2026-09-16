@@ -17,7 +17,7 @@ import {
   type WallpaperLibrary,
 } from '../lib/local-wallpapers';
 import { canPlayScenes } from '../lib/scene/play-scene';
-import { canRenderScenes, renderSceneStill } from '../lib/scene/render-still';
+import { renderSceneStillFrom } from '../lib/scene/render-still';
 import { acceptFor, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
 import { FontSettings } from './FontSettings';
 import { WallpaperCrop } from './WallpaperCrop';
@@ -64,6 +64,7 @@ export function AppearanceDialog() {
   const scenePreview = useAppStore((s) => s.scenePreview);
   const setScenePreview = useAppStore((s) => s.setScenePreview);
   const admin = useAppStore((s) => s.adminBackground);
+  const identityKey = useAppStore((s) => s.wallpaperIdentity);
   // While the administrator's background is the one showing, the controls that
   // would change it are not offered.
   const locked = wallpaper.useAdminBackground && admin?.configured === true;
@@ -82,28 +83,30 @@ export function AppearanceDialog() {
   const [busyNote, setBusyNote] = useState<string | null>(null);
 
   /**
-   * The crop editor's picture of a live scene.
+   * The crop editor's picture of a scene.
    *
-   * Rendered from the container into a canvas of its own, at the scene's own
-   * shape, rather than read off the wallpaper canvas. That one is sized by the
+   * Composited from the container into a canvas of its own, at the scene's own
+   * shape, rather than read off the wallpaper canvas: that one is sized by the
    * selection, so capturing it made the editor's frame change whenever the
    * selection did - the selection was being drawn against a moving frame, and
    * narrowing it made the frame shorter, which made the next drag land wrong.
+   *
+   * The frame is remembered under the wallpaper's identity rather than its blob
+   * URL, which is different on every page load.
    */
   useEffect(() => {
     if (!open || wallpaper.kind !== 'scene' || !wallpaperUrl) return undefined;
     let cancelled = false;
     void (async () => {
       try {
-        const bytes = await (await fetch(wallpaperUrl)).arrayBuffer();
-        // Let the dialog paint before the heavy part. The library renders on the
+        // Let the dialog paint before the heavy part. Compositing happens on the
         // main thread, so parsing a 45 MB container and decoding its textures
         // freezes the page for as long as it takes - and a page that does not
         // respond looks exactly like a server that does not.
         await new Promise((resolve) => setTimeout(resolve, 0));
         if (cancelled) return;
-        const still = await renderSceneStill(bytes, {
-          cacheKey: `preview:${wallpaperUrl}`,
+        const still = await renderSceneStillFrom(wallpaperUrl, {
+          cacheKey: `preview:${identityKey ?? wallpaperUrl}`,
           // Half the pixels of 1600, and it is only ever shown behind a box in a
           // dialog. The first render is the expensive part either way; this is
           // the one paid again for every wallpaper.
@@ -117,7 +120,7 @@ export function AppearanceDialog() {
     return () => {
       cancelled = true;
     };
-  }, [open, wallpaper.kind, wallpaperUrl, setScenePreview]);
+  }, [open, wallpaper.kind, wallpaperUrl, identityKey, setScenePreview]);
 
   useEffect(() => {
     if (!open) return;
@@ -177,15 +180,19 @@ export function AppearanceDialog() {
   const useFromLibrary = async (entry: WallpaperEntry) => {
     setApplying(entry.path);
     try {
-      const isLive = Boolean(entry.scene) && wallpaper.dynamicScene && canPlayScenes();
-      const file = (await renderSceneEntry(entry)) ?? (await readEntry(entry));
-      await setWallpaperFile(file, 'library', isLive ? 'scene' : undefined);
-      if (isLive) {
-        pushToast({
-          title: '动态场景已启用',
-          message: '实时渲染，比较耗电；在下面关掉开关并重新选择即可换回静态背景图',
-          tone: 'info',
-        });
+      const file = (await readSceneEntry(entry)) ?? (await readEntry(entry));
+      await setWallpaperFile(file, 'library');
+      // A scene is stored as its container either way: whether it animates or
+      // is shown as a picture of itself is the switch's decision, taken by the
+      // background layer, and it can only change its mind while the container
+      // is still there. Say which one it landed on, since the first static
+      // composite takes a few seconds and the frame is empty until it is done.
+      if (entry.scene && canPlayScenes()) {
+        pushToast(
+          wallpaper.dynamicScene
+            ? { title: '动态场景已启用', message: '实时渲染，比较耗电；在下面关掉开关即可换回静态背景图', tone: 'info' }
+            : { title: '已使用静态背景图', message: '打开「动态场景壁纸」就会实时渲染', tone: 'info' },
+        );
       }
       if (entry.still && !entry.scene) {
         pushToast({ title: '已使用静态预览图', message: entry.note ?? '这个壁纸无法在浏览器中播放', tone: 'info' });
@@ -199,41 +206,21 @@ export function AppearanceDialog() {
   };
 
   /**
-   * Composites a scene wallpaper out of its scene.pkg.
+   * The scene.pkg behind a library entry.
    *
    * The preview.jpg beside it is a square workshop thumbnail, not the picture -
-   * for a wide scene it is usually a close crop of one character. Rendering the
-   * real thing takes a few seconds the first time and is cached afterwards, so
-   * the fallback is always the preview rather than nothing.
+   * for a wide scene it is usually a close crop of one character - so the
+   * container is what gets stored, and what everything else is derived from.
+   * Null means there is nothing to read and the entry's own file will do.
    */
-  const renderSceneEntry = async (entry: WallpaperEntry): Promise<File | null> => {
-    if (!entry.scene || !canRenderScenes()) return null;
-
-    // Live scene: keep the container itself and let the worker animate it.
-    if (wallpaper.dynamicScene && canPlayScenes()) {
-      setBusyNote('正在载入动态场景…');
-      try {
-        const pkg = await readLibraryFile(entry.scene);
-        return new File([await pkg.arrayBuffer()], entry.scene.split('/').pop() ?? 'scene.pkg');
-      } catch (err) {
-        pushToast({ title: '动态场景载入失败', message: (err as Error).message, tone: 'error' });
-        return null;
-      }
-    }
-
-    setBusyNote('正在合成场景背景图…（首次较慢，之后会缓存）');
+  const readSceneEntry = async (entry: WallpaperEntry): Promise<File | null> => {
+    if (!entry.scene || !canPlayScenes()) return null;
+    setBusyNote('正在载入场景壁纸…');
     try {
       const pkg = await readLibraryFile(entry.scene);
-      const still = await renderSceneStill(await pkg.arrayBuffer(), {
-        cacheKey: `${entry.scene}:${pkg.size}`,
-      });
-      return new File([still.blob], `${entry.title || 'scene'}.jpg`, { type: 'image/jpeg' });
+      return new File([pkg], entry.scene.split('/').pop() ?? 'scene.pkg');
     } catch (err) {
-      pushToast({
-        title: '场景合成失败，改用预览图',
-        message: (err as Error).message,
-        tone: 'info',
-      });
+      pushToast({ title: '场景壁纸载入失败，改用预览图', message: (err as Error).message, tone: 'info' });
       return null;
     }
   };
@@ -502,7 +489,7 @@ export function AppearanceDialog() {
                 <div className="text-[12px] text-[var(--muted)]">动态场景壁纸</div>
                 <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
                   {canPlayScenes()
-                    ? '开启后场景壁纸实时渲染（有动画，较耗电）；关闭则合成一张静态背景图。切换后重新点一次壁纸生效。'
+                    ? '开启后场景壁纸实时渲染（在 worker 里画，不占用界面；较耗电），关闭则合成一张静态背景图。切换后立即生效。'
                     : '当前浏览器不支持（需要 WebGL2 与 OffscreenCanvas），场景壁纸会合成静态背景图。'}
                 </p>
               </div>
