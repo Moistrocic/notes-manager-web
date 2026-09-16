@@ -14,7 +14,7 @@ import { TrashDialog } from './components/TrashDialog';
 import { Button } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
-import { applyAccent } from './lib/accent';
+import { applyAccent, applyAurora } from './lib/accent';
 import { cn } from './lib/cn';
 import { useAppStore } from './store/useAppStore';
 
@@ -36,6 +36,12 @@ export default function App() {
   useEffect(() => {
     applyAccent(wallpaper.autoAccent ? accent : wallpaper.accentColor || null);
   }, [wallpaper.autoAccent, wallpaper.accentColor, accent]);
+
+  // Only while the built-in background is the one showing; a wallpaper covers it.
+  useEffect(() => {
+    const live = wallpaper.kind === 'none';
+    applyAurora(live ? wallpaper.auroraA : '', live ? wallpaper.auroraB : '');
+  }, [wallpaper.kind, wallpaper.auroraA, wallpaper.auroraB]);
 
   // Fades the aurora down while a wallpaper is showing.
   useEffect(() => {

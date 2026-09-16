@@ -260,6 +260,43 @@ export function AppearanceDialog() {
               );
             })}
           </div>
+
+          {/* The built-in background is the theme's two accents, so this is
+              where they can be changed - the accent setting colours the whole
+              interface, which is not what someone tinting a background wants. */}
+          {wallpaper.kind === 'none' ? (
+            <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-3">
+              <span className="text-[12px] text-[var(--muted)]">极光配色</span>
+              {(
+                [
+                  { key: 'auroraA' as const, label: '主色', fallback: '#6d4cff' },
+                  { key: 'auroraB' as const, label: '辅色', fallback: '#0ea5e9' },
+                ] as const
+              ).map((field) => (
+                <label key={field.key} className="flex items-center gap-2">
+                  <span className="text-[11.5px] text-[var(--faint)]">{field.label}</span>
+                  <input
+                    type="color"
+                    aria-label={`极光${field.label}`}
+                    value={wallpaper[field.key] || field.fallback}
+                    onChange={(e) => setWallpaper({ [field.key]: e.target.value } as never)}
+                    className="h-7 w-10 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
+                  />
+                </label>
+              ))}
+              {wallpaper.auroraA || wallpaper.auroraB ? (
+                <button
+                  type="button"
+                  onClick={() => setWallpaper({ auroraA: '', auroraB: '' })}
+                  className="focus-ring rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                >
+                  恢复主题色
+                </button>
+              ) : (
+                <span className="text-[11px] text-[var(--faint)]">当前跟随主题的两个强调色</span>
+              )}
+            </div>
+          ) : null}
         </section>
 
         {wallpaper.kind !== 'none' ? (

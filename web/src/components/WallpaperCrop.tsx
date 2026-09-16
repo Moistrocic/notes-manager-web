@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
 import { CROP_PRESETS, cropForRatio, resizeCrop, type CropHandle, type CropRect } from '../lib/wallpaper';
 
@@ -50,6 +50,35 @@ export function WallpaperCrop({
   const drag = useRef<{ handle: Handle | 'move'; fromX: number; fromY: number; start: CropRect } | null>(null);
   const [aspect, setAspect] = useState<number | null>(kind === 'scene' ? 16 / 9 : null);
   const [broken, setBroken] = useState(false);
+  /**
+   * The screen's shape, which is the shape the selection has to be.
+   *
+   * The rectangle is what fills the wallpaper layer, so its pixel proportions
+   * become the layer's: a square selection on a wide screen is a stretched
+   * picture. It is shown next to the selection's own ratio so that the
+   * difference is visible rather than something to infer from the result.
+   */
+  const screenAspect = useMemo(() => {
+    if (typeof window === 'undefined') return 16 / 9;
+    return window.innerWidth / Math.max(1, window.innerHeight);
+  }, []);
+
+  /**
+   * Records the picture's shape, and fits the selection to the screen once.
+   *
+   * Until this runs the selection is the whole picture, which fills the layer
+   * by being stretched. A square wallpaper on a wide screen therefore starts
+   * out distorted, and dragging afterwards cannot put the proportions back -
+   * there is no correct position for the rectangle to be dragged to. The first
+   * load replaces that default with the largest centred region of the screen's
+   * shape, which is what a wallpaper is expected to do anyway.
+   */
+  const fit = (pictureAspect: number) => {
+    setAspect(pictureAspect);
+    if (crop.x === 0 && crop.y === 0 && crop.w === 1 && crop.h === 1) {
+      onChange(cropForRatio(screenAspect, pictureAspect));
+    }
+  };
 
   useEffect(() => {
     setAspect(kind === 'scene' ? 16 / 9 : null);
@@ -82,6 +111,10 @@ export function WallpaperCrop({
   };
 
   const showPicture = Boolean(src) && !broken;
+  // The selection's real shape, in pixels: its width fraction is of the
+  // picture's width, so the picture's aspect has to come into it.
+  const selectionAspect = (crop.w * (aspect ?? 16 / 9)) / Math.max(0.0001, crop.h);
+  const stretched = Math.abs(selectionAspect - screenAspect) / screenAspect > 0.02;
 
   return (
     <div className="space-y-2">
@@ -104,7 +137,7 @@ export function WallpaperCrop({
               playsInline
               onLoadedMetadata={(e) => {
                 const v = e.currentTarget;
-                if (v.videoWidth && v.videoHeight) setAspect(v.videoWidth / v.videoHeight);
+                if (v.videoWidth && v.videoHeight) fit(v.videoWidth / v.videoHeight);
               }}
               onError={() => setBroken(true)}
             />
@@ -116,7 +149,7 @@ export function WallpaperCrop({
               draggable={false}
               onLoad={(e) => {
                 const img = e.currentTarget;
-                if (img.naturalWidth && img.naturalHeight) setAspect(img.naturalWidth / img.naturalHeight);
+                if (img.naturalWidth && img.naturalHeight) fit(img.naturalWidth / img.naturalHeight);
               }}
               onError={() => setBroken(true)}
             />
@@ -156,6 +189,14 @@ export function WallpaperCrop({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => onChange(cropForRatio(screenAspect, aspect ?? 16 / 9))}
+          className="focus-ring rounded-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-2.5 py-1 text-[11px] text-[var(--accent)]"
+          title="让选区与屏幕同比例，画面才不会被拉伸"
+        >
+          屏幕比例
+        </button>
         {CROP_PRESETS.map((preset) => (
           <button
             key={preset.label}
@@ -167,7 +208,11 @@ export function WallpaperCrop({
           </button>
         ))}
         <span className="ml-auto text-[11px] text-[var(--faint)]">
-          拖动方框移动 · 边改单边 · 角等比 · {Math.round(crop.w * 100)}% × {Math.round(crop.h * 100)}%
+          拖动方框移动 · 边改单边 · 角等比 · 选区{' '}
+          <span className={stretched ? 'bad' : 'ok'}>
+            {(crop.w * (aspect ?? 16 / 9) * 100).toFixed(0)}:{Math.round(crop.h * 100)}
+          </span>
+          {' '}／ 屏幕 {screenAspect.toFixed(2)}:1{stretched ? ' ← 比例不符，画面会被拉伸' : ''}
         </span>
       </div>
     </div>

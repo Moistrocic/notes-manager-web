@@ -54,6 +54,12 @@ export interface WallpaperSettings {
    * GPU context and draws continuously.
    */
   dynamicScene: boolean;
+  /**
+   * Tints for the built-in background, which is otherwise the theme's two
+   * accent colours. Empty means "use the theme".
+   */
+  auroraA: string;
+  auroraB: string;
   /** Take the interface colour from the wallpaper. On unless turned off. */
   autoAccent: boolean;
   /** The colour to use when autoAccent is off. Empty means the theme's own. */
@@ -68,6 +74,8 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   dim: 0.35,
   crop: { ...FULL_CROP },
   dynamicScene: false,
+  auroraA: '',
+  auroraB: '',
   autoAccent: true,
   accentColor: '',
 };
@@ -207,6 +215,8 @@ export function loadWallpaperSettings(): WallpaperSettings {
       dim: clamp(Number(parsed.dim ?? DEFAULT_WALLPAPER.dim), 0, 0.85),
       crop: readCrop(parsed as Record<string, unknown>),
       dynamicScene: parsed.dynamicScene === true,
+      auroraA: typeof parsed.auroraA === 'string' ? parsed.auroraA : '',
+      auroraB: typeof parsed.auroraB === 'string' ? parsed.auroraB : '',
       autoAccent: parsed.autoAccent !== false,
       accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : '',
     };

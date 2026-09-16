@@ -94,6 +94,24 @@ export function extractAccent(source: CanvasImageSource): string | null {
   }
 }
 
+/**
+ * Tints the built-in background.
+ *
+ * Two variables rather than a rewritten stylesheet: the aurora's gradients
+ * already fall back to the theme's accents, so setting these overrides them and
+ * clearing them puts the theme back, without the component having to know.
+ */
+export function applyAurora(a: string, b: string): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const set = (name: string, colour: string) => {
+    if (colour) root.style.setProperty(name, colour);
+    else root.style.removeProperty(name);
+  };
+  set('--aurora-a', a);
+  set('--aurora-b', b);
+}
+
 const STYLE_ID = 'wallpaper-accent';
 
 /** Writes the accent variables, or removes them to fall back to the theme. */

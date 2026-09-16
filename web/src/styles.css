@@ -160,7 +160,9 @@ body {
   height: 46vw;
   left: -8vw;
   top: -12vw;
-  background: radial-gradient(circle at 30% 30%, var(--accent), transparent 70%);
+  /* Overridable so the built-in background can be tinted without changing the
+     theme's accent, which colours the entire interface. */
+  background: radial-gradient(circle at 30% 30%, var(--aurora-a, var(--accent)), transparent 70%);
   animation: drift-a 26s ease-in-out infinite;
 }
 .aurora span:nth-child(2) {
@@ -168,7 +170,7 @@ body {
   height: 40vw;
   right: -10vw;
   top: -6vw;
-  background: radial-gradient(circle at 60% 40%, var(--accent-2), transparent 70%);
+  background: radial-gradient(circle at 60% 40%, var(--aurora-b, var(--accent-2)), transparent 70%);
   animation: drift-b 32s ease-in-out infinite;
 }
 .aurora span:nth-child(3) {
@@ -176,7 +178,11 @@ body {
   height: 52vw;
   left: 20vw;
   bottom: -26vw;
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 70%, var(--accent-2)), transparent 72%);
+  background: radial-gradient(
+    circle at 50% 50%,
+    color-mix(in srgb, var(--aurora-a, var(--accent)) 70%, var(--aurora-b, var(--accent-2))),
+    transparent 72%
+  );
   animation: drift-c 38s ease-in-out infinite;
 }
 .dark .aurora span {
