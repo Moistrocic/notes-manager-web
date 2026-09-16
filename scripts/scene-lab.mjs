@@ -34,8 +34,10 @@ if (arg) {
   console.log('No scene.pkg given - pick or drop one on the page, or pass a path as an argument.');
 }
 
-if (!fs.existsSync(path.join(webDir, 'src/lib/we-scene/src/pkg/container.js'))) {
-  console.error('The we-scene submodule is missing. Run: git submodule update --init --recursive');
+// The library is a submodule and is built in place; a clone made without
+// --recursive, or one that was never built, has nothing to import.
+if (!fs.existsSync(path.join(webDir, 'src/lib/wallpaper-scene-layers/packages/we-scene/dist/index.js'))) {
+  console.error('wallpaper-scene-layers is missing or not built. Run: git submodule update --init --recursive && npm install');
   process.exit(1);
 }
 
