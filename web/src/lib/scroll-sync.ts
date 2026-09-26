@@ -1,98 +1,113 @@
 /**
  * Keeping two panes level.
  *
- * The editor and the preview scroll different things - a CodeMirror scroller
- * and a rendered document - and their heights have nothing to do with each
- * other, so equal scrollTop means nothing. What they can share is the progress
- * through the document: how far down the reader is, as a fraction.
+ * The editor and the preview do not line up by proportion: one line of source
+ * can be a heading (one line tall) or a picture (half a screen), so "half way
+ * down the editor" and "half way down the preview" are different places in the
+ * note. Percentage scrolling drifts, and the longer the note the further apart
+ * they get.
  *
- * The conversion lives here, away from the DOM, so the arithmetic can be
- * checked without a browser - and so both directions use the same one.
+ * What the two agree on is the source. The preview marks each block with the
+ * lines it came from, and the panes are kept level by mapping a source line to a
+ * place in the rendered document - the same thing the markdown preview in
+ * VS Code does, with the same interpolation between two neighbouring blocks.
+ *
+ * The arithmetic lives here, away from the DOM, so it can be checked without a
+ * browser and so both directions use the same one.
  */
 
-export interface Scrollable {
-  scrollTop: number;
-  scrollHeight: number;
-  clientHeight: number;
-  /**
-   * Space at the end that is not content, in pixels.
-   *
-   * The editor keeps a margin below the last line so that typing there does not
-   * happen against the edge of the pane. That margin is part of what the pane
-   * can scroll through but none of what it contains, so counting it would make
-   * the editor's 100% land a screenful past the preview's.
-   */
-  bottomInset?: number;
+/** A block of the rendered document, and the source lines it came from. */
+export interface SourceAnchor {
+  /** First source line of the block, 1-based. */
+  line: number;
+  /** The line after the block's last one. */
+  endLine: number;
+  /** Distance from the top of the scrolled pane to the top of this block. */
+  top: number;
+  /** How tall the block is. */
+  height: number;
 }
 
-/** How much a pane can actually scroll through, content only. */
-function rangeOf(pane: Scrollable): number {
-  const inset = Number.isFinite(pane.bottomInset) ? Math.max(0, pane.bottomInset ?? 0) : 0;
-  return pane.scrollHeight - pane.clientHeight - inset;
+/** A place in the source: a line, and how far into it (0 at its start). */
+export interface SourcePosition {
+  line: number;
+  fraction: number;
 }
 
-/** How far down a pane is: 0 at the top, 1 at the end of its content. */
-export function scrollProgress(pane: Scrollable): number {
-  const range = rangeOf(pane);
-  // A pane with nothing to scroll (an empty note, a short preview) has no
-  // progress to speak of: it is at the top and moving it would move nothing.
-  if (!Number.isFinite(range) || range <= 0) return 0;
-  const ratio = pane.scrollTop / range;
-  if (!Number.isFinite(ratio)) return 0;
-  return ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
-}
+const clamp = (value: number, min: number, max: number): number =>
+  !Number.isFinite(value) ? min : value < min ? min : value > max ? max : value;
 
-/** Where a pane has to be to sit at the same progress as the other. */
-export function scrollTopForProgress(pane: Scrollable, progress: number): number {
-  const range = rangeOf(pane);
-  if (!Number.isFinite(range) || range <= 0) return 0;
-  const clamped = !Number.isFinite(progress) ? 0 : Math.max(0, Math.min(1, progress));
-  return Math.round(clamped * range);
+/** Anchors in source order, ignoring anything the DOM reported out of order. */
+function ordered(anchors: SourceAnchor[]): SourceAnchor[] {
+  return [...anchors].filter((a) => Number.isFinite(a.line) && Number.isFinite(a.top)).sort((a, b) => a.line - b.line);
 }
 
 /**
- * Where `to` has to scroll to stay level with `from`, or null when it is
- * already there.
+ * Where the rendered document has to scroll for a source position to sit at the
+ * top of the pane.
  *
- * Null rather than the same number twice: a scroll event fires for every pixel,
- * and assigning a value that changes nothing would fire the other pane's
- * handler, which would fire this one again. The tolerance leaves a pane that is
- * a rounding step out of level alone.
+ * Between two blocks the distance is travelled in proportion to the lines
+ * between them, which is what keeps a long paragraph from jumping: the reader
+ * sees the same sentences as they scroll either pane. Past the last block the
+ * distance is travelled through that block's own height, so the end of the note
+ * is the end of both panes.
  */
-export function mirrorScroll(from: Scrollable, to: Scrollable, tolerance = 1): number | null {
-  const target = scrollTopForProgress(to, scrollProgress(from));
-  return Math.abs(target - to.scrollTop) <= tolerance ? null : target;
-}
+export function topForSourcePosition(anchors: SourceAnchor[], position: SourcePosition): number | null {
+  const blocks = ordered(anchors);
+  if (blocks.length === 0) return null;
+  const target = position.line + clamp(position.fraction, 0, 1);
+  // Above the first block: the top of the document is the only honest answer.
+  if (target <= blocks[0].line) return Math.max(0, Math.round(blocks[0].top));
 
-/** A pane's geometry, read at the moment it is asked for. */
-export function readScrollable(element: HTMLElement, bottomInset = 0): Scrollable {
-  return {
-    scrollTop: element.scrollTop,
-    scrollHeight: element.scrollHeight,
-    clientHeight: element.clientHeight,
-    bottomInset,
-  };
-}
+  for (let index = 0; index < blocks.length; index += 1) {
+    const current = blocks[index];
+    const next = blocks[index + 1];
+    if (next && target >= next.line) continue;
 
-/**
- * The margin at the end of a scroller, in pixels.
- *
- * Read from the element rather than written down here: it is a style, it can be
- * changed in one place, and the arithmetic should follow it. Outside a browser
- * - a server render, a test without layout - there is no computed style and no
- * margin to account for.
- */
-export function trailingSpaceOf(element: Element | null | undefined): number {
-  if (!element || typeof getComputedStyle !== 'function') return 0;
-  let total = 0;
-  const own = getComputedStyle(element).paddingBottom;
-  const parsed = Number.parseFloat(own);
-  if (Number.isFinite(parsed)) total += parsed;
-  // CodeMirror keeps its own margin on the content inside the scroller.
-  const inner = element.querySelector('.cm-content');
-  if (inner) {
-    const innerParsed = Number.parseFloat(getComputedStyle(inner).paddingBottom);
-    if (Number.isFinite(innerParsed)) total += innerParsed;
+    // Inside the block itself: its lines are spread over its own height, which
+    // is what carries the reader through a paragraph the preview renders tall
+    // (a picture, a long list) at the same pace as the one line it occupies in
+    // the editor.
+    const ownSpan = Math.max(1, current.endLine - current.line);
+    if (target < current.endLine) {
+      const progress = clamp((target - current.line) / ownSpan, 0, 1);
+      return Math.max(0, Math.round(current.top + progress * Math.max(1, current.height)));
+    }
+    // Past it: the blank lines before the next block are travelled with it.
+    const bottom = current.top + Math.max(1, current.height);
+    if (!next) return Math.max(0, Math.round(bottom));
+    const gap = Math.max(1, next.line - current.endLine);
+    const progress = clamp((target - current.endLine) / gap, 0, 1);
+    return Math.max(0, Math.round(bottom + progress * (next.top - bottom)));
   }
-  return total;
+  const last = blocks[blocks.length - 1];
+  return Math.max(0, Math.round(last.top + last.height));
+}
+
+/**
+ * The source position at the top of a pane - what the other pane has to follow.
+ *
+ * The reverse of the above, and deliberately so: scrolling the preview has to
+ * put the editor where scrolling the editor would have put the preview, or the
+ * two would disagree about where they are the moment you touched either.
+ */
+export function sourcePositionAt(anchors: SourceAnchor[], top: number): SourcePosition | null {
+  const blocks = ordered(anchors);
+  if (blocks.length === 0) return null;
+  if (!Number.isFinite(top)) return { line: blocks[0].line, fraction: 0 };
+  if (top <= blocks[0].top) return { line: blocks[0].line, fraction: 0 };
+
+  let current = blocks[0];
+  for (const block of blocks) {
+    if (block.top <= top) current = block;
+    else break;
+  }
+  // The exact inverse of the mapping above: a position inside the block lands
+  // on the line that is that far through its lines. If the two directions did
+  // not invert each other, touching either pane would move the other.
+  const span = Math.max(1, current.endLine - current.line);
+  const progress = clamp((top - current.top) / Math.max(1, current.height), 0, 1);
+  const exact = current.line + progress * span;
+  const line = Math.floor(exact);
+  return { line, fraction: clamp(exact - line, 0, 1) };
 }

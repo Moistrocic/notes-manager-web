@@ -23,6 +23,70 @@ export function renderMarkdown(source: string): string {
 }
 
 /**
+ * The source lines each rendered block came from.
+ *
+ * Markdown gives no hint of where a block sits in the file, and the two panes
+ * cannot be kept level without one: the same note is a different height in each,
+ * so a percentage of the scroll range is a different place in the text. The
+ * lexer does know - every token carries the raw source it was made from - so
+ * walking the top-level tokens and counting their lines gives each block the
+ * line it starts on.
+ *
+ * Two token types render nothing at all (the blank lines between blocks, and
+ * link definitions), so they are counted but not returned.
+ */
+export function sourceBlocks(source: string): { line: number; endLine: number }[] {
+  const blocks: { line: number; endLine: number }[] = [];
+  // A line number is the count of the newlines before it, plus one - and the
+  // tokens' raw text adds up to exactly that, newline for newline. Counting each
+  // raw's own "lines" instead drifts: a blank-line token carries the newline
+  // that ended the line before it as well, so the whole document slips a line
+  // further out of step at every gap.
+  let seen = 0;
+  for (const token of marked.lexer(source ?? '')) {
+    const raw = typeof token.raw === 'string' ? token.raw : '';
+    const line = 1 + seen;
+    seen += (raw.match(/\n/g) ?? []).length;
+    // Where the block stops, exclusive: the newline that ends its last line may
+    // belong to the *next* token (the blank line after it), so a raw that does
+    // not end on one still owns the line it sits on.
+    const lastLine = raw.endsWith('\n') ? seen : seen + 1;
+    const endLine = Math.max(line + 1, lastLine + 1);
+    if (token.type !== 'space' && token.type !== 'def') blocks.push({ line, endLine });
+  }
+  return blocks;
+}
+
+/** The attribute a rendered block carries its first source line in. */
+export const SOURCE_LINE_ATTR = 'data-line';
+/** And the one after its last line, which is where the next block begins. */
+export const SOURCE_LINE_END_ATTR = 'data-line-end';
+
+/**
+ * Marks every block of the rendered document with the source lines it came
+ * from, so the panes can be kept level by line rather than by proportion.
+ *
+ * The rendered children are in source order and correspond to the blocks one
+ * for one, with one exception worth knowing about: a raw HTML block can be
+ * several elements at once, and when that happens the extra ones carry the
+ * previous block's line rather than losing their mark altogether. A block is
+ * never given a line it did not come from.
+ */
+export function annotateSourceLines(root: HTMLElement, source: string): void {
+  const blocks = sourceBlocks(source);
+  const children = Array.from(root.children) as HTMLElement[];
+  type Block = { line: number; endLine: number };
+  let previous: Block | null = null;
+  for (let index = 0; index < children.length; index += 1) {
+    const block: Block | null = blocks[index] ?? previous;
+    if (!block) break;
+    children[index].setAttribute(SOURCE_LINE_ATTR, String(block.line));
+    children[index].setAttribute(SOURCE_LINE_END_ATTR, String(block.endLine));
+    previous = block;
+  }
+}
+
+/**
  * GitHub's heading anchor algorithm: lowercase, drop everything that is not a
  * letter, digit, space, hyphen or underscore, then spaces become hyphens.
  * Unicode letters are kept, so `1.1 分层` becomes `11-分层`.
