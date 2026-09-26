@@ -38,7 +38,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 前端全局状态（只有一个 store） | `web/src/store/useAppStore.ts` |
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
-| 分栏两侧的滚动同步 | `web/src/lib/scroll-sync.ts` + `Editor.tsx` 里的 `data-sync-scroll` 按钮与监听 |
+| 分栏两侧的滚动同步 | `web/src/lib/scroll-sync.ts`（源码行 ⇄ 预览位置的映射）+ `markdown.ts` 的 `sourceBlocks` / `annotateSourceLines` + `Editor.tsx` 里的 `data-sync-scroll` 按钮与监听 |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
 | 博客（公开页面与公开接口） | `web/src/components/blog/**` + `web/src/lib/blog-api.ts` + `server/src/http/routes/blog.ts` |
 | 发布管理（把笔记发布到博客上） | `web/src/components/publish/**` + store 的 `setPublish` / `forgetPublish` + `server/src/http/routes/notes.ts` 的 `/api/notes/publish` |
@@ -51,8 +51,12 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   前端要跟随接口返回的 `id`（store 已有先例），服务端删除接口会把回收站里的新 `id` 一并返回。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
-- **滚动同步的断言要自己搭舞台**：jsdom 没有布局，`scrollHeight` / `clientHeight` 得用
-  `Object.defineProperty` 给出、`scroll` 事件得自己派发（改 `scrollTop` 不会触发它）。
+- **同步滚动按源码行，行号来自 lexer 各 token 的 `raw` 换行累计**：`sourceBlocks` 数的是
+  「前面出现过多少个 \n」，**不要**改成按行 `split` 计数——空行 token 的 `raw` 带着上一行结尾的
+  换行，一段一段数下来每遇到一个空行就整体漂一行（踩过，已修）。
+- **滚动同步的断言要自己搭舞台**：jsdom 没有布局，预览的块几何要用 `Object.defineProperty`
+  给出 `getBoundingClientRect`、`scroll` 事件得自己派发（改 `scrollTop` 不会触发它）；
+  测试自己为摆位置写 `scrollTop` 也会走记录 setter，断言前要先把这份记账清掉。
   被测的那一侧刚被写过会忽略自己那一帧的事件（防回声），所以模拟「用户滚动被镜像的那一侧」
   之前要**等一帧**（`await flush()`），否则什么都不会发生——那是预期，不是 bug。
   点大纲/锚点之后预览有一段「自己在滚」的时间（`PreviewApi.isSelfScrolling()`），这段时间不镜像；
