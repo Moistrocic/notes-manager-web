@@ -45,7 +45,11 @@ export function PublishDialog({ noteId, open, onClose }: PublishDialogProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, note?.id]);
 
-  const preview = useMemo(() => renderMarkdown(summary), [summary]);
+  // Only while it is open. The panel renders this dialog whether or not anybody
+  // is looking at it, and renderMarkdown needs a DOM (DOMPurify) that a server
+  // render does not have - computing a preview nobody could see broke SSR for
+  // the whole panel. Closed, there is nothing to preview.
+  const preview = useMemo(() => (open && summary.trim() ? renderMarkdown(summary) : ''), [open, summary]);
 
   const submit = async () => {
     if (!noteId) return;
