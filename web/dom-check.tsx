@@ -2307,6 +2307,7 @@ console.log('\nthe editor and files that are not notes (jsdom)');
   );
   check('nor the metadata bar', pictureView.host.innerHTML.includes('添加标签'), false);
   check('nor an outline', pictureView.host.querySelector('.outline-panel'), null);
+  check('and nothing to keep level', Boolean(pictureView.host.querySelector('[data-sync-scroll]')), false);
   const shown = pictureView.host.querySelector('img');
   check(
     'what is shown is the picture itself',
@@ -2343,6 +2344,204 @@ console.log('\nthe editor and files that are not notes (jsdom)');
   );
   await fileView.unmount();
 
+  appStore.setState(hold);
+}
+
+/* --- keeping two panes level, the arithmetic ------------------------------- */
+console.log('\nkeeping two panes level (pure)');
+{
+  const { mirrorScroll, scrollProgress, scrollTopForProgress } = await import('./src/lib/scroll-sync');
+  const pane = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+  });
+
+  // Progress is how far down the reader is, not how many pixels: the two panes
+  // scroll different things and their heights have nothing to do with each other.
+  check('the top is no progress', scrollProgress(pane(0, 1000, 200)), 0);
+  check('the bottom is all of it', scrollProgress(pane(800, 1000, 200)), 1);
+  check('and half way is half', scrollProgress(pane(400, 1000, 200)), 0.5);
+  check('a pane with nothing to scroll has no progress', scrollProgress(pane(50, 200, 200)), 0);
+  check('nor has an empty one', scrollProgress(pane(0, 0, 0)), 0);
+  check('scrolled above the top is still no progress', scrollProgress(pane(-40, 1000, 200)), 0);
+  check('and past the bottom is still all of it', scrollProgress(pane(9999, 1000, 200)), 1);
+
+  check('half way down a pane is half its range', scrollTopForProgress(pane(0, 1000, 200), 0.5), 400);
+  check('in whole pixels, because scrollTop is', scrollTopForProgress(pane(0, 1001, 200), 0.333), 267);
+  check('a pane with nothing to scroll stays at the top', scrollTopForProgress(pane(0, 200, 200), 0.5), 0);
+  check('progress below the top is the top', scrollTopForProgress(pane(0, 1000, 200), -3), 0);
+  check('and progress past the end is the end', scrollTopForProgress(pane(0, 1000, 200), 7), 800);
+  check('nonsense progress is the top', scrollTopForProgress(pane(0, 1000, 200), Number.NaN), 0);
+
+  // Null is the answer when nothing would change: assigning it would fire the
+  // other pane's handler, which would fire this one again.
+  check('a pane already level is left alone', mirrorScroll(pane(400, 1000, 200), pane(400, 1000, 200)), null);
+  check('one a single step out is left alone too', mirrorScroll(pane(400, 1000, 200), pane(401, 1000, 200)), null);
+  check('but further than that is moved', mirrorScroll(pane(400, 1000, 200), pane(500, 1000, 200)), 400);
+  check('and the tolerance can be widened', mirrorScroll(pane(400, 1000, 200), pane(405, 1000, 200), 5), null);
+}
+
+/* --- keeping two panes level, in the split view ---------------------------- */
+console.log('\nkeeping two panes level (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => reply({})) as typeof fetch;
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [note],
+    activeId: note.id,
+    activeNote: note,
+    lastSaved: null,
+    dirty: false,
+    editorMode: 'split',
+    metaOpen: true,
+    saving: false,
+    syncScroll: false,
+  } as never);
+  w.localStorage.removeItem('notes-manager-sync-scroll');
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(Editor));
+  });
+  await flush();
+
+  const button = () => host.querySelector<HTMLButtonElement>('[data-sync-scroll]');
+  check('the split view offers one switch for both panes', Boolean(button()), true);
+  check('off until it is asked for', button()?.getAttribute('aria-pressed'), 'false');
+  check('and named for what it does', button()?.getAttribute('aria-label'), '同步滚动');
+
+  await act(async () => {
+    button()?.click();
+  });
+  await flush();
+  check('clicking it turns the sync on', appStore.getState().syncScroll, true);
+  check('which the button says', button()?.getAttribute('aria-pressed'), 'true');
+  check('and offers the way back', button()?.getAttribute('aria-label'), '取消同步滚动');
+  check('with the choice written down', w.localStorage.getItem('notes-manager-sync-scroll'), 'on');
+
+  // jsdom has no layout, so each pane is told how tall it is - and every value
+  // written to scrollTop is recorded, which is what "the other pane moved" means.
+  const sizePane = (element: HTMLElement, scrollHeight: number, clientHeight: number) => {
+    Object.defineProperty(element, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(element, 'clientHeight', { value: clientHeight, configurable: true });
+  };
+  const trackScrollTop = (element: HTMLElement) => {
+    const writes: number[] = [];
+    let value = element.scrollTop;
+    Object.defineProperty(element, 'scrollTop', {
+      configurable: true,
+      get: () => value,
+      set: (next: number) => {
+        writes.push(next);
+        value = next;
+      },
+    });
+    return writes;
+  };
+
+  const editorEl = host.querySelector<HTMLElement>('.cm-scroller') as HTMLElement;
+  const previewEl = host.querySelector<HTMLElement>('.markdown-body') as HTMLElement;
+  check('both panes are on screen to be kept level', Boolean(editorEl && previewEl), true);
+  const editorWrites = trackScrollTop(editorEl);
+  const previewWrites = trackScrollTop(previewEl);
+  sizePane(editorEl, 1000, 200);
+  sizePane(previewEl, 1800, 200);
+  /** What the app wrote - the test's own assignments are cleared away first. */
+  const clearWrites = () => {
+    editorWrites.length = 0;
+    previewWrites.length = 0;
+  };
+  /** Where a pane is, then the event a browser would send for that move. */
+  const scrollPane = async (pane: HTMLElement, top: number) => {
+    pane.scrollTop = top;
+    clearWrites();
+    await act(async () => {
+      pane.dispatchEvent(new w.Event('scroll'));
+    });
+    await flush();
+  };
+
+  // Half way down the source is half way down the rendered text, whatever the
+  // two heights are: 400 of 800 is 800 of 1600.
+  await scrollPane(editorEl, 400);
+  check('scrolling the editor carries the preview to the same place in the text', previewWrites, [800]);
+
+  // And the other way round, once the frame that guarded the echo has passed.
+  await scrollPane(previewEl, 400);
+  check('and scrolling the preview brings the editor along', editorWrites, [200]);
+
+  // The pane that was just put somewhere reports its own move. That report is
+  // not an instruction: answering it is what makes two panes fight.
+  await scrollPane(editorEl, 400);
+  check('the editor moved the preview', previewWrites.length, 1);
+  clearWrites();
+  await act(async () => {
+    previewEl.dispatchEvent(new w.Event('scroll'));
+  });
+  check('and the preview repeating that move moves nothing back', editorWrites, []);
+  // A frame later it is a scroll of its own again.
+  await flush();
+  await scrollPane(previewEl, 400);
+  check('after that frame the preview scrolls the editor again', editorWrites, [200]);
+
+  // A jump the preview makes on its own - an outline entry, an anchor - is not
+  // followed either: mirroring those positions drags the editor along with the
+  // animation and the two panes end up jittering against each other.
+  const outlineEntry = Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel button')).find((item) =>
+    (item.textContent ?? '').includes('1.2'),
+  );
+  check('there is an outline entry to jump with', Boolean(outlineEntry), true);
+  clearWrites();
+  await act(async () => {
+    outlineEntry?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  await act(async () => {
+    previewEl.dispatchEvent(new w.Event('scroll'));
+  });
+  await flush();
+  check('a jump to a heading is not mirrored into the editor', editorWrites.includes(200), false);
+  // The jump reports nothing in jsdom, so its own guard lapses on the fallback
+  // timer; after that the next real scroll lines the panes up again.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 340));
+  });
+  editorEl.scrollTop = 600;
+  await scrollPane(previewEl, 400);
+  check('and once it has landed, scrolling lines them up again', editorWrites, [200]);
+
+  // Off: the listeners go with it.
+  await act(async () => {
+    button()?.click();
+  });
+  await flush();
+  check('turning it off is written down too', w.localStorage.getItem('notes-manager-sync-scroll'), 'off');
+  await scrollPane(previewEl, 800);
+  check('and then no scroll moves the other pane', [editorWrites.length, previewWrites.length], [0, 0]);
+
+  // Only the split view has two panes to keep level.
+  await act(async () => {
+    appStore.getState().setEditorMode('edit');
+  });
+  await flush();
+  check('a single pane has no switch', Boolean(button()), false);
+  await act(async () => {
+    appStore.getState().setEditorMode('preview');
+  });
+  await flush();
+  check('nor has the preview on its own', Boolean(button()), false);
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  w.localStorage.removeItem('notes-manager-sync-scroll');
+  globalThis.fetch = realFetch;
   appStore.setState(hold);
 }
 
