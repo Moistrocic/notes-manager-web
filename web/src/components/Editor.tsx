@@ -22,7 +22,7 @@ import { cn } from '../lib/cn';
 import { formatBytes, formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
 import { extractHeadings, type Heading } from '../lib/outline';
-import { mirrorScroll, readScrollable, trailingSpaceOf } from '../lib/scroll-sync';
+import { sourcePositionAt, topForSourcePosition } from '../lib/scroll-sync';
 import { replaceAnchor } from '../lib/url';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
@@ -169,13 +169,16 @@ export function Editor() {
   }, [dragging]);
 
   /**
-   * Both panes at the same progress through the document.
+   * Both panes at the same place in the note.
    *
-   * Equal scrollTop would mean nothing here: one pane scrolls source lines and
-   * the other rendered blocks, and their heights have nothing to do with each
-   * other. What they can share is how far down the reader is, which is the sum
-   * `mirrorScroll` does. It answers null when the other pane is already there,
-   * and that is what stops the two of them answering each other.
+   * Not the same number of pixels: one line of source can be a heading (one
+   * line tall) or a picture (half a screen), so a percentage of the scroll
+   * range is a different place in each pane, and the longer the note the
+   * further apart the two drift. What they can agree on is the source. The
+   * preview marks every block with the lines it came from, the editor knows
+   * which line is at the top of its view, and `scroll-sync` maps a source
+   * position to a place in the rendered document and back - what the markdown
+   * preview in VS Code does.
    *
    * A jump the preview makes for itself - an outline entry, an anchor, a deep
    * link - is not a reading position. Its frames are skipped rather than
@@ -205,42 +208,50 @@ export function Editor() {
         ? window.requestAnimationFrame.bind(window)
         : (callback) => window.setTimeout(() => callback(Date.now()), 16);
 
-    // What each pane keeps below its last line, which is room to type in rather
-    // than something to read: left in the arithmetic, the editor's end sits a
-    // margin past the preview's and the two never look level. Read from the
-    // styles (they are in vh, so a resize moves them) rather than guessed here.
-    let editorMargin = trailingSpaceOf(editor);
-    let previewMargin = trailingSpaceOf(preview);
-    const remeasure = () => {
-      editorMargin = trailingSpaceOf(editor);
-      previewMargin = trailingSpaceOf(preview);
-    };
-    window.addEventListener('resize', remeasure);
+    /** The rendered blocks with the source lines they came from. */
+    const anchors = () => previewApiRef.current?.sourceAnchors() ?? [];
 
-    const follow = (from: HTMLElement, fromMargin: () => number, to: HTMLElement, toMargin: () => number) => () => {
-      if (justMoved === from) return;
-      // The preview is on its way somewhere under its own steam: those are
-      // not positions to be followed. Where it lands is where the panes meet
-      // again, on the reader's next move.
+    // The reader is in the editor: put the preview where that line is rendered.
+    const followEditor = () => {
+      if (justMoved === editor) return;
+      // The preview is on its way somewhere under its own steam: those are not
+      // positions to be followed. Where it lands is where the panes meet again,
+      // on the reader's next move.
       if (previewApiRef.current?.isSelfScrolling()) return;
-      const target = mirrorScroll(readScrollable(from, fromMargin()), readScrollable(to, toMargin()));
+      const position = apiRef.current?.topVisibleLine() ?? null;
+      if (!position) return;
+      const target = topForSourcePosition(anchors(), position);
+      // Nothing to map against (an empty note) means nothing to follow.
       if (target === null) return;
-      justMoved = to;
+      // Already there to the pixel. The mapping rounds, so writing a value a
+      // rounding step away would send the preview a report that maps back to
+      // a position a rounding step away, and the two would answer each other
+      // for as long as the reader keeps still.
+      if (Math.abs(target - preview.scrollTop) < 1) return;
+      justMoved = preview;
       // Assigned, never animated: a smooth scroll here would still be
       // travelling when the next event arrives, and the panes would trail each
       // other instead of moving together.
-      to.scrollTop = target;
+      preview.scrollTop = target;
       later(release);
     };
 
-    const onEditorScroll = follow(editor, () => editorMargin, preview, () => previewMargin);
-    const onPreviewScroll = follow(preview, () => previewMargin, editor, () => editorMargin);
-    editor.addEventListener('scroll', onEditorScroll, { passive: true });
-    preview.addEventListener('scroll', onPreviewScroll, { passive: true });
+    // The reader is in the preview: put that line at the top of the editor.
+    const followPreview = () => {
+      if (justMoved === preview) return;
+      if (previewApiRef.current?.isSelfScrolling()) return;
+      const position = sourcePositionAt(anchors(), preview.scrollTop);
+      if (!position) return;
+      justMoved = editor;
+      apiRef.current?.scrollToLine(position.line, position.fraction);
+      later(release);
+    };
+
+    editor.addEventListener('scroll', followEditor, { passive: true });
+    preview.addEventListener('scroll', followPreview, { passive: true });
     return () => {
-      window.removeEventListener('resize', remeasure);
-      editor.removeEventListener('scroll', onEditorScroll);
-      preview.removeEventListener('scroll', onPreviewScroll);
+      editor.removeEventListener('scroll', followEditor);
+      preview.removeEventListener('scroll', followPreview);
     };
   }, [syncScroll, editorMode]);
 

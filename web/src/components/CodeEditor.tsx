@@ -114,6 +114,22 @@ export interface EditorApi {
    * this one's progress. Null before the view exists.
    */
   scrollElement: () => HTMLElement | null;
+  /**
+   * The source line at the top of the editor, and how far into that line the
+   * view has scrolled (0 at its start, 1 at its end). Null before the view
+   * exists.
+   *
+   * Lines rather than pixels: the pane beside this one renders the same source
+   * at a different height, so the source is the only thing the two can agree
+   * on.
+   */
+  topVisibleLine: () => { line: number; fraction: number } | null;
+  /**
+   * Scrolls so that a source line - part of the way into it - sits at the top
+   * of the editor. Out-of-range lines are clamped rather than ignored: the
+   * note may have been edited since the position was measured.
+   */
+  scrollToLine: (line: number, fraction: number) => void;
   /* --- what the right-click menu drives ---------------------------------- */
   undo: () => void;
   redo: () => void;
@@ -426,6 +442,30 @@ export function CodeEditor({ value, onChange, onSave, onBlur, dark, placeholderT
         // The scroller rather than the wrapper: what the other pane has to
         // match is the thing that actually moves.
         return viewRef.current?.scrollDOM ?? null;
+      },
+      topVisibleLine() {
+        const view = viewRef.current;
+        if (!view) return null;
+        const scroller = view.scrollDOM;
+        // The block at this height is the line the reader is looking at; where
+        // the scroll sits inside that block is how far into the line they are.
+        const block = view.lineBlockAtHeight(scroller.scrollTop);
+        const line = view.state.doc.lineAt(block.from).number;
+        const fraction =
+          block.height > 0 ? Math.min(1, Math.max(0, (scroller.scrollTop - block.top) / block.height)) : 0;
+        return { line, fraction };
+      },
+      scrollToLine(line, fraction) {
+        const view = viewRef.current;
+        if (!view) return;
+        const total = view.state.doc.lines;
+        const target = Math.min(Math.max(Math.round(line), 1), total);
+        const info = view.state.doc.line(target);
+        const block = view.lineBlockAt(info.from);
+        const within = Math.min(1, Math.max(0, fraction));
+        // Assigned, not dispatched: this is where the pane has to be, not an
+        // edit, and it must not move the caret or the focus.
+        view.scrollDOM.scrollTop = block.top + within * block.height;
       },
       undo() {
         const view = viewRef.current;

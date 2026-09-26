@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { cn } from '../lib/cn';
-import { decorateMarkdown, renderMarkdown, resolveImages } from '../lib/markdown';
+import {
+  annotateSourceLines,
+  decorateMarkdown,
+  renderMarkdown,
+  resolveImages,
+  SOURCE_LINE_ATTR,
+  SOURCE_LINE_END_ATTR,
+} from '../lib/markdown';
 import { slugifyHeading } from '../lib/markdown';
 import { normaliseHeading } from '../lib/outline';
+import type { SourceAnchor } from '../lib/scroll-sync';
 
 export interface PreviewApi {
   /**
@@ -32,6 +40,14 @@ export interface PreviewApi {
    * preview's own, and nobody should mirror it.
    */
   isSelfScrolling: () => boolean;
+  /**
+   * The rendered blocks with the source lines they came from, in source order.
+   *
+   * This is what a pane beside the preview is kept level by: the same line of
+   * the note, found where it is rendered. Empty before anything is on screen
+   * (or when the note is empty), which callers read as "nothing to follow".
+   */
+  sourceAnchors: () => SourceAnchor[];
 }
 
 interface PreviewProps {
@@ -92,10 +108,15 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
     const container = containerRef.current;
     if (!container) return;
     decorateMarkdown(container);
+    // Lines before pictures: the marks are set on the rendered blocks in
+    // source order, and resolving pictures can add blocks of its own (a
+    // sample's pictures are drawn under it). Annotated first, every mark
+    // lands on the block it came from.
+    annotateSourceLines(container, content);
     // Pictures last: a note opened from another folder has to be read against
     // that folder, not against the one the previous note lived in.
     resolveImages(container, notePath, imageUrl ? { fileUrl: imageUrl } : undefined);
-  }, [html, notePath, imageUrl]);
+  }, [html, content, notePath, imageUrl]);
 
   /** Scrolls only the preview pane and flashes the target. */
   const reveal = (container: HTMLElement, target: HTMLElement) => {
@@ -130,6 +151,31 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
       },
       isSelfScrolling() {
         return selfScroll.current;
+      },
+      sourceAnchors() {
+        const container = containerRef.current;
+        if (!container) return [];
+        // Where each block is in the document the pane is showing, rather than
+        // where it happens to be on screen: the block's own rectangle, less
+        // the container's, plus however far the pane has been scrolled.
+        const containerRect = container.getBoundingClientRect();
+        const scrolled = container.scrollTop;
+        return Array.from(container.querySelectorAll<HTMLElement>('[' + SOURCE_LINE_ATTR + ']'))
+          .map((block) => {
+            const line = Number(block.getAttribute(SOURCE_LINE_ATTR));
+            const endLine = Number(block.getAttribute(SOURCE_LINE_END_ATTR));
+            const rect = block.getBoundingClientRect();
+            return {
+              line,
+              // A block always owns at least the line it starts on, so a mark
+              // that is missing or unreadable cannot produce an empty span.
+              endLine: Number.isFinite(endLine) && endLine > line ? endLine : line + 1,
+              top: rect.top - containerRect.top + scrolled,
+              height: rect.height,
+            };
+          })
+          .filter((anchor) => Number.isFinite(anchor.line) && Number.isFinite(anchor.top))
+          .sort((a, b) => a.line - b.line);
       },
       scrollToAnchor(id) {
         const container = containerRef.current;
