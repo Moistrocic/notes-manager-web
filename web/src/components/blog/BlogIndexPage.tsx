@@ -158,20 +158,25 @@ function IndexSkeleton() {
 /* Pieces both blog pages say the same way                             */
 /* ------------------------------------------------------------------ */
 
-/** A quiet way into the panel, for a visitor who is already signed in. */
+/**
+ * The way into the panel, and the only one the blog offers.
+ *
+ * A reader who is not signed in sees "登录" - the blog is public, but whoever
+ * runs it still has to be able to get in from the page they land on. Somebody
+ * who is already signed in gets the panel itself instead.
+ */
 export function ManagerLink() {
   const user = useAppStore((s) => s.user);
-  if (!user) return null;
   return (
     <button
       type="button"
       data-blog-manager
-      aria-label="管理面板"
+      aria-label={user ? '管理面板' : '登录'}
       onClick={() => window.location.assign(noteUrl(null))}
       className="focus-ring inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11.5px] text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
     >
       <PenLine className="h-3.5 w-3.5" />
-      管理面板
+      {user ? '管理面板' : '登录'}
     </button>
   );
 }

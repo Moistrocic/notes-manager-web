@@ -129,8 +129,11 @@ export function BlogPostPage({ path, anchor, onOpenPost, onOpenIndex }: BlogPost
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 px-3 pb-4 sm:px-6">
-        <div className="glass relative mx-auto flex h-full w-full max-w-6xl overflow-hidden rounded-3xl shadow-soft">
+      {/* Reading is what the page is for, so the surface fills the window
+          rather than sitting in it as a box with margins - a post is a page,
+          not a card on one. The text keeps a readable measure inside it. */}
+      <div className="min-h-0 flex-1">
+        <div data-blog-surface className="glass relative flex h-full w-full overflow-hidden">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {load.status === 'loading' ? (
               <PostSkeleton />
@@ -143,7 +146,7 @@ export function BlogPostPage({ path, anchor, onOpenPost, onOpenIndex }: BlogPost
                 <BlogNotice title="博客还没有开放" message="这篇文章暂时不对访客显示。" />
               </div>
             ) : (
-              <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+              <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
                 <div className="shrink-0 px-7 pb-1 pt-7">
                   <h1 className="text-[27px] font-semibold leading-tight tracking-tight text-[var(--text)]">
                     {load.post.title}
