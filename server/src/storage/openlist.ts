@@ -82,10 +82,10 @@ export class OpenListStorageDriver implements StorageDriver {
     }
   }
 
-  async readText(filePath: string): Promise<string> {
+  async readBinary(filePath: string): Promise<Uint8Array> {
     const target = this.toRemote(filePath);
     try {
-      return await this.client.readText(target);
+      return await this.client.readBytes(target);
     } catch (err) {
       if (err instanceof OpenListError && (err.status === 401 || err.status === 403)) {
         this.wrap(err, 'read', target);
@@ -93,11 +93,17 @@ export class OpenListStorageDriver implements StorageDriver {
       // Direct links can be blocked (referer protection, signed URLs, ...).
       // The proxy endpoint always streams the bytes through OpenList itself.
       try {
-        return await this.client.readTextViaProxy(target);
+        return await this.client.readBytesViaProxy(target);
       } catch {
         this.wrap(err, 'read', target);
       }
     }
+  }
+
+  async readText(filePath: string): Promise<string> {
+    // One code path for both: the bytes are what OpenList actually serves, and
+    // decoding them here keeps the direct/proxy fallback in a single place.
+    return new TextDecoder().decode(await this.readBinary(filePath));
   }
 
   async write(filePath: string, content: string, options: WriteOptions = {}): Promise<void> {
@@ -159,6 +165,18 @@ export class OpenListStorageDriver implements StorageDriver {
       await this.client.rename(target, newName);
     } catch (err) {
       this.wrap(err, 'rename', target);
+    }
+  }
+
+  async move(source: string, targetDir: string): Promise<void> {
+    const remote = this.toRemote(source);
+    const destination = this.toRemote(targetDir);
+    try {
+      // OpenList moves by name inside a source directory, so the source is
+      // addressed as "parent + name" and the name is carried over unchanged.
+      await this.client.move(parentPath(remote), destination, [baseName(remote)]);
+    } catch (err) {
+      this.wrap(err, 'move', remote);
     }
   }
 

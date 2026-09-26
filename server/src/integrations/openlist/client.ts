@@ -314,8 +314,13 @@ export class OpenListClient {
     }
   }
 
-  /** Reads a text file by resolving its `raw_url` through `/api/fs/get`. */
-  async readText(filePath: string): Promise<string> {
+  /**
+   * Reads a file's bytes by resolving its `raw_url` through `/api/fs/get`.
+   *
+   * The bytes are the point: a picture is stored exactly as it was uploaded, so
+   * this hands back the array buffer rather than decoding it.
+   */
+  async readBytes(filePath: string): Promise<Uint8Array> {
     const info = await this.get(filePath);
     if (info.is_dir) throw new OpenListError(`${filePath} is a directory`, 400);
     const rawUrl = info.raw_url;
@@ -337,11 +342,17 @@ export class OpenListClient {
     if (!response.ok) {
       throw new OpenListError(`Failed to download ${filePath}: HTTP ${response.status}`, response.status, undefined, url);
     }
-    return response.text();
+    return new Uint8Array(await response.arrayBuffer());
   }
 
-  /** Reads a text file through the OpenList proxy endpoint (`/p/...`), which always works for text. */
-  async readTextViaProxy(filePath: string): Promise<string> {
+  /** Convenience wrapper around {@link readBytes} for text files. */
+  async readText(filePath: string): Promise<string> {
+    // TextDecoder drops a leading UTF-8 BOM, exactly like Response.text() did.
+    return new TextDecoder().decode(await this.readBytes(filePath));
+  }
+
+  /** Reads a file's bytes through the OpenList proxy endpoint (`/p/...`), which always works. */
+  async readBytesViaProxy(filePath: string): Promise<Uint8Array> {
     const encoded = filePath
       .split('/')
       .map((segment) => encodeURIComponent(segment))
@@ -361,7 +372,12 @@ export class OpenListClient {
     if (!response.ok) {
       throw new OpenListError(`Failed to download ${filePath}: HTTP ${response.status}`, response.status, undefined, url);
     }
-    return response.text();
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  /** Convenience wrapper around {@link readBytesViaProxy} for text files. */
+  async readTextViaProxy(filePath: string): Promise<string> {
+    return new TextDecoder().decode(await this.readBytesViaProxy(filePath));
   }
 
   async put(filePath: string, content: string | Uint8Array, opts: { contentType?: string; modified?: Date; overwrite?: boolean } = {}): Promise<void> {

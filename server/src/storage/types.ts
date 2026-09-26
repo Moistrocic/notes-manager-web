@@ -26,13 +26,28 @@ export interface StorageDriver {
   readonly root: string;
   list(dir: string): Promise<StorageEntry[]>;
   readText(path: string): Promise<string>;
+  /**
+   * The file's exact bytes.
+   *
+   * Pictures and other non-note files are stored as they arrived, so serving
+   * one means handing back the bytes untouched - decoding them as text would
+   * destroy every byte that is not valid UTF-8.
+   */
+  readBinary(path: string): Promise<Uint8Array>;
   write(path: string, content: string, options?: WriteOptions): Promise<void>;
-  writeBinary(path: string, data: Uint8Array, contentType?: string): Promise<void>;
+  writeBinary(path: string, data: Uint8Array, contentType?: string, options?: WriteOptions): Promise<void>;
   mkdir(path: string): Promise<void>;
   ensureDir(path: string): Promise<void>;
   remove(dir: string, names: string[]): Promise<void>;
   removePath(path: string): Promise<void>;
   rename(path: string, newName: string): Promise<void>;
+  /**
+   * Moves an entry into another directory, keeping its own name.
+   *
+   * `rename()` only reaches a sibling, so moving a note or a folder somewhere
+   * else needs this. The destination directory must exist already.
+   */
+  move(source: string, targetDir: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   /**
    * Whether the backend reported write access the last time it was asked.

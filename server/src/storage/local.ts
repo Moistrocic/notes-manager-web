@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { StorageDriver, StorageEntry, WriteOptions } from './types.js';
-import { StorageError, baseName, normalisePath } from './types.js';
+import { StorageError, baseName, joinPath, normalisePath } from './types.js';
 
 /** Stores notes on the local filesystem - used when OpenList is unavailable. */
 export class LocalStorageDriver implements StorageDriver {
@@ -63,6 +63,25 @@ export class LocalStorageDriver implements StorageDriver {
     }
   }
 
+  async readBinary(filePath: string): Promise<Uint8Array> {
+    try {
+      const data = await fs.readFile(this.toFsPath(filePath));
+      // A copy rather than the Buffer itself: a small read comes out of Node's
+      // shared pool, so handing that view on would let a caller write into
+      // memory another Buffer is still using.
+      return new Uint8Array(data);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') throw new StorageError(`File not found: ${filePath}`, 404, 'not_found');
+      // A directory reaches here as EISDIR on POSIX and EPERM on Windows.
+      // Either way there are no bytes to serve, and that is not a server fault.
+      if (code === 'EISDIR' || code === 'EPERM') {
+        throw new StorageError(`${filePath} is not a file`, 400, 'not_a_file');
+      }
+      throw new StorageError(`Cannot read ${filePath}: ${(err as Error).message}`);
+    }
+  }
+
   async write(filePath: string, content: string, options: WriteOptions = {}): Promise<void> {
     await this.writeBinary(filePath, new TextEncoder().encode(content), options.contentType, options);
   }
@@ -113,6 +132,27 @@ export class LocalStorageDriver implements StorageDriver {
       throw new StorageError('Path escapes the storage root', 400, 'path_escape');
     }
     await fs.rename(fsPath, target);
+  }
+
+  async move(source: string, targetDir: string): Promise<void> {
+    // Both ends go through toFsPath, so neither can leave the root.
+    const from = this.toFsPath(source);
+    const name = baseName(source);
+    const target = joinPath(targetDir, name);
+    const to = this.toFsPath(target);
+    if (from === to) return;
+    if (await this.exists(target)) {
+      throw new StorageError(`${name} already exists in ${normalisePath(targetDir)}`, 409, 'exists');
+    }
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    try {
+      await fs.rename(from, to);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new StorageError(`${source} was not found`, 404, 'not_found');
+      }
+      throw new StorageError(`Cannot move ${source} to ${normalisePath(targetDir)}: ${(err as Error).message}`);
+    }
   }
 
   async exists(target: string): Promise<boolean> {

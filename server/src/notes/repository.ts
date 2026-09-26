@@ -16,6 +16,12 @@ export const TRASH_DIR = '_trash';
  */
 const FOLDER_TRASH_FILE = '.trash-folders.json';
 /**
+ * Where trashed non-note files are recorded. A picture has no front matter to
+ * hold `deletedAt`/`originFolder`, so - like folders - it is remembered here
+ * instead. Dot-prefixed, so no scan ever shows it as an entry of its own.
+ */
+const FILE_TRASH_FILE = '.trash-files.json';
+/**
  * How deep the tree is walked. `MAX_FOLDER_DEPTH = 6` visits folders nested up
  * to five levels below the root - the previous value of 3 stopped after two
  * levels, so notes in `a/b/c/` were silently invisible.
@@ -25,10 +31,26 @@ const MAX_FOLDER_DEPTH = 6;
 const MAX_DIRS_PER_SCAN = 240;
 const SCAN_TTL_MS = 1500;
 const READ_CONCURRENCY = 6;
-const NOTE_EXTENSIONS = ['.md', '.markdown'];
+/**
+ * Extensions whose bytes are text: a note, and the smallest thing that can
+ * hold markdown. Everything else is stored and served as it arrived.
+ */
+const NOTE_EXTENSIONS = ['.md', '.markdown', '.txt'];
+/** Extensions the panel shows as a picture rather than as a generic file. */
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif', '.ico'];
+
+/**
+ * What a file in the notes tree is.
+ *
+ * The tree used to be markdown only, but a note refers to pictures and those
+ * live beside it in the same folders - so the scan lists every file and this
+ * says which of them the editor has any business opening as text.
+ */
+export type EntryKind = 'note' | 'image' | 'file';
 
 export interface NoteSummary {
   id: string;
+  kind: EntryKind;
   title: string;
   tags: string[];
   pinned: boolean;
@@ -62,6 +84,20 @@ export interface NotePatch {
 
 export interface CreateNoteInput extends NotePatch {
   content?: string;
+  /**
+   * The file name to store the note under. Uploads set it, so the name the
+   * user chose survives; without it the file is named after the title.
+   */
+  fileName?: string;
+}
+
+/** A non-note file waiting in the trash, as recorded in {@link FILE_TRASH_FILE}. */
+interface TrashedFile {
+  /** Where it sits now: under `/_trash`, keeping the name it arrived with. */
+  trashPath: string;
+  /** The full storage path it was deleted from. */
+  originalPath: string;
+  deletedAt: string;
 }
 
 interface CacheEntry {
@@ -70,20 +106,72 @@ interface CacheEntry {
   modified: number;
 }
 
+interface ScannedFile {
+  path: string;
+  size: number;
+  modified: number;
+  kind: EntryKind;
+}
+
 interface ScanResult {
   at: number;
-  files: { path: string; size: number; modified: number }[];
+  files: ScannedFile[];
   idToPath: Map<string, string>;
 }
 
-function isNoteFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  return NOTE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+/** The extension the file carries, `''` when it has none. */
+export function fileExtension(name: string): string {
+  const idx = name.lastIndexOf('.');
+  return idx > 0 ? name.slice(idx) : '';
 }
 
-function stripExtension(name: string): string {
+/** Which of the three things a file name is. */
+export function kindOf(name: string): EntryKind {
+  const lower = name.toLowerCase();
+  if (NOTE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return 'note';
+  if (IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) return 'image';
+  return 'file';
+}
+
+function isNoteFile(name: string): boolean {
+  return kindOf(name) === 'note';
+}
+
+/** The name without its extension - the title a `.md` upload is given. */
+export function stripExtension(name: string): string {
   const idx = name.lastIndexOf('.');
   return idx > 0 ? name.slice(0, idx) : name;
+}
+
+/** The extension the file already uses, so a rename keeps `.markdown` as it was. */
+function extensionOf(name: string): string {
+  return fileExtension(name) || '.md';
+}
+
+/**
+ * A file name that is safe on every platform, extension included.
+ *
+ * The name a browser sends is what the file is called afterwards, so it has to
+ * keep its extension: that extension is how this server decides whether the
+ * bytes are a note, a picture or something else. A name that is too long is
+ * cut in the stem instead, never in the extension.
+ */
+export function sanitiseFileName(raw: string, fallback = 'file'): string {
+  const cleaned = (raw ?? '')
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '');
+  if (!cleaned) return fallback;
+  if (cleaned.length <= 80) return cleaned;
+  const extension = fileExtension(cleaned);
+  return `${cleaned.slice(0, Math.max(1, 80 - extension.length))}${extension}`;
+}
+
+/** The folder a storage path sits in, as the UI writes it: `''` for the root. */
+function folderOf(path: string): string {
+  const parent = parentPath(path);
+  return parent === '/' ? '' : parent.slice(1);
 }
 
 function toIso(value: unknown, fallback: number): string {
@@ -192,8 +280,17 @@ export class NotesRepository {
           if (current.depth + 1 < MAX_FOLDER_DEPTH) queue.push({ dir: entry.path, depth: current.depth + 1 });
           continue;
         }
-        if (!isNoteFile(entry.name)) continue;
-        files.push({ path: entry.path, size: entry.size, modified: entry.modified });
+        // Dot-prefixed files are this server's own bookkeeping (the trash
+        // manifests), never something the user put there on purpose.
+        if (entry.name.startsWith('.')) continue;
+        // Every visible file is listed, not only the markdown: the pictures a
+        // note refers to live in the same folders and belong in the tree.
+        files.push({
+          path: entry.path,
+          size: entry.size,
+          modified: entry.modified,
+          kind: kindOf(entry.name),
+        });
       }
     }
 
@@ -240,6 +337,7 @@ export class NotesRepository {
       typeof attrs.title === 'string' && attrs.title.trim() ? attrs.title.trim() : stripExtension(baseName(path));
     const summary: NoteSummary = {
       id,
+      kind: 'note',
       title,
       tags: toTags(attrs.tags),
       pinned: attrs.pinned === true,
@@ -260,12 +358,53 @@ export class NotesRepository {
     return { ...summary, content: doc.body };
   }
 
-  /** Lists every note of the active storage backend (newest first, content included). */
+  /**
+   * The summary of a file that must not be read as text.
+   *
+   * A picture is not a note: it has no front matter to parse and no body to
+   * count, so everything the tree shows comes from the directory listing. The
+   * title is the file name, extension and all - that, not a heading inside it,
+   * is what the file is actually called.
+   */
+  private buildFileSummary(
+    file: { path: string; size: number; modified: number; kind: EntryKind },
+    overrides: Partial<NoteSummary> = {},
+  ): Note {
+    const iso = new Date(file.modified || Date.now()).toISOString();
+    const summary: NoteSummary = {
+      // Files carry no front matter to hold an id, so the path is the identity.
+      id: hashId(file.path),
+      kind: file.kind,
+      title: baseName(file.path),
+      tags: [],
+      pinned: false,
+      favorite: false,
+      color: null,
+      folder: folderOf(file.path),
+      path: file.path,
+      created: iso,
+      updated: iso,
+      excerpt: '',
+      wordCount: 0,
+      size: file.size,
+      hasFrontMatter: false,
+      deletedAt: null,
+      originFolder: null,
+      ...overrides,
+    };
+    return { ...summary, content: '' };
+  }
+
+  /** Lists every entry of the active storage backend (newest first, content included). */
   async list(user: SessionUser | null | undefined): Promise<Note[]> {
     const storage = await this.storageManager.resolve(user);
     const ns = this.namespace(storage, user);
     const scan = await this.scan(storage, ns);
-    const notes = await mapLimit(scan.files, READ_CONCURRENCY, (file) => this.loadNote(storage, ns, file));
+    // Only notes are read. A picture is summarised straight from the listing,
+    // because reading it as text would corrupt every byte that is not UTF-8.
+    const notes = await mapLimit(scan.files, READ_CONCURRENCY, (file) =>
+      file.kind === 'note' ? this.loadNote(storage, ns, file) : Promise.resolve(this.buildFileSummary(file)),
+    );
     const list = notes.filter((n): n is Note => Boolean(n));
     scan.idToPath = new Map(list.map((n) => [n.id, n.path]));
     return list
@@ -282,10 +421,34 @@ export class NotesRepository {
     const notes = await this.list(user);
     const summary = notes.find((n) => n.id === id);
     if (!summary) throw new StorageError(`Note ${id} was not found`, 404, 'note_not_found');
+    // A picture has no text to read: the listing already said everything there
+    // is to say about it.
+    if (summary.kind !== 'note') return summary;
     const raw = await storage.driver.readText(summary.path);
     const note = this.buildNote(summary.path, raw, { size: summary.size, modified: Date.parse(summary.updated) });
     this.cacheFor(ns).set(summary.path, { note, size: summary.size, modified: Date.parse(summary.updated) });
     return note;
+  }
+
+  /**
+   * One file's exact bytes, by storage path.
+   *
+   * Pictures are served by path rather than by note id: the markup refers to a
+   * path (`![x](../img/a.png)`) and the path is what stays true. Dot-prefixed
+   * names are refused because they are this server's own bookkeeping (the trash
+   * manifests); the driver refuses anything outside the storage root on top.
+   */
+  async readBinary(
+    user: SessionUser | null | undefined,
+    storagePath: string,
+  ): Promise<{ path: string; data: Uint8Array }> {
+    const storage = await this.storageManager.resolve(user);
+    const normalised = normalisePath(String(storagePath ?? ''));
+    if (normalised === '/' || normalised.split('/').some((segment) => segment.startsWith('.'))) {
+      throw new StorageError('Invalid path', 400, 'invalid_path');
+    }
+    const data = await storage.driver.readBinary(normalised);
+    return { path: normalised, data };
   }
 
   private async pickFileName(driver: StorageDriver, dir: string, base: string): Promise<string> {
@@ -296,6 +459,104 @@ export class NotesRepository {
       if (!(await driver.exists(target))) return candidate;
     }
     return `${base}-${crypto.randomBytes(3).toString('hex')}.md`;
+  }
+
+  /**
+   * A free file name, keeping the extension the name came with.
+   *
+   * The name itself is the first candidate, so an upload keeps what the user
+   * called it and only falls back to `-2`, `-3`, ... when something is there
+   * already.
+   *
+   * `also` is a second directory the name has to be free in, and `self` is the
+   * path of the file being renamed - it is not an obstacle to its own rename.
+   * Both exist for the rename-and-move case: `rename` would overwrite a sibling
+   * and `move` refuses a destination that is taken, so the name has to be free
+   * on both sides of the operation.
+   */
+  private async pickFreeFileName(
+    driver: StorageDriver,
+    dir: string,
+    fileName: string,
+    options: { also?: string; self?: string } = {},
+  ): Promise<string> {
+    const extension = fileExtension(fileName);
+    const stem = extension ? fileName.slice(0, -extension.length) : fileName;
+    const dirs = this.nameDirs(dir, options.also);
+    for (let i = 1; i <= 60; i += 1) {
+      const candidate = i === 1 ? `${stem}${extension}` : `${stem}-${i}${extension}`;
+      // eslint-disable-next-line no-await-in-loop
+      if (await this.nameIsFree(driver, dirs, candidate, options.self)) return candidate;
+    }
+    return `${stem}-${crypto.randomBytes(3).toString('hex')}${extension}`;
+  }
+
+  /**
+   * A random name no listed directory uses yet.
+   *
+   * Used where a clash is possible but `-2`, `-3`, ... would be misleading: two
+   * files of the same name are not the same file twice, they are two different
+   * files that happen to share a name.
+   */
+  private async randomFreeName(
+    driver: StorageDriver,
+    dir: string,
+    fileName: string,
+    options: { also?: string; self?: string } = {},
+  ): Promise<string> {
+    const extension = fileExtension(fileName);
+    const stem = stripExtension(fileName) || 'file';
+    const dirs = this.nameDirs(dir, options.also);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = `${stem}-${crypto.randomBytes(3).toString('hex')}${extension}`;
+      // eslint-disable-next-line no-await-in-loop
+      if (await this.nameIsFree(driver, dirs, candidate, options.self)) return candidate;
+    }
+    return `${stem}-${Date.now().toString(36)}${extension}`;
+  }
+
+  private nameDirs(dir: string, also?: string): string[] {
+    return also && also !== dir ? [dir, also] : [dir];
+  }
+
+  /** Whether `candidate` is unused in every one of `dirs` (ignoring `self`). */
+  private async nameIsFree(driver: StorageDriver, dirs: string[], candidate: string, self?: string): Promise<boolean> {
+    for (const dir of dirs) {
+      const target = joinPath(dir, candidate);
+      if (target === self) continue;
+      // eslint-disable-next-line no-await-in-loop
+      if (await driver.exists(target)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Stores a file exactly as it arrived.
+   *
+   * No front matter is written: these bytes are not markdown, and a YAML block
+   * prepended to a picture is a corrupted picture. The name is the one the
+   * upload carried, kept free with `-2`, `-3`, ... where that is taken.
+   */
+  async createFile(
+    user: SessionUser | null | undefined,
+    input: { name: string; folder?: string; data: Uint8Array; contentType?: string },
+  ): Promise<Note> {
+    const storage = await this.storageManager.resolve(user);
+    const ns = this.namespace(storage, user);
+    const driver = storage.driver;
+    const folder = normaliseFolder(input.folder);
+    const dir = folder ? `/${folder}` : '/';
+    if (folder) await driver.ensureDir(dir);
+
+    const fileName = await this.pickFreeFileName(driver, dir, sanitiseFileName(input.name, 'file'));
+    const path = joinPath(dir, fileName);
+    const now = new Date();
+    const data = input.data ?? new Uint8Array();
+    // overwrite: false closes the race between picking a free name and writing.
+    await driver.writeBinary(path, data, input.contentType, { modified: now, overwrite: false });
+    this.invalidate(ns);
+    log.info(`created file ${path}`);
+    return this.buildFileSummary({ path, size: data.byteLength, modified: now.getTime(), kind: kindOf(fileName) });
   }
 
   async create(user: SessionUser | null | undefined, input: CreateNoteInput): Promise<Note> {
@@ -309,7 +570,12 @@ export class NotesRepository {
     if (folder) await driver.ensureDir(dir);
 
     const id = crypto.randomUUID().replace(/-/g, '').slice(0, 20);
-    const fileName = await this.pickFileName(driver, dir, slugify(title));
+    // An upload keeps the name it arrived under - that is the whole point of
+    // uploading a file into a folder the notes refer to. Anything created here
+    // is named after its title, the way a new note always was.
+    const fileName = input.fileName
+      ? await this.pickFreeFileName(driver, dir, sanitiseFileName(input.fileName, 'note.md'))
+      : await this.pickFileName(driver, dir, slugify(title));
     const path = joinPath(dir, fileName);
     const content = input.content ?? '';
 
@@ -348,6 +614,9 @@ export class NotesRepository {
     const ns = this.namespace(storage, user);
     const driver = storage.driver;
     const current = await this.get(user, id);
+    // A file has no front matter to patch: a title renames it, a folder moves
+    // it, and tags, pins and colours have nowhere to be stored on a picture.
+    if (current.kind !== 'note') return this.updateFile(storage, ns, current, patch);
     const doc = parseDocument(await driver.readText(current.path));
     const attributes: Record<string, unknown> = { ...doc.attributes };
 
@@ -367,17 +636,30 @@ export class NotesRepository {
     const body = patch.content !== undefined ? patch.content : doc.body;
     const raw = serialiseDocument(attributes, body);
 
-    let targetPath = current.path;
+    // A changed title renames the file itself, exactly like a folder change
+    // already moved it: the note is written to its new path first and the old
+    // file removed afterwards, so there is never a moment without one. Both can
+    // happen in the same request.
     const nextFolder = patch.folder !== undefined ? normaliseFolder(patch.folder) : current.folder;
-    if (nextFolder !== current.folder) {
+    const currentName = baseName(current.path);
+    const extension = extensionOf(currentName);
+    const nextTitle = patch.title !== undefined ? patch.title.trim() : '';
+    const wantedName =
+      nextTitle && nextTitle !== current.title ? `${slugify(nextTitle)}${extension}` : currentName;
+    const moved = nextFolder !== current.folder;
+
+    let targetPath = current.path;
+    if (moved || wantedName !== currentName) {
       const dir = nextFolder ? `/${nextFolder}` : '/';
       if (nextFolder) await driver.ensureDir(dir);
-      targetPath = joinPath(dir, baseName(current.path));
-      if (await driver.exists(targetPath)) {
-        targetPath = joinPath(dir, await this.pickFileName(driver, dir, stripExtension(baseName(current.path))));
+      targetPath = joinPath(dir, wantedName);
+      if (targetPath !== current.path && (await driver.exists(targetPath))) {
+        // A note with that name is already there: take the next free one.
+        const free = await this.pickFileName(driver, dir, stripExtension(wantedName));
+        targetPath = joinPath(dir, free.endsWith(extension) ? free : `${stripExtension(free)}${extension}`);
       }
       await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
-      await driver.removePath(current.path);
+      if (targetPath !== current.path) await driver.removePath(current.path);
     } else {
       await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
     }
@@ -386,6 +668,60 @@ export class NotesRepository {
     const note = this.buildNote(targetPath, raw, { size: raw.length, modified: now.getTime() });
     this.cacheFor(ns).set(targetPath, { note, size: raw.length, modified: now.getTime() });
     return note;
+  }
+
+  /**
+   * A file's two editable properties: what it is called and where it lives.
+   *
+   * Both are the same pair of filesystem primitives - `rename` reaches a
+   * sibling and `move` carries the name to another directory - so a request
+   * that changes both is done as rename-then-move. Everything else in the patch
+   * is ignored on purpose: there is nowhere on a picture to record a tag.
+   */
+  private async updateFile(storage: ResolvedStorage, ns: string, current: Note, patch: NotePatch): Promise<Note> {
+    const driver = storage.driver;
+    const currentDir = parentPath(current.path);
+    const folder = patch.folder !== undefined ? normaliseFolder(patch.folder) : current.folder;
+    const dir = folder ? `/${folder}` : '/';
+    const currentName = baseName(current.path);
+    const extension = fileExtension(currentName);
+
+    const moving = dir !== currentDir;
+    const title = (patch.title ?? '').trim();
+    let wanted = currentName;
+    if (title && title !== current.title) {
+      wanted = `${sanitiseFileName(title, stripExtension(currentName) || 'file')}${extension}`;
+    }
+
+    // A file that is renamed and moved in one request needs a name free on both
+    // sides: `rename` overwrites a sibling, and `move` refuses a destination
+    // that is already taken. `self` keeps the file from blocking its own rename.
+    let name = wanted;
+    if (wanted !== currentName || moving) {
+      name = await this.pickFreeFileName(driver, dir, wanted, {
+        also: moving ? currentDir : undefined,
+        self: current.path,
+      });
+    }
+    if (name === currentName && !moving) {
+      // A patch that touches neither is a no-op, exactly as the UI expects.
+      return current;
+    }
+    if (moving && folder) await driver.ensureDir(dir);
+    // Rename first, then move: `rename` only reaches a sibling, and the name it
+    // lands on has been checked against the destination as well.
+    if (name !== currentName) await driver.rename(current.path, name);
+    if (moving) await driver.move(joinPath(currentDir, name), dir);
+
+    this.invalidate(ns);
+    const path = joinPath(dir, name);
+    const now = new Date();
+    log.info(`updated file ${current.path} -> ${path}`);
+    return this.buildFileSummary(
+      { path, size: current.size, modified: now.getTime(), kind: current.kind },
+      // The file has not been rewritten, so its creation time still stands.
+      { created: current.created },
+    );
   }
 
   private trashName(path: string, id: string): string {
@@ -428,7 +764,19 @@ export class NotesRepository {
     };
   }
 
-  async remove(user: SessionUser | null | undefined, id: string, permanent = false): Promise<{ trashed: boolean }> {
+  /**
+   * Deletes a note or a file.
+   *
+   * The id of what now holds it comes back with the answer: a file's id is
+   * derived from its path (it has no front matter to carry one), so moving it
+   * into the trash changes it - and the undo that follows has to address the
+   * copy in the trash, not the path it used to be at.
+   */
+  async remove(
+    user: SessionUser | null | undefined,
+    id: string,
+    permanent = false,
+  ): Promise<{ trashed: boolean; id: string }> {
     const storage = await this.storageManager.resolve(user);
     const ns = this.namespace(storage, user);
     const driver = storage.driver;
@@ -436,11 +784,18 @@ export class NotesRepository {
 
     if (permanent) {
       await driver.removePath(note.path);
+      // A trashed file is listed from the manifest, so removing it for good has
+      // to take its entry with it - otherwise the trash would keep describing
+      // a file that no longer exists.
+      await this.forgetFile(storage, note.path);
       this.invalidate(ns);
       log.info(`permanently deleted note ${note.path}`);
-      return { trashed: false };
+      return { trashed: false, id: note.id };
     }
 
+    // A file cannot record its own deletion the way a note does in front
+    // matter, so it is moved to the trash and remembered in a manifest.
+    if (note.kind !== 'note') return this.trashFile(storage, ns, note);
 
     const doc = parseDocument(await driver.readText(note.path));
     const attributes: Record<string, unknown> = {
@@ -460,26 +815,98 @@ export class NotesRepository {
     await driver.removePath(note.path);
     this.invalidate(ns);
     log.info(`moved note ${note.path} to trash`);
-    return { trashed: true };
+    return { trashed: true, id: note.id };
+  }
+
+  /**
+   * Moves a file to `/_trash`, remembering where it came from.
+   *
+   * The file keeps its own name, so restoring it is a move back rather than a
+   * rename. Only a name the trash already holds is changed - and it has to
+   * change before the move, because `move` cannot rename and refuses a
+   * destination that is taken.
+   */
+  private async trashFile(storage: ResolvedStorage, ns: string, note: Note): Promise<{ trashed: boolean; id: string }> {
+    const driver = storage.driver;
+    const trashDir = `/${TRASH_DIR}`;
+    const currentDir = parentPath(note.path);
+    await driver.ensureDir(trashDir);
+    const name = baseName(note.path);
+
+    // `move` keeps the file's own name and refuses a destination that is taken,
+    // so a clash in the trash is settled by renaming first - on both sides, since
+    // the file has to be out of the way of its own siblings as well.
+    let storedName = name;
+    if (!(await this.nameIsFree(driver, [trashDir], name, note.path))) {
+      storedName = await this.randomFreeName(driver, trashDir, name, { also: currentDir, self: note.path });
+      await driver.rename(note.path, storedName);
+    }
+    await driver.move(joinPath(currentDir, storedName), trashDir);
+    const stored = joinPath(trashDir, storedName);
+
+    // Deleting something that is already in the trash updates its entry rather
+    // than adding a second one, so the trash never lists the same file twice.
+    const manifest = (await this.readFileTrash(storage)).filter((entry) => entry.trashPath !== stored);
+    manifest.push({ trashPath: stored, originalPath: note.path, deletedAt: new Date().toISOString() });
+    await this.writeFileTrash(storage, manifest);
+    this.invalidate(ns);
+    log.info(`moved file ${note.path} to trash`);
+    // The trash listing derives ids from paths, so this is the id the restored
+    // copy will answer to while it waits there.
+    return { trashed: true, id: hashId(stored) };
+  }
+
+  /** Drops the manifest entry of one trashed file, when it has one. */
+  private async forgetFile(storage: ResolvedStorage, trashPath: string): Promise<void> {
+    if (!trashPath.startsWith(`/${TRASH_DIR}/`)) return;
+    const manifest = await this.readFileTrash(storage);
+    const left = manifest.filter((entry) => entry.trashPath !== trashPath);
+    if (left.length !== manifest.length) await this.writeFileTrash(storage, left);
   }
 
   async listTrash(user: SessionUser | null | undefined): Promise<Note[]> {
     const storage = await this.storageManager.resolve(user);
     const ns = `${this.namespace(storage, user)}:trash`;
     const entries = await storage.driver.list(`/${TRASH_DIR}`).catch(() => []);
-    const files = entries.filter((e) => !e.isDir && isNoteFile(e.name)).map((e) => ({ path: e.path, size: e.size, modified: e.modified }));
-    const notes = await mapLimit(files, READ_CONCURRENCY, (file) => this.loadNote(storage, ns, file));
-    return notes
-      .filter((n): n is Note => Boolean(n))
-      .sort((a, b) => Date.parse(b.deletedAt ?? b.updated) - Date.parse(a.deletedAt ?? a.updated));
+    const files = entries
+      .filter((e) => !e.isDir && !e.name.startsWith('.'))
+      .map((e) => ({ path: e.path, size: e.size, modified: e.modified }));
+    const notes = await mapLimit(
+      files.filter((file) => isNoteFile(baseName(file.path))),
+      READ_CONCURRENCY,
+      (file) => this.loadNote(storage, ns, file),
+    );
+    const listed = notes.filter((n): n is Note => Boolean(n));
+
+    // Files cannot say "I am in the trash" themselves, so the manifest does.
+    // An entry whose file is gone was removed outside the app: it is dropped
+    // rather than listed as a ghost.
+    const byPath = new Map(files.map((file) => [file.path, file]));
+    const manifest = await this.readFileTrash(storage);
+    const alive = manifest.filter((entry) => byPath.has(entry.trashPath));
+    for (const entry of alive) {
+      const file = byPath.get(entry.trashPath) as { path: string; size: number; modified: number };
+      listed.push(
+        this.buildFileSummary(
+          { ...file, kind: kindOf(baseName(entry.originalPath)) },
+          { deletedAt: entry.deletedAt, originFolder: folderOf(entry.originalPath) },
+        ),
+      );
+    }
+    if (alive.length !== manifest.length) await this.writeFileTrash(storage, alive);
+
+    return listed.sort((a, b) => Date.parse(b.deletedAt ?? b.updated) - Date.parse(a.deletedAt ?? a.updated));
   }
 
   async restore(user: SessionUser | null | undefined, id: string): Promise<Note> {
     const storage = await this.storageManager.resolve(user);
+    const ns = this.namespace(storage, user);
     const driver = storage.driver;
     const trashed = await this.listTrash(user);
     const found = trashed.find((n) => n.id === id);
     if (!found) throw new StorageError(`Note ${id} is not in the trash`, 404, 'note_not_found');
+    // A file comes back through the manifest, a note through its front matter.
+    if (found.kind !== 'note') return this.restoreFile(storage, ns, found);
     const doc = parseDocument(await driver.readText(found.path));
     const attributes: Record<string, unknown> = { ...doc.attributes };
     delete attributes.deletedAt;
@@ -496,9 +923,57 @@ export class NotesRepository {
     const raw = serialiseDocument(attributes, doc.body);
     await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
     await driver.removePath(found.path);
-    this.invalidate(`${this.namespace(storage, user)}`);
-    this.invalidate(`${this.namespace(storage, user)}:trash`);
+    this.invalidate(ns);
+    this.invalidate(`${ns}:trash`);
     return this.buildNote(targetPath, raw, { size: raw.length, modified: now.getTime() });
+  }
+
+  /**
+   * Puts a trashed file back where it came from.
+   *
+   * `move` keeps the file's own name, so the name is settled before the move:
+   * the original one, or - when something has taken it in the meantime - the
+   * next free variant. Restoring never overwrites what is there now.
+   */
+  private async restoreFile(storage: ResolvedStorage, ns: string, found: Note): Promise<Note> {
+    const driver = storage.driver;
+    const manifest = await this.readFileTrash(storage);
+    const entry = manifest.find((item) => item.trashPath === found.path);
+    if (!entry) throw new StorageError('File is not in the trash', 404, 'note_not_found');
+    if (!(await driver.exists(entry.trashPath))) {
+      await this.writeFileTrash(storage, manifest.filter((item) => item.trashPath !== entry.trashPath));
+      throw new StorageError('File is no longer in the trash', 404, 'note_not_found');
+    }
+
+    const target = normalisePath(entry.originalPath);
+    const dir = parentPath(target);
+    if (dir !== '/') await driver.ensureDir(dir);
+
+    let name = baseName(target);
+    if (await driver.exists(joinPath(dir, name))) {
+      name = await this.pickFreeFileName(driver, dir, name);
+    }
+    if (name !== baseName(entry.trashPath)) {
+      // Rename inside the trash first: the destination name is free by
+      // construction, but the trash may already hold it - and then `move` would
+      // refuse the destination, so that case gets a suffix of its own.
+      const inside = (await driver.exists(joinPath(`/${TRASH_DIR}`, name)))
+        ? await this.randomFreeName(driver, `/${TRASH_DIR}`, name, { also: dir })
+        : name;
+      await driver.rename(entry.trashPath, inside);
+      name = inside;
+    }
+    await driver.move(joinPath(`/${TRASH_DIR}`, name), dir);
+    await this.writeFileTrash(
+      storage,
+      manifest.filter((item) => item.trashPath !== entry.trashPath),
+    );
+
+    this.invalidate(ns);
+    this.invalidate(`${ns}:trash`);
+    const path = joinPath(dir, name);
+    log.info(`restored file to ${path}`);
+    return this.buildFileSummary({ path, size: found.size, modified: Date.now(), kind: found.kind });
   }
 
   async emptyTrash(user: SessionUser | null | undefined): Promise<number> {
@@ -523,6 +998,11 @@ export class NotesRepository {
     }
     if (folders.length > 0) await this.writeFolderTrash(storage, []);
 
+    // Trashed files live in `/_trash` itself, so the listing above has already
+    // removed them; what is left is the manifest, which would otherwise keep
+    // describing files that no longer exist.
+    await this.writeFileTrash(storage, []);
+
     this.invalidate(`${this.namespace(storage, user)}:trash`);
     return removed;
   }
@@ -537,7 +1017,9 @@ export class NotesRepository {
     const notes = await this.list(user);
     const counts = new Map<string, number>();
     for (const note of notes) {
-      if (!note.folder) continue;
+      // The badge says how many notes are in there; a picture in the same
+      // folder is not one of them.
+      if (note.kind !== 'note' || !note.folder) continue;
       counts.set(note.folder, (counts.get(note.folder) ?? 0) + 1);
     }
 
@@ -607,6 +1089,58 @@ export class NotesRepository {
     this.invalidate(this.namespace(storage, user));
     log.info(`renamed folder ${clean} -> ${next}`);
     return `${parent === '/' ? '' : parent.slice(1)}/${next}`;
+  }
+
+  /**
+   * Moves a folder - and everything inside it - under another folder.
+   *
+   * `target` is the destination folder, with `''` meaning the notes root. A
+   * folder cannot be moved into itself or into one of its own descendants, and
+   * a name already taken at the destination is refused rather than merged: two
+   * folders silently becoming one would lose notes.
+   */
+  async moveFolder(user: SessionUser | null | undefined, folder: string, target: string): Promise<string> {
+    const storage = await this.storageManager.resolve(user);
+    const driver = storage.driver;
+    const clean = normaliseFolder(folder);
+    if (!clean) throw new StorageError('Folder name must not be empty', 400, 'invalid_folder');
+
+    // normaliseFolder drops dot-prefixed and `_trash` segments. Here that would
+    // quietly send the folder somewhere else, so such a destination is refused.
+    const destination = normaliseFolder(target);
+    const refused = String(target ?? '')
+      .split(/[\\/]+/)
+      .some((segment) => {
+        const trimmed = segment.trim();
+        return trimmed === '.' || trimmed === '..' || trimmed.startsWith('.') || trimmed === TRASH_DIR;
+      });
+    if (refused) throw new StorageError('目标文件夹无效', 400, 'invalid_folder');
+    if (destination === clean || destination.startsWith(`${clean}/`)) {
+      throw new StorageError('不能把文件夹移动到它自己或它的子文件夹里', 400, 'invalid_target');
+    }
+
+    const path = `/${clean}`;
+    if (!(await driver.exists(path))) {
+      throw new StorageError('Folder not found', 404, 'folder_not_found');
+    }
+    if (destination && !(await driver.exists(`/${destination}`))) {
+      throw new StorageError(`目标文件夹不存在: ${destination}`, 404, 'folder_not_found');
+    }
+
+    const dir = destination ? `/${destination}` : '/';
+    const name = baseName(path);
+    const newPath = joinPath(dir, name);
+    // Dropping a folder into the folder that already holds it changes nothing.
+    if (newPath === path) return clean;
+    if (await driver.exists(newPath)) {
+      throw new StorageError(`已存在名为 ${name} 的文件夹`, 409, 'folder_exists');
+    }
+
+    await driver.move(path, dir);
+    this.invalidate(this.namespace(storage, user));
+    const moved = `${destination ? `${destination}/` : ''}${name}`;
+    log.info(`moved folder ${clean} -> ${moved}`);
+    return moved;
   }
 
   async createFolder(user: SessionUser | null | undefined, folder: string): Promise<string> {
@@ -741,6 +1275,35 @@ export class NotesRepository {
     });
   }
 
+  /** The file manifest, written beside the folder one and read the same way. */
+  private async readFileTrash(storage: ResolvedStorage): Promise<TrashedFile[]> {
+    try {
+      const raw = await storage.driver.readText(`/${FILE_TRASH_FILE}`);
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter(
+        (item): item is TrashedFile =>
+          Boolean(item) &&
+          typeof (item as { trashPath?: unknown }).trashPath === 'string' &&
+          typeof (item as { originalPath?: unknown }).originalPath === 'string',
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private async writeFileTrash(storage: ResolvedStorage, entries: TrashedFile[]): Promise<void> {
+    const path = `/${FILE_TRASH_FILE}`;
+    if (entries.length === 0) {
+      await storage.driver.removePath(path).catch(() => undefined);
+      return;
+    }
+    await storage.driver.write(path, JSON.stringify(entries, null, 2), {
+      modified: new Date(),
+      contentType: 'application/json',
+    });
+  }
+
   /** Aggregated tag list with usage counts. */
   async tags(user: SessionUser | null | undefined): Promise<{ tag: string; count: number }[]> {
     const notes = await this.list(user);
@@ -755,7 +1318,8 @@ export class NotesRepository {
 
   /** Statistics for the dashboard header. */
   async stats(user: SessionUser | null | undefined): Promise<{ notes: number; tags: number; folders: number; words: number; updatedAt: string | null }> {
-    const notes = await this.list(user);
+    // Only notes count: a picture is not a note and has no words to add.
+    const notes = (await this.list(user)).filter((note) => note.kind === 'note');
     const tags = new Set<string>();
     let words = 0;
     let updated = 0;
