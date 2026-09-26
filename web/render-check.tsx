@@ -12,6 +12,8 @@ import type { Note, SessionUser, StorageStatus, SystemStatus } from './src/lib/t
 const note: Note = {
   id: 'render-check',
   kind: 'note',
+  blog: false,
+  blogAt: null,
   title: '渲染检查笔记',
   tags: ['check', '渲染'],
   pinned: true,
@@ -87,6 +89,8 @@ const status: SystemStatus = {
   basePath: '',
   publicUrl: '',
   uptimeSeconds: 12,
+  // The blog is off unless a scenario says otherwise: that is the shipped default.
+  blog: { enabled: false },
   storage,
   providers: { local: true, openlist: true, openlistInitialized: true, openlistSiteTitle: 'OpenList' },
   user,
@@ -120,13 +124,22 @@ const capabilities = {
 
 const scenarios: Scenario[] = [
   {
-    // The site's front page is deliberately blank: what it carries is the way
-    // into the panel, and nothing of the panel itself.
-    name: 'front page: blank, with the way into the panel',
+    // The site's front page is the blog. It asks the public API for its content
+    // once it is in a browser, so a server render is the loading page - and none
+    // of the panel is behind it.
+    name: 'front page: the blog',
     pathname: '/',
-    state: { booted: true, user: null },
-    expect: ['data-panel-entry', '管理面板登录入口', 'href="/manager/"'],
-    absent: ['新建笔记', '搜索笔记、标签'],
+    state: { booted: true, user: null, status: { ...status, blog: { enabled: true } } },
+    expect: ['博客', '载入中…'],
+    absent: ['data-panel-entry', '新建笔记', '搜索笔记、标签'],
+  },
+  {
+    // A post has an address of its own, and the way back to the index with it.
+    name: 'the blog: one post at its own address',
+    pathname: '/notes/posts/hello.md',
+    state: { booted: true, user: null, status: { ...status, blog: { enabled: true } } },
+    expect: ['data-blog-home', '全部文章', '载入中…'],
+    absent: ['data-blog-card', '新建笔记', 'data-note-tree'],
   },
   {
     name: 'boot / splash',
@@ -329,7 +342,7 @@ appStore.getInitialState = () => appStore.getState();
  * measurements the first render reads, and the media query the panel's layout
  * asks about.
  */
-const address = { pathname: '/manager/' };
+const address = { pathname: '/manager/', hash: '' };
 (globalThis as unknown as { window: unknown }).window = {
   location: address,
   innerWidth: 1440,
@@ -367,6 +380,7 @@ for (const scenario of scenarios) {
   } catch (err) {
     failed += 1;
     console.log(`  FAIL  ${scenario.name} - ${(err as Error).message}`);
+    console.log(((err as Error).stack ?? '').split('\n').slice(0, 6).join('\n'));
   }
 }
 

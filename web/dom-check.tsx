@@ -14,7 +14,7 @@
 import { JSDOM } from 'jsdom';
 // Type only: erased at compile time, so it cannot run before the globals below.
 import type { CropRect } from './src/lib/wallpaper';
-import type { NoteSummary } from './src/lib/types';
+import type { BlogPostSummary, NoteSummary } from './src/lib/types';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'https://notes.example.com/',
@@ -1117,6 +1117,9 @@ const summaryNote = (
   // Every entry the server lists says what it is; a markdown note unless the
   // fixture asks for a picture or some other file.
   kind: 'note',
+  // A fixture is not published to the blog unless it says so.
+  blog: false,
+  blogAt: null,
   title,
   tags: [],
   pinned: false,
@@ -2567,68 +2570,434 @@ console.log('\ndeep links (jsdom)');
   check('writing an address round-trips', w.location.pathname + w.location.hash, '/manager/public/Notes/a.md#h');
 }
 
-/* --- the way in from the front page --------------------------------------- */
-console.log('\nthe front page (jsdom)');
+/* --- the blog's front page ------------------------------------------------ */
+/** A published note, as the public API hands it over. */
+const blogSummary = (path: string, title: string, extra: Partial<BlogPostSummary> = {}): BlogPostSummary => ({
+  id: path.replace(/^\//, ''),
+  path,
+  title,
+  summary: '**开头**的摘要',
+  publishedAt: '2026-01-02T03:04:00.000Z',
+  updatedAt: '2026-02-03T04:05:00.000Z',
+  wordCount: 12,
+  tags: [],
+  ...extra,
+});
+
+/** A JSON answer, for the stubs the blog and the settings dialog ask for. */
+const reply = (payload: unknown, status = 200) =>
+  new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+
+console.log('\nthe blog\'s front page (jsdom)');
+{
+  const { BlogIndexPage } = await import('./src/components/blog/BlogIndexPage');
+  const realFetch = globalThis.fetch;
+  const opened: string[] = [];
+
+  const mountIndex = async (answer: () => Response | Promise<Response>) => {
+    globalThis.fetch = (async () => answer()) as typeof fetch;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(BlogIndexPage, { onOpenPost: (path: string) => opened.push(path) }));
+    });
+    await flush();
+    return {
+      host,
+      async unmount() {
+        await act(async () => {
+          root.unmount();
+        });
+        host.remove();
+      },
+    };
+  };
+
+  // Two published notes: one card each.
+  const posts = [
+    blogSummary('/posts/hello.md', '第一篇文章'),
+    blogSummary('/posts/second.md', '第二篇文章', { summary: '带 *斜体* 的摘要' }),
+  ];
+  const page = await mountIndex(() => reply({ enabled: true, title: '测试博客', posts }));
+  const cards = Array.from(page.host.querySelectorAll<HTMLAnchorElement>('[data-blog-card]'));
+  check('two published notes make two cards', cards.length, 2);
+  check('the header is the blog\'s own title', page.host.querySelector('h1')?.textContent, '测试博客');
+  check('and it counts what is published', page.host.innerHTML.includes('共 2 篇已发布'), true);
+  check(
+    'each card is a link to the post it stands for',
+    cards.map((card) => card.getAttribute('href')),
+    ['/notes/posts/hello.md', '/notes/posts/second.md'],
+  );
+  check('named by its title', cards[0]?.querySelector('h2')?.textContent, '第一篇文章');
+  check('the summary is rendered as markdown', Boolean(cards[0]?.querySelector('.blog-summary strong')), true);
+  check('with its emphasis too', Boolean(cards[1]?.querySelector('.blog-summary em')), true);
+  check('the card says when it went up', (cards[0]?.textContent ?? '').includes('发布'), true);
+  check('and when it last changed', (cards[0]?.textContent ?? '').includes('修改'), true);
+  const click = new w.MouseEvent('click', { bubbles: true, cancelable: true });
+  await act(async () => {
+    cards[1]?.dispatchEvent(click);
+  });
+  check('clicking a card is the app\'s business', click.defaultPrevented, true);
+  check('and asks for that post', opened, ['/posts/second.md']);
+  await page.unmount();
+
+  // Nothing published yet.
+  const empty = await mountIndex(() => reply({ enabled: true, title: '测试博客', posts: [] }));
+  check('an empty blog says so', empty.host.innerHTML.includes('还没有内容'), true);
+  await empty.unmount();
+
+  // The administrator has not turned it on.
+  const off = await mountIndex(() => reply({ enabled: false, title: '测试博客', posts: [] }));
+  check('a blog that is off says so', off.host.innerHTML.includes('博客还没有开放'), true);
+  await off.unmount();
+
+  // The server refused.
+  const refused = await mountIndex(() => reply({ error: { message: '服务器出错了' } }, 500));
+  check('a refusal is reported as its own thing', refused.host.innerHTML.includes('打不开博客'), true);
+  check('in the server\'s words', refused.host.innerHTML.includes('服务器出错了'), true);
+  await refused.unmount();
+
+  // And nothing answered at all.
+  const offline = await mountIndex(() => {
+    throw new Error('no server here');
+  });
+  check('a server that cannot be reached says so too', offline.host.innerHTML.includes('打不开博客'), true);
+  check('and says the server could not be reached', offline.host.innerHTML.includes('无法连接服务器'), true);
+  await offline.unmount();
+
+  // The old front-page entry is gone: the blog is the front page now.
+  check('and the old front-page icon is nowhere', document.querySelector('[data-panel-entry]'), null);
+
+  globalThis.fetch = realFetch;
+}
+
+/* --- one post on the blog -------------------------------------------------- */
+console.log('\none post on the blog (jsdom)');
+{
+  const { BlogPostPage } = await import('./src/components/blog/BlogPostPage');
+  const realFetch = globalThis.fetch;
+  const content = ['# 1.1 分层', '', 'intro ![图](./img/a.png)', '', '## 1.2 权限', '', 'middle', ''].join('\n');
+  const post = { ...blogSummary('/posts/hello.md', '第一篇文章'), wordCount: 42, content };
+  const opened: string[] = [];
+
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/api/blog/post')) return reply({ enabled: true, post });
+    if (url.includes('/api/blog')) return reply({ enabled: true, title: '测试博客', posts: [post] });
+    throw new Error('no server here');
+  }) as typeof fetch;
+
+  const mountPost = async (anchor: string) => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(
+        React.createElement(BlogPostPage, {
+          path: '/posts/hello.md',
+          anchor,
+          onOpenPost: (path: string) => opened.push(path),
+          onOpenIndex: () => undefined,
+        }),
+      );
+    });
+    await flush();
+    return {
+      host,
+      async unmount() {
+        await act(async () => {
+          root.unmount();
+        });
+        host.remove();
+      },
+    };
+  };
+
+  w.history.replaceState(null, '', '/notes/posts/hello.md');
+  const page = await mountPost('');
+  check('the post is headed by its title', page.host.querySelector('h1')?.textContent, '第一篇文章');
+  check('with when it went up', page.host.innerHTML.includes('发布'), true);
+  check('when it last changed', page.host.innerHTML.includes('修改'), true);
+  check('and how long it is', page.host.innerHTML.includes('42 字'), true);
+  // An id that starts with a digit cannot be written as a CSS selector.
+  check('the body is the published note, rendered', Boolean(page.host.querySelector('.markdown-body [id="11-分层"]')), true);
+  // A picture inside a post goes through the public door, which asks nobody.
+  check(
+    'a picture in the post is fetched publicly',
+    page.host.querySelector('.markdown-body img')?.getAttribute('src'),
+    '/api/blog/file?path=' + encodeURIComponent('/posts/img/a.png'),
+  );
+
+  // The outline is the post's own headings, in order.
+  const outlineItems = Array.from(page.host.querySelectorAll<HTMLButtonElement>('[data-outline-item]'));
+  check('the outline lists the headings', outlineItems.length, 2);
+  check('by their text', outlineItems.map((item) => item.textContent?.trim()), ['1.1 分层', '1.2 权限']);
+  // Exactly one control hides it - a second one would be two answers to one
+  // question, which is what the panel's own outline used to be.
+  check('there is exactly one outline handle', document.querySelectorAll('[data-outline-handle]').length, 1);
+
+  scrollCalls.length = 0;
+  await act(async () => {
+    outlineItems[1]?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  check('clicking an entry moves the address there', decodeURIComponent(w.location.hash), '#12-权限');
+  check(
+    'and scrolls the article to it',
+    scrollCalls.some((call) => call.target.classList.contains('markdown-body')),
+    true,
+  );
+
+  // The handle is the one way in and out of the outline.
+  const handle = () => document.querySelector<HTMLButtonElement>('[data-outline-handle]');
+  check('the handle says the outline is open', handle()?.getAttribute('aria-pressed'), 'true');
+  await act(async () => {
+    handle()?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await settled();
+  check('clicking it hides the outline', Boolean(page.host.querySelector('.outline-panel')), false);
+  check('and it says so', handle()?.getAttribute('aria-pressed'), 'false');
+  await act(async () => {
+    handle()?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await settled();
+  check('clicking it again brings the outline back', Boolean(page.host.querySelector('.outline-panel')), true);
+  check('still the only handle', document.querySelectorAll('[data-outline-handle]').length, 1);
+  await page.unmount();
+
+  // A deep link lands on its heading.
+  w.history.replaceState(null, '', '/notes/posts/hello.md');
+  const linked = await mountPost('12-权限');
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 240));
+  });
+  await flush();
+  check('a deep link moves the address to its heading', decodeURIComponent(w.location.hash), '#12-权限');
+  check(
+    'and marks the heading it landed on',
+    Boolean(linked.host.querySelector('.markdown-body [id="12-权限"]')?.classList.contains('heading-flash')),
+    true,
+  );
+  await linked.unmount();
+
+  globalThis.fetch = realFetch;
+}
+
+/* --- what the site's front page is ----------------------------------------- */
+console.log('\nthe site\'s front page (jsdom)');
 {
   const App = (await import('./src/App')).default;
   const hold = appStore.getState();
   const realFetch = globalThis.fetch;
-  // No server is reachable here: the question is what the page looks like
-  // before anybody has signed in.
-  globalThis.fetch = (async () => {
-    throw new Error('no server here');
-  }) as typeof fetch;
+
+  const statusFor = (enabled: boolean) => ({
+    version: '1.0.0',
+    basePath: '',
+    publicUrl: '',
+    uptimeSeconds: 1,
+    blog: { enabled },
+    storage: {
+      driver: 'local',
+      mode: 'auto',
+      displayRoot: '/notes',
+      degraded: false,
+      detail: '',
+      openlist: { configured: false, url: '', reachable: false, initialized: false, version: null, checkedAt: 0 },
+      localRoot: '/notes',
+      perUser: false,
+      tokenAttached: false,
+    },
+    providers: { local: true, openlist: false, openlistConfigured: false, openlistUrl: null, openlistInitialized: false, guest: false },
+    user: null,
+  });
+
+  const mountApp = async (enabled: boolean, pathname: string) => {
+    const status = statusFor(enabled);
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/system/status')) return reply(status);
+      if (url.includes('/api/auth/providers') || url.includes('/api/auth/me')) return reply({ user: null });
+      if (url.includes('/api/blog/post')) return reply({ enabled, post: { ...blogSummary('/posts/hello.md', '第一篇文章'), content: '# 标题\n' } });
+      if (url.includes('/api/blog')) return reply({ enabled, title: '测试博客', posts: [blogSummary('/posts/hello.md', '第一篇文章')] });
+      if (url.includes('/api/fonts')) return reply({ fonts: [], selection: { sans: '', mono: '' } });
+      return reply({});
+    }) as typeof fetch;
+    appStore.setState({
+      booted: true,
+      user: null,
+      status,
+      notes: [],
+      activeNote: null,
+      activeId: null,
+    } as never);
+    w.history.replaceState(null, '', pathname);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(App));
+    });
+    // boot(), the page's own request, and the address rewrite all settle here.
+    await settled();
+    return {
+      host,
+      async unmount() {
+        await act(async () => {
+          root.unmount();
+        });
+        host.remove();
+      },
+    };
+  };
+
+  // With the blog on, the site's root is the blog.
+  const blog = await mountApp(true, '/');
+  check('the site root is the blog when it is on', Boolean(blog.host.querySelector('[data-blog-card]')), true);
+  check('and the panel is not behind it', Boolean(blog.host.querySelector('[data-note-tree]')), false);
+  check('nor a sign-in card', blog.host.innerHTML.includes('登录工作台'), false);
+  await blog.unmount();
+
+  // A post has an address of its own.
+  const post = await mountApp(true, '/notes/posts/hello.md');
+  check('a /notes/ address is one post', post.host.querySelector('h1')?.textContent, '第一篇文章');
+  check('with the way back to the index', Boolean(post.host.querySelector('[data-blog-home]')), true);
+  await post.unmount();
+
+  // With the blog off, those addresses belong to the panel: the site's root is
+  // the way in, not a page nobody asked for.
+  const offRoot = await mountApp(false, '/');
+  check('with the blog off the root goes to the panel', w.location.pathname, '/manager/');
+  check('which is the sign-in card', offRoot.host.innerHTML.includes('登录工作台'), true);
+  check('and no card is left over', offRoot.host.innerHTML.includes('data-blog-card'), false);
+  await offRoot.unmount();
+
+  const offPost = await mountApp(false, '/notes/posts/hello.md');
+  check('and so does a post address', w.location.pathname, '/manager/');
+  check('with the sign-in card again', offPost.host.innerHTML.includes('登录工作台'), true);
+  await offPost.unmount();
+
+  globalThis.fetch = realFetch;
+  appStore.setState(hold);
+}
+
+/* --- the way back to the blog ---------------------------------------------- */
+console.log('\nthe way back to the blog (jsdom)');
+{
+  const hold = appStore.getState();
   appStore.setState({
-    booted: true,
+    capabilities: WRITABLE,
+    notes: [summaryNote('a', '根目录笔记', '')],
+    folders: [],
+    status: { blog: { enabled: true } },
     user: { sid: 's', id: 'u', username: 'u', displayName: 'u', role: 'admin', provider: 'local', createdAt: 0, expiresAt: 0 },
-    notes: [note],
-    activeId: null,
-    activeNote: null,
-    query: '',
-    activeTag: null,
-    favoriteOnly: false,
-    pinnedOnly: false,
-    expandedFolders: [],
-    loadingNotes: false,
-    notesError: null,
   } as never);
-  w.history.replaceState(null, '', '/');
+  const panel = await mountPanel();
+  check('a reader signed in can go and look at the blog', Boolean(panel.host.querySelector('button[aria-label="返回博客"]')), true);
+  await panel.unmount();
+
+  appStore.setState({ status: { blog: { enabled: false } } } as never);
+  const off = await mountPanel();
+  check('and is not offered one that is switched off', Boolean(off.host.querySelector('button[aria-label="返回博客"]')), false);
+  await off.unmount();
+
+  appStore.setState(hold);
+}
+
+/* --- the blog switch -------------------------------------------------------- */
+console.log('\nthe blog switch (jsdom)');
+{
+  const { SettingsDialog } = await import('./src/components/SettingsDialog');
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+
+  const settings = {
+    storage: {
+      driver: 'local',
+      openlist: { url: '', token: '', root: '/notes', perUser: false, timeoutMs: 15000 },
+      local: { root: '' },
+    },
+    background: {
+      kind: 'off',
+      file: '',
+      note: '',
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      blur: 0,
+      dim: 0,
+      dynamic: false,
+      auroraA: '',
+      auroraB: '',
+    },
+    guest: { enabled: true },
+    blog: { enabled: true },
+  };
+  let stored: Record<string, unknown> | null = null;
+  const savedBody = () => stored;
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (url.includes('/api/system/settings') && method === 'PUT') {
+      stored = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
+      return reply({ ok: true });
+    }
+    if (url.includes('/api/system/settings')) {
+      return reply({
+        settings,
+        effective: { ...settings, background: settings.background, sources: {} },
+        paths: {
+          projectRoot: '/srv/notes-manager',
+          dataDir: '/srv/notes-manager/data',
+          localNotesRoot: '/srv/notes-manager/data/notes',
+          envFile: '/srv/notes-manager/.env',
+          envFileLoaded: true,
+        },
+        env: { storageDriver: null, openlistUrl: null, openlistTokenSet: false, openlistRoot: null, notesRoot: null },
+      });
+    }
+    return reply({});
+  }) as typeof fetch;
+  appStore.setState({ settingsOpen: true });
 
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
   await act(async () => {
-    root.render(React.createElement(App));
+    root.render(React.createElement(SettingsDialog));
   });
   await flush();
 
-  const entry = host.querySelector<HTMLAnchorElement>('[data-panel-entry]');
-  check('the front page carries one way in', Boolean(entry), true);
-  check('named for what it opens', entry?.getAttribute('aria-label'), '管理面板登录入口');
-  check('pointing at the panel address', entry?.getAttribute('href'), '/manager/');
-  // Deliberately blank: nothing of the panel is behind it.
-  check(
-    'and nothing of the panel is on it',
-    host.innerHTML.includes('新建笔记') || host.innerHTML.includes('搜索笔记'),
-    false,
-  );
-  check('nor the sign-in card', host.innerHTML.includes('登录工作台'), false);
+  const setting = host.querySelector('[data-testid="blog-setting"]');
+  const blogSwitch = () => setting?.querySelector<HTMLButtonElement>('[role="switch"]');
+  check('the settings offer the blog', Boolean(setting), true);
+  check('with the switch where the server left it', blogSwitch()?.getAttribute('aria-checked'), 'true');
+  check('and the wording says what the front page is', (setting?.textContent ?? '').includes('站点根 / 是博客首页'), true);
 
   await act(async () => {
-    entry?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    blogSwitch()?.click();
   });
-  // The front page hands over through a "wait" transition: the panel is only
-  // rendered once the page on its way out has finished leaving.
-  await settled();
-  check('clicking it moves the address into the panel', w.location.pathname, '/manager/');
-  check('and the panel is what follows', Boolean(host.querySelector('[data-note-tree]')), true);
+  await flush();
+  check('turning it off flips the switch', blogSwitch()?.getAttribute('aria-checked'), 'false');
+  check('and says what that means', (setting?.textContent ?? '').includes('跳到管理面板的登录页'), true);
+
+  const save = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.trim() === '保存设置');
+  await act(async () => {
+    save?.click();
+  });
+  await flush();
+  check(
+    'saving sends the switch as it stands',
+    (savedBody()?.blog as { enabled?: boolean } | undefined)?.enabled,
+    false,
+  );
+  check('alongside the visitor switch', (savedBody()?.guest as { enabled?: boolean } | undefined)?.enabled, true);
 
   await act(async () => {
     root.unmount();
   });
   host.remove();
-  globalThis.fetch = realFetch;
   appStore.setState(hold);
+  globalThis.fetch = realFetch;
 }
 
 /* --- a tooltip wrapper does not fight the placement it is given ------------ */
@@ -2768,7 +3137,9 @@ console.log('\nversion display (jsdom)');
   );
 
   appStore.setState({
-    status: { version: '1.0.0', basePath: '', publicUrl: '', uptimeSeconds: 5 } as never,
+    // `blog` is part of the status the server sends; a fixture without it
+    // would be a server this app no longer speaks to.
+    status: { version: '1.0.0', basePath: '', publicUrl: '', uptimeSeconds: 5, blog: { enabled: false } } as never,
   });
   // The login screen is where a deployed version gets checked before signing in.
   const loginMarkup = await renderOnce(React.createElement(LoginScreen));
@@ -2826,6 +3197,8 @@ console.log('\ndefault background (jsdom)');
       auroraA: '',
       auroraB: '',
     },
+    guest: { enabled: true },
+    blog: { enabled: false },
   };
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
