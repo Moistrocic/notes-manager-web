@@ -2350,11 +2350,12 @@ console.log('\nthe editor and files that are not notes (jsdom)');
 /* --- keeping two panes level, the arithmetic ------------------------------- */
 console.log('\nkeeping two panes level (pure)');
 {
-  const { mirrorScroll, scrollProgress, scrollTopForProgress } = await import('./src/lib/scroll-sync');
-  const pane = (scrollTop: number, scrollHeight: number, clientHeight: number) => ({
+  const { mirrorScroll, readScrollable, scrollProgress, scrollTopForProgress } = await import('./src/lib/scroll-sync');
+  const pane = (scrollTop: number, scrollHeight: number, clientHeight: number, bottomInset?: number) => ({
     scrollTop,
     scrollHeight,
     clientHeight,
+    bottomInset,
   });
 
   // Progress is how far down the reader is, not how many pixels: the two panes
@@ -2380,11 +2381,44 @@ console.log('\nkeeping two panes level (pure)');
   check('one a single step out is left alone too', mirrorScroll(pane(400, 1000, 200), pane(401, 1000, 200)), null);
   check('but further than that is moved', mirrorScroll(pane(400, 1000, 200), pane(500, 1000, 200)), 400);
   check('and the tolerance can be widened', mirrorScroll(pane(400, 1000, 200), pane(405, 1000, 200), 5), null);
+
+  // The room an editor keeps below its last line is somewhere to type, not
+  // something to read: counted as content, the editor's end lands a margin past
+  // the preview's and the two are never level.
+  const withMargin = (scrollTop: number, bottomInset?: number) => pane(scrollTop, 1000, 200, bottomInset);
+  check('the typing margin is not part of the range', scrollProgress(withMargin(354, 92)), 0.5);
+  check('so half of the range is where half the progress is', scrollTopForProgress(withMargin(0, 92), 0.5), 354);
+  check('and the end of the content is all of it', scrollTopForProgress(withMargin(0, 92), 1), 708);
+  check('scrolling into the margin is still all of it', scrollProgress(withMargin(760, 92)), 1);
+  check('with no margin it is the whole pane again', scrollProgress(withMargin(400, 0)), 0.5);
+  check('an absent margin is no margin', scrollProgress(withMargin(400, undefined)), 0.5);
+  check('nor is a negative one', scrollProgress(withMargin(400, -50)), 0.5);
+  check('and nonsense is no margin either', scrollProgress(withMargin(400, Number.NaN)), 0.5);
+  check('a margin larger than the pane leaves nothing to scroll', scrollTopForProgress(withMargin(0, 5000), 0.5), 0);
+
+  // Reading a pane off the DOM, with the margin the caller measured for it.
+  const measured = document.createElement('div');
+  Object.defineProperty(measured, 'scrollTop', { value: 120, configurable: true });
+  Object.defineProperty(measured, 'scrollHeight', { value: 900, configurable: true });
+  Object.defineProperty(measured, 'clientHeight', { value: 100, configurable: true });
+  check('a pane is read as it stands', readScrollable(measured, 92), {
+    scrollTop: 120,
+    scrollHeight: 900,
+    clientHeight: 100,
+    bottomInset: 92,
+  });
+  check('and with nothing said, no margin', readScrollable(measured), {
+    scrollTop: 120,
+    scrollHeight: 900,
+    clientHeight: 100,
+    bottomInset: 0,
+  });
 }
 
 /* --- keeping two panes level, in the split view ---------------------------- */
 console.log('\nkeeping two panes level (jsdom)');
 {
+  const { trailingSpaceOf } = await import('./src/lib/scroll-sync');
   const hold = appStore.getState();
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => reply({})) as typeof fetch;
@@ -2451,6 +2485,17 @@ console.log('\nkeeping two panes level (jsdom)');
   const previewWrites = trackScrollTop(previewEl);
   sizePane(editorEl, 1000, 200);
   sizePane(previewEl, 1800, 200);
+
+  // The editor keeps room below its last line to type in, and jsdom works the
+  // theme's 12vh out into pixels: 0.12 x 768 = 92. That room is not content, so
+  // the editor's range here is 1000 - 200 - 92 = 708 while the preview's is the
+  // plain 1800 - 200 = 1600.
+  const editorRange = 708;
+  const previewRange = 1600;
+  check('the editor reports the room it keeps below its text', trailingSpaceOf(editorEl) > 0, true);
+  check('and the preview keeps none', trailingSpaceOf(previewEl), 0);
+  check('an element with no styles keeps none either', trailingSpaceOf(document.createElement('div')), 0);
+  check('and neither does nothing at all', trailingSpaceOf(null), 0);
   /** What the app wrote - the test's own assignments are cleared away first. */
   const clearWrites = () => {
     editorWrites.length = 0;
@@ -2467,17 +2512,28 @@ console.log('\nkeeping two panes level (jsdom)');
   };
 
   // Half way down the source is half way down the rendered text, whatever the
-  // two heights are: 400 of 800 is 800 of 1600.
-  await scrollPane(editorEl, 400);
-  check('scrolling the editor carries the preview to the same place in the text', previewWrites, [800]);
+  // two heights are: 354 of the editor's 708 is 800 of the preview's 1600.
+  await scrollPane(editorEl, editorRange / 2);
+  check('scrolling the editor carries the preview to the same place in the text', previewWrites, [previewRange / 2]);
 
   // And the other way round, once the frame that guarded the echo has passed.
-  await scrollPane(previewEl, 400);
-  check('and scrolling the preview brings the editor along', editorWrites, [200]);
+  await scrollPane(previewEl, previewRange / 4);
+  check('and scrolling the preview brings the editor along', editorWrites, [editorRange / 4]);
+
+  // The end of the text is the end of both: the editor's typing room is not
+  // something to read, so it must not push the preview past its own end. This is
+  // the bug where scrolling the editor to the bottom left the preview a screen
+  // short of the end.
+  await scrollPane(editorEl, editorRange);
+  check('the end of the editor is the end of the preview', previewWrites, [previewRange]);
+  // Carrying on into that room moves nothing on the other side.
+  await scrollPane(editorEl, 1000);
+  check('and scrolling on into the typing room leaves it there', previewWrites, []);
+  check('which is where it still is', previewEl.scrollTop, previewRange);
 
   // The pane that was just put somewhere reports its own move. That report is
   // not an instruction: answering it is what makes two panes fight.
-  await scrollPane(editorEl, 400);
+  await scrollPane(editorEl, editorRange / 2);
   check('the editor moved the preview', previewWrites.length, 1);
   clearWrites();
   await act(async () => {
@@ -2486,8 +2542,8 @@ console.log('\nkeeping two panes level (jsdom)');
   check('and the preview repeating that move moves nothing back', editorWrites, []);
   // A frame later it is a scroll of its own again.
   await flush();
-  await scrollPane(previewEl, 400);
-  check('after that frame the preview scrolls the editor again', editorWrites, [200]);
+  await scrollPane(previewEl, previewRange / 4);
+  check('after that frame the preview scrolls the editor again', editorWrites, [editorRange / 4]);
 
   // A jump the preview makes on its own - an outline entry, an anchor - is not
   // followed either: mirroring those positions drags the editor along with the
@@ -2505,15 +2561,15 @@ console.log('\nkeeping two panes level (jsdom)');
     previewEl.dispatchEvent(new w.Event('scroll'));
   });
   await flush();
-  check('a jump to a heading is not mirrored into the editor', editorWrites.includes(200), false);
+  check('a jump to a heading is not mirrored into the editor', editorWrites.includes(editorRange / 4), false);
   // The jump reports nothing in jsdom, so its own guard lapses on the fallback
   // timer; after that the next real scroll lines the panes up again.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 340));
   });
   editorEl.scrollTop = 600;
-  await scrollPane(previewEl, 400);
-  check('and once it has landed, scrolling lines them up again', editorWrites, [200]);
+  await scrollPane(previewEl, previewRange / 4);
+  check('and once it has landed, scrolling lines them up again', editorWrites, [editorRange / 4]);
 
   // Off: the listeners go with it.
   await act(async () => {
