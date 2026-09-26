@@ -2753,14 +2753,17 @@ console.log('\none post on the blog (jsdom)');
   const page = await mountPost('');
   check('the post is headed by its title', page.host.querySelector('h1')?.textContent, '第一篇文章');
   // The reading card is the screen: no width limit of its own, and no page
-  // padding around it. The text inside keeps a readable column.
+  // padding around it. The text takes the width it is given - a capped column
+  // left empty glass either side on a wide window - so the spacing comes from
+  // the gutter rather than from a maximum width.
   const surface = page.host.querySelector('[data-blog-surface]');
   const surfaceClass = surface?.className ?? '';
   check('the reading card is there', Boolean(surface), true);
   check('taking the whole width', surfaceClass.includes('w-full'), true);
   check('and the whole height', surfaceClass.includes('h-full'), true);
   check('with no width limit of its own', /(^|\s)max-w-/.test(surfaceClass), false);
-  check('while the text keeps a readable column', Boolean(page.host.querySelector('.max-w-4xl')), true);
+  check('and the text is not held back by one either', Boolean(page.host.querySelector('.max-w-4xl')), false);
+  check('with the gutter doing the spacing instead', page.host.innerHTML.includes('px-7'), true);
   check('and the way into the panel is here too', Boolean(page.host.querySelector('[data-blog-manager]')), true);
   check('with when it went up', page.host.innerHTML.includes('发布'), true);
   check('when it last changed', page.host.innerHTML.includes('修改'), true);

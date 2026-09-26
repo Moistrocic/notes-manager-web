@@ -146,7 +146,10 @@ export function BlogPostPage({ path, anchor, onOpenPost, onOpenIndex }: BlogPost
                 <BlogNotice title="博客还没有开放" message="这篇文章暂时不对访客显示。" />
               </div>
             ) : (
-              <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
+              // The column is as wide as the surface it sits on: a capped one
+              // left a band of empty glass either side on a wide window. The
+              // gutter comes from the padding instead.
+              <div className="flex min-h-0 w-full flex-1 flex-col">
                 <div className="shrink-0 px-7 pb-1 pt-7">
                   <h1 className="text-[27px] font-semibold leading-tight tracking-tight text-[var(--text)]">
                     {load.post.title}
