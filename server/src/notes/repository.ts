@@ -5,7 +5,7 @@ import type { ResolvedStorage, StorageManager } from '../storage/manager.js';
 import type { StorageDriver } from '../storage/types.js';
 import { StorageError, baseName, joinPath, normalisePath, parentPath } from '../storage/types.js';
 import { parseDocument, serialiseDocument } from './frontmatter.js';
-import { countWords, hashId, slugify, toExcerpt } from './markdown.js';
+import { countWords, hashId, referencedPaths, slugify, toExcerpt, toSummaryMarkdown } from './markdown.js';
 
 const log = createLogger('notes');
 
@@ -51,6 +51,10 @@ export type EntryKind = 'note' | 'image' | 'file';
 export interface NoteSummary {
   id: string;
   kind: EntryKind;
+  /** Published to the blog - a mark that only a note can carry. */
+  blog: boolean;
+  /** When it was first published, so the blog never reorders itself. */
+  blogAt: string | null;
   title: string;
   tags: string[];
   pinned: boolean;
@@ -80,6 +84,26 @@ export interface NotePatch {
   favorite?: boolean;
   color?: string | null;
   folder?: string;
+  /** Publish to, or withdraw from, the blog. */
+  blog?: boolean;
+}
+
+/** One card on the blog: a published note, without its body. */
+export interface BlogPostSummary {
+  id: string;
+  /** Storage path, which is also the address of its page. */
+  path: string;
+  title: string;
+  /** The opening of the note, as markdown, for the card to render. */
+  summary: string;
+  publishedAt: string;
+  updatedAt: string;
+  wordCount: number;
+  tags: string[];
+}
+
+export interface BlogPost extends BlogPostSummary {
+  content: string;
 }
 
 export interface CreateNoteInput extends NotePatch {
@@ -181,6 +205,18 @@ function toIso(value: unknown, fallback: number): string {
   }
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   return new Date(fallback || Date.now()).toISOString();
+}
+
+/** An ISO timestamp from front matter, or null when there is no usable one. */
+function toIsoOrNull(value: unknown): string | null {
+  // A hand written `blogAt: 2020-01-01` comes back from YAML as a Date, while
+  // the one this server writes is a string: both mean the same moment.
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+  }
+  return null;
 }
 
 function toTags(value: unknown): string[] {
@@ -338,6 +374,8 @@ export class NotesRepository {
     const summary: NoteSummary = {
       id,
       kind: 'note',
+      blog: attrs.blog === true,
+      blogAt: toIsoOrNull(attrs.blogAt),
       title,
       tags: toTags(attrs.tags),
       pinned: attrs.pinned === true,
@@ -375,6 +413,10 @@ export class NotesRepository {
       // Files carry no front matter to hold an id, so the path is the identity.
       id: hashId(file.path),
       kind: file.kind,
+      // A file has no front matter to hold the mark, so it can never be on the
+      // blog - which is also why nothing else here has to think about it.
+      blog: false,
+      blogAt: null,
       title: baseName(file.path),
       tags: [],
       pinned: false,
@@ -619,6 +661,7 @@ export class NotesRepository {
     if (current.kind !== 'note') return this.updateFile(storage, ns, current, patch);
     const doc = parseDocument(await driver.readText(current.path));
     const attributes: Record<string, unknown> = { ...doc.attributes };
+    const now = new Date();
 
     if (patch.title !== undefined) attributes.title = patch.title.trim() || current.title;
     if (patch.tags !== undefined) attributes.tags = toTags(patch.tags);
@@ -628,9 +671,22 @@ export class NotesRepository {
       if (patch.color) attributes.color = patch.color;
       else delete attributes.color;
     }
+    if (patch.blog !== undefined) {
+      if (patch.blog) {
+        attributes.blog = true;
+        // Stamped the first time only, and kept afterwards: marking a note as
+        // published again - or just saving it - must not move it back to the
+        // top of the blog.
+        if (!current.blog || !current.blogAt) attributes.blogAt = now.toISOString();
+      } else {
+        // Withdrawn means gone: a stale blogAt would publish it again, dated,
+        // the moment somebody flipped the switch back.
+        delete attributes.blog;
+        delete attributes.blogAt;
+      }
+    }
     attributes.id = current.id;
     if (!attributes.created) attributes.created = current.created;
-    const now = new Date();
     attributes.updated = now.toISOString();
 
     const body = patch.content !== undefined ? patch.content : doc.body;
@@ -1334,6 +1390,67 @@ export class NotesRepository {
       folders: new Set(notes.map((n) => n.folder).filter(Boolean)).size,
       words,
       updatedAt: updated ? new Date(updated).toISOString() : null,
+    };
+  }
+
+  /**
+   * Every published note, newest publication first.
+   *
+   * Only notes: a picture has no front matter to hold the mark, so nothing else
+   * can ever be in this list.
+   */
+  async blogPosts(user: SessionUser | null | undefined): Promise<BlogPostSummary[]> {
+    const notes = await this.list(user);
+    return notes
+      .filter((note) => note.kind === 'note' && note.blog)
+      .map((note) => this.toBlogSummary(note))
+      .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+  }
+
+  /** One published note with its body, or null when there is no such post. */
+  async publishedPost(user: SessionUser | null | undefined, storagePath: string): Promise<BlogPost | null> {
+    const path = normalisePath(String(storagePath ?? ''));
+    if (path === '/') return null;
+    const notes = await this.list(user);
+    const found = notes.find((note) => note.path === path && note.kind === 'note' && note.blog);
+    return found ? { ...this.toBlogSummary(found), content: found.content } : null;
+  }
+
+  /**
+   * The bytes of one file, if the blog is allowed to serve it.
+   *
+   * A whitelist rather than a filter: a published note may hand out its own
+   * file and the files its body actually points at - the pictures in it - and
+   * nothing else. Every other note in the folder keeps its bytes to itself,
+   * which is the whole reason the blog cannot just expose the storage root.
+   */
+  async publishedFile(
+    user: SessionUser | null | undefined,
+    storagePath: string,
+  ): Promise<{ path: string; data: Uint8Array } | null> {
+    const path = normalisePath(String(storagePath ?? ''));
+    if (path === '/' || path.split('/').some((segment) => segment.startsWith('.'))) return null;
+    const notes = await this.list(user);
+    const allowed = notes
+      .filter((note) => note.kind === 'note' && note.blog)
+      .some((post) => post.path === path || referencedPaths(post.content, post.path).includes(path));
+    if (!allowed) return null;
+    // readBinary re-checks the path, so nothing here can reach outside the root.
+    return this.readBinary(user, path);
+  }
+
+  private toBlogSummary(note: Note): BlogPostSummary {
+    return {
+      id: note.id,
+      path: note.path,
+      title: note.title,
+      summary: toSummaryMarkdown(note.content),
+      // A note published before the timestamp existed still needs a date; its
+      // last change is the closest true answer there is.
+      publishedAt: note.blogAt || note.updated || note.created,
+      updatedAt: note.updated,
+      wordCount: note.wordCount,
+      tags: note.tags,
     };
   }
 

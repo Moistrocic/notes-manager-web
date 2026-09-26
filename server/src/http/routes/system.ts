@@ -80,6 +80,9 @@ export function systemRoutes(services: Services): Router {
         })),
       ]);
       const user = req.session ? (({ openlistToken: _t, ...rest }) => rest)(req.session) : null;
+      // Asked before signing in: the front page is either the blog or the panel,
+      // and only this answer tells it which.
+      const blog = { enabled: services.settings.effective().blog.enabled };
       res.json({
         version: services.config.version,
         basePath: services.config.basePath,
@@ -88,6 +91,7 @@ export function systemRoutes(services: Services): Router {
         storage,
         providers,
         user,
+        blog,
       });
     }),
   );

@@ -1,4 +1,4 @@
-import express, { Router } from 'express';
+import express, { Router, type Response } from 'express';
 import type { Services } from '../../services.js';
 import { createLogger } from '../../logger.js';
 import { handler, requireAuth } from '../middleware.js';
@@ -58,6 +58,25 @@ function contentTypeFor(name: string): string {
   const idx = name.lastIndexOf('.');
   const extension = idx > 0 ? name.slice(idx).toLowerCase() : '';
   return CONTENT_TYPES[extension] ?? 'application/octet-stream';
+}
+
+/**
+ * The headers that hand a file's own bytes back.
+ *
+ * Shared with the blog, which serves the same kind of thing to the public with
+ * a different cache lifetime. The bytes come from the API's own origin, so
+ * nothing inside them may act as a document: an SVG that scripts on load would
+ * otherwise run with the visitor's session (or, on the blog, the site's)
+ * behind it.
+ */
+export function fileResponseHeaders(res: Response, name: string, cacheControl: string): void {
+  res.setHeader('Content-Type', contentTypeFor(name));
+  res.setHeader('Content-Disposition', dispositionHeader('inline', name));
+  res.setHeader('Cache-Control', cacheControl);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (contentTypeFor(name) === 'image/svg+xml') {
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  }
 }
 
 /**
@@ -283,17 +302,7 @@ router.use((req, res, next) => {
     '/file',
     handler(async (req, res) => {
       const { path: storagePath, data } = await services.notes.readBinary(req.session, String(req.query.path ?? ''));
-      const name = baseName(storagePath);
-      res.setHeader('Content-Type', contentTypeFor(name));
-      res.setHeader('Content-Disposition', dispositionHeader('inline', name));
-      res.setHeader('Cache-Control', 'private, max-age=60');
-      // The bytes come from the API's own origin, so nothing inside them may
-      // act as a document: an SVG that scripts on load would otherwise run with
-      // the visitor's session behind it.
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      if (contentTypeFor(name) === 'image/svg+xml') {
-        res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-      }
+      fileResponseHeaders(res, baseName(storagePath), 'private, max-age=60');
       res.send(Buffer.from(data));
     }),
   );
@@ -442,6 +451,7 @@ router.use((req, res, next) => {
       if (typeof body.favorite === 'boolean') patch.favorite = body.favorite;
       if (body.color === null || typeof body.color === 'string') patch.color = body.color as string | null;
       if (typeof body.folder === 'string') patch.folder = body.folder;
+      if (typeof body.blog === 'boolean') patch.blog = body.blog;
       const note = await services.notes.update(req.session, String(req.params.id), patch);
       res.json({ note });
     }),

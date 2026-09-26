@@ -399,6 +399,12 @@ const { OpenListStorageDriver } = await import(
 const { notesRoutes } = await import(
   'file://' + path.join(HERE, '..', 'server', 'dist', 'http', 'routes', 'notes.js').replace(/\\/g, '/')
 );
+const { blogRoutes } = await import(
+  'file://' + path.join(HERE, '..', 'server', 'dist', 'http', 'routes', 'blog.js').replace(/\\/g, '/')
+);
+const { systemRoutes } = await import(
+  'file://' + path.join(HERE, '..', 'server', 'dist', 'http', 'routes', 'system.js').replace(/\\/g, '/')
+);
 
 console.log('');
 console.log('note rename + folder move');
@@ -425,13 +431,21 @@ console.log('note rename + folder move');
     next();
   });
   app.use('/api/notes', notesRoutes({ notes }));
+  // The blog is a setting, so the fixture flips it the way the panel does.
+  const blogFlag = { enabled: false };
+  app.use(
+    '/api/blog',
+    blogRoutes({ notes, settings: { effective: () => ({ blog: { enabled: blogFlag.enabled } }) } }),
+  );
 
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
-  const base = 'http://127.0.0.1:' + server.address().port + '/api/notes';
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  const base = origin + '/api/notes';
+  const blogBase = origin + '/api/blog';
 
-  const call = async (method, url, body) => {
-    const response = await fetch(base + url, {
+  const callAt = async (root, method, url, body) => {
+    const response = await fetch(root + url, {
       method,
       headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -445,6 +459,8 @@ console.log('note rename + folder move');
     }
     return { status: response.status, payload };
   };
+  const call = (method, url, body) => callAt(base, method, url, body);
+  const blogCall = (method, url, body) => callAt(blogBase, method, url, body);
 
   const fsPath = (storagePath) => path.join(root, ...storagePath.replace(/^\//, '').split('/'));
   const onDisk = (storagePath) => existsSync(fsPath(storagePath));
@@ -473,16 +489,19 @@ console.log('note rename + folder move');
   };
 
   // A response whose body is the bytes themselves, not JSON.
-  const getBytes = async (url) => {
-    const response = await fetch(base + url);
+  const bytesAt = async (root, url) => {
+    const response = await fetch(root + url);
     const body = Buffer.from(await response.arrayBuffer());
     return {
       status: response.status,
       type: response.headers.get('content-type'),
       disposition: response.headers.get('content-disposition') ?? '',
+      cache: response.headers.get('cache-control') ?? '',
       body: [...body],
     };
   };
+  const getBytes = (url) => bytesAt(base, url);
+  const blogBytes = (url) => bytesAt(blogBase, url);
 
   try {
     /* ---- a new title renames the file on disk --------------------------- */
@@ -772,11 +791,222 @@ console.log('note rename + folder move');
     const backFromSuffix = await call('POST', '/' + renamedInTrash.id + '/restore');
     check('the suffixed one returns to its own folder', [backFromSuffix.payload.note.path.startsWith('/重名'), backFromSuffix.payload.note.folder], [true, '']);
     check('with its own bytes', [...readFileSync(fsPath(backFromSuffix.payload.note.path))], [...png2]);
+
+    /* ---- the blog -------------------------------------------------------- */
+    // Off until somebody turns it on, and even then the index answers rather
+    // than 404s: the front page reads it before it knows what to show.
+    const blogOff = await blogCall('GET', '');
+    check('the blog is off until it is switched on', [blogOff.status, blogOff.payload.enabled, blogOff.payload.posts], [200, false, []]);
+    check('and still says what it is called', typeof blogOff.payload.title === 'string' && blogOff.payload.title.length > 0, true);
+    const offPost = await blogCall('GET', '/post?path=' + encodeURIComponent('/Renamed-Note.md'));
+    check('nothing is readable while it is off', [offPost.status, offPost.payload.error.code], [404, 'blog_disabled']);
+    const offFile = await blogCall('GET', '/file?path=' + encodeURIComponent('/Renamed-Note.md'));
+    check('and no file is served either', [offFile.status, offFile.payload.error.code], [404, 'blog_disabled']);
+
+    blogFlag.enabled = true;
+
+    const firstBlog = await call('POST', '', { title: '博客第一篇', content: '# 开场\n\n第一段正文\n\n第二段正文\n' });
+    const firstPublished = await call('PUT', '/' + firstBlog.payload.note.id, { blog: true });
+    check('publishing writes both marks', [firstPublished.payload.note.blog, typeof firstPublished.payload.note.blogAt], [true, 'string']);
+    check('and they reach the file', readFileSync(fsPath(firstPublished.payload.note.path), 'utf8').includes('blog: true'), true);
+
+    const publishedAt = firstPublished.payload.note.blogAt;
+    const listedPublished = (await call('GET', '')).payload.notes.find((note) => note.id === firstBlog.payload.note.id);
+    check('the panel sees the mark on the note as well', [listedPublished.blog, listedPublished.blogAt], [true, publishedAt]);
+
+    const publishedAgain = await call('PUT', '/' + firstBlog.payload.note.id, { blog: true });
+    check('publishing again keeps the moment it first went out', publishedAgain.payload.note.blogAt, publishedAt);
+    const savedLater = await call('PUT', '/' + firstBlog.payload.note.id, { pinned: true });
+    check('and so does any other save', savedLater.payload.note.blogAt, publishedAt);
+
+    const secondBlog = await call('POST', '', { title: '博客第二篇', content: '第二篇正文' });
+    // A later publication is a later date; the two writes must not share a
+    // millisecond, or the order being asserted below would be a coin toss.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const secondPublished = await call('PUT', '/' + secondBlog.payload.note.id, { blog: true });
+
+    const blogIndex = await blogCall('GET', '');
+    const myPosts = blogIndex.payload.posts.filter((post) => ['博客第一篇', '博客第二篇'].includes(post.title));
+    check('the index lists what was published, newest first', [blogIndex.payload.enabled, myPosts.map((post) => post.title)], [true, ['博客第二篇', '博客第一篇']]);
+    check(
+      'a card carries exactly what the page needs',
+      Object.keys(myPosts[0]).sort(),
+      ['id', 'path', 'publishedAt', 'summary', 'tags', 'title', 'updatedAt', 'wordCount'],
+    );
+
+    // Written by hand with an older publication date: the order follows blogAt,
+    // not the note's own last change.
+    writeFileSync(
+      path.join(root, '旧博客.md'),
+      '---\nid: oldblog\ntitle: 旧博客\nblog: true\nblogAt: "2020-01-01T00:00:00.000Z"\n---\n\n旧正文\n',
+      'utf8',
+    );
+    notes.clearCaches();
+    const withOldest = await blogCall('GET', '');
+    check('an older publication sorts behind the newer ones', withOldest.payload.posts[withOldest.payload.posts.length - 1].title, '旧博客');
+
+    const draft = await call('POST', '', { title: '没有发布的草稿', content: '草稿正文' });
+    check('a note nobody published stays out of the index', (await blogCall('GET', '')).payload.posts.some((post) => post.id === draft.payload.note.id), false);
+    const draftPost = await blogCall('GET', '/post?path=' + encodeURIComponent(draft.payload.note.path));
+    check('and its body is not readable', [draftPost.status, draftPost.payload.error.code], [404, 'post_not_found']);
+    const missingPost = await blogCall('GET', '/post?path=' + encodeURIComponent('/没有这篇.md'));
+    check('an unknown path is a 404 too', [missingPost.status, missingPost.payload.error.code], [404, 'post_not_found']);
+
+    const readBack = await blogCall('GET', '/post?path=' + encodeURIComponent(firstPublished.payload.note.path));
+    check('a published note reads back with its body', [readBack.status, readBack.payload.enabled, readBack.payload.post.title], [200, true, '博客第一篇']);
+    check('without its front matter', readBack.payload.post.content.trimEnd().startsWith('# 开场'), true);
+    check('dated from the moment it was published', readBack.payload.post.publishedAt, publishedAt);
+    check('and summarised as markdown', readBack.payload.post.summary.startsWith('# 开场'), true);
+
+    const withdrawn = await call('PUT', '/' + secondBlog.payload.note.id, { blog: false });
+    check('withdrawing clears both marks', [withdrawn.payload.note.blog, withdrawn.payload.note.blogAt], [false, null]);
+    const withdrawnFile = readFileSync(fsPath(withdrawn.payload.note.path), 'utf8');
+    check('and removes them from the file', [withdrawnFile.includes('blog:'), withdrawnFile.includes('blogAt:')], [false, false]);
+    const gonePost = await blogCall('GET', '/post?path=' + encodeURIComponent(withdrawn.payload.note.path));
+    check('so it is no longer readable', [gonePost.status, gonePost.payload.error.code], [404, 'post_not_found']);
+
+    /* ---- what a post may hand out ---------------------------------------- */
+    await call('POST', '/folders', { path: '博客' });
+    await call('POST', '/folders', { path: '公共' });
+    const blogImage = await upload('博客图.png', png, '博客');
+    await upload('公共图.png', png2, '公共');
+    await upload('无关文件.png', png, '博客');
+
+    const article = await call('POST', '', {
+      title: '带图的文章',
+      folder: '博客',
+      content: '![图](./博客图.png)\n\n[公共图](../公共/公共图.png)\n\n正文\n',
+    });
+    const articlePost = await call('PUT', '/' + article.payload.note.id, { blog: true });
+
+    const ownFile = await blogBytes('/file?path=' + encodeURIComponent(articlePost.payload.note.path));
+    check('a post can hand out its own file', [ownFile.status, ownFile.type], [200, 'text/markdown; charset=utf-8']);
+    check('and it is cached for the public, not for one session', ownFile.cache, 'public, max-age=300');
+
+    const relative = await blogBytes('/file?path=' + encodeURIComponent(blogImage.payload.note.path));
+    check('a picture written relative to the post is served', [relative.status, relative.type, relative.body], [200, 'image/png', [...png]]);
+    const escaped = await blogBytes('/file?path=' + encodeURIComponent('/公共/公共图.png'));
+    check('including one reached with ../', [escaped.status, escaped.body], [200, [...png2]]);
+
+    const strayFile = await blogCall('GET', '/file?path=' + encodeURIComponent('/博客/无关文件.png'));
+    check('a file no post points at is not served', [strayFile.status, strayFile.payload.error.code], [404, 'file_not_published']);
+    const noSuchFile = await blogCall('GET', '/file?path=' + encodeURIComponent('/没有这个.png'));
+    check('nor is a file that does not exist', [noSuchFile.status, noSuchFile.payload.error.code], [404, 'file_not_published']);
+    const draftFile = await blogCall('GET', '/file?path=' + encodeURIComponent(draft.payload.note.path));
+    check('nor an unpublished note', [draftFile.status, draftFile.payload.error.code], [404, 'file_not_published']);
+    const internalFile = await blogCall('GET', '/file?path=' + encodeURIComponent('/.trash-files.json'));
+    check('and never an internal file', [internalFile.status, internalFile.payload.error.code], [404, 'file_not_published']);
   } finally {
     const closed = new Promise((resolve) => server.close(resolve));
     server.closeAllConnections?.();
     await closed;
     rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Blog summaries                                                              */
+/* -------------------------------------------------------------------------- */
+const { toSummaryMarkdown, referencedPaths } = await import(
+  'file://' + path.join(HERE, '..', 'server', 'dist', 'notes', 'markdown.js').replace(/\\/g, '/')
+);
+
+console.log('');
+console.log('blog summaries');
+
+check('an empty note has no summary', toSummaryMarkdown('   \n\n  '), '');
+check('a short note is its own summary', toSummaryMarkdown('短正文'), '短正文');
+check('and keeps its blocks', toSummaryMarkdown('第一段\n\n第二段', 100), '第一段\n\n第二段');
+
+const manyBlocks = Array.from({ length: 20 }, (_, i) => `第${i}段：${'字'.repeat(50)}`).join('\n\n');
+const cutSummary = toSummaryMarkdown(manyBlocks, 200);
+check('a long note is cut between blocks', [cutSummary.endsWith('…'), cutSummary.length <= 201], [true, true]);
+check(
+  'so no block is left half written',
+  cutSummary.replace(/…$/, '').split('\n\n').every((block) => manyBlocks.includes(block)),
+  true,
+);
+
+const closedFence = '开头一段\n\n```js\nconst a = 1;\n```\n\n结尾\n';
+check('a closed code block is kept whole', toSummaryMarkdown(closedFence, 30), '开头一段\n\n```js\nconst a = 1;\n```…');
+
+const openFence = '开头一段\n\n```js\nlet a = 1;\n\n还是代码\n\n结尾一段';
+check('an unclosed code fence stops the summary', toSummaryMarkdown(openFence, 30), '开头一段…');
+check('without a fence, one huge block is still cut', toSummaryMarkdown('字'.repeat(400), 100), `${'字'.repeat(100)}…`);
+
+console.log('');
+console.log('blog references');
+
+const refs = referencedPaths(
+  '![图](./图.png)\n\n[文件](../公共/a.pdf)\n\n[外链](https://example.com/x.png)\n\n[锚点](#标题)\n\n[绝对](/a/b.png)',
+  '/博客/文章.md',
+);
+check('the paths a note points at, resolved', refs, ['/博客/图.png', '/公共/a.pdf', '/a/b.png']);
+check('a Chinese name is decoded', referencedPaths('![](/图/%E9%A3%8E%E6%99%AF.png)', '/a.md'), ['/图/风景.png']);
+check('angle brackets and titles are read too', referencedPaths('[x](</a b.png> "标题")', '/a.md'), ['/a b.png']);
+check('a note that points at nothing has no references', referencedPaths('只有正文', '/a.md'), []);
+
+/* -------------------------------------------------------------------------- */
+/* The blog switch                                                             */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('blog settings');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-blog-'));
+  try {
+    const settings = new SettingsStore(dir);
+    check('a fresh installation has the blog off', settings.effective().blog.enabled, false);
+    check('and the raw settings carry the switch', settings.raw().blog, { enabled: false });
+
+    settings.update({ blog: { enabled: true } });
+    check('turning it on survives a restart', new SettingsStore(dir).effective().blog.enabled, true);
+    check('an unrelated patch leaves it alone', settings.update({ guest: { enabled: true } }).blog.enabled, true);
+    check('and an empty blog patch keeps it', settings.update({ blog: {} }).blog.enabled, true);
+    check('turning it off is remembered too', settings.update({ blog: { enabled: false } }).blog.enabled, false);
+
+    // The public status is what the front page reads before anybody signs in.
+    const statusSettings = new SettingsStore(dir);
+    statusSettings.update({ blog: { enabled: true } });
+    const app = express();
+    app.use(express.json());
+    // The settings endpoint is the administrator's; the status endpoint never
+    // asks who is calling.
+    app.use((req, _res, next) => {
+      req.session = req.path === '/status' ? null : { role: 'admin' };
+      next();
+    });
+    app.use(
+      '/api/system',
+      systemRoutes({
+        config: { version: '1.1.0', basePath: '', publicUrl: '' },
+        settings: statusSettings,
+        storage: {
+          status: async () => ({ driver: 'local', mode: 'local', displayRoot: dir, degraded: false, detail: 'test' }),
+          probeOpenList: async () => ({ reachable: false, initialized: false, configured: false }),
+        },
+        auth: { localEnabled: true },
+      }),
+    );
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const status = await (await fetch(`http://127.0.0.1:${server.address().port}/api/system/status`)).json();
+      check('the public status announces the blog', status.blog, { enabled: true });
+
+      const adminPayload = await (await fetch(`http://127.0.0.1:${server.address().port}/api/system/settings`)).json();
+      check(
+        'and the administrator sees the switch in the settings payload',
+        [adminPayload.settings.blog, adminPayload.effective.blog],
+        [{ enabled: true }, { enabled: true }],
+      );
+    } finally {
+      const closed = new Promise((resolve) => server.close(resolve));
+      server.closeAllConnections?.();
+      await closed;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

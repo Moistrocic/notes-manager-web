@@ -69,10 +69,21 @@ export interface GuestSettings {
   enabled: boolean;
 }
 
+/**
+ * Whether the site's front page publishes the notes marked `blog: true`.
+ *
+ * Off until somebody decides otherwise: a notes folder is private, and this
+ * switch is the only thing between a note and the open web.
+ */
+export interface BlogSettings {
+  enabled: boolean;
+}
+
 export interface AppSettings {
   storage: StorageSettings;
   background: BackgroundSettings;
   guest: GuestSettings;
+  blog: BlogSettings;
 }
 
 const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene'];
@@ -137,6 +148,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   background: DEFAULT_BACKGROUND,
   guest: { enabled: true },
+  blog: { enabled: false },
 };
 
 export interface ServerConfig {
@@ -311,6 +323,7 @@ export class SettingsStore {
       },
       background: structuredClone(this.data.background),
       guest: structuredClone(this.data.guest),
+      blog: structuredClone(this.data.blog),
       sources,
     };
   }
@@ -340,6 +353,7 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
     if (s.local && typeof s.local.root === 'string') out.storage.local.root = s.local.root;
   }
   if (patch.guest && typeof patch.guest.enabled === 'boolean') out.guest.enabled = patch.guest.enabled;
+  if (patch.blog && typeof patch.blog.enabled === 'boolean') out.blog.enabled = patch.blog.enabled;
   if (patch.background) {
     const b = (patch.background ?? {}) as Partial<BackgroundSettings>;
     const current = out.background;

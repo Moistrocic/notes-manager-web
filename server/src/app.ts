@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createLogger } from './logger.js';
 import { createContextMiddleware } from './http/middleware.js';
 import { authRoutes } from './http/routes/auth.js';
+import { blogRoutes } from './http/routes/blog.js';
 import { notesRoutes } from './http/routes/notes.js';
 import { systemRoutes } from './http/routes/system.js';
 import { fontRoutes } from './http/routes/fonts.js';
@@ -41,6 +42,9 @@ export function createApp(services: Services): Express {
     next();
   });
   router.use('/api/auth', authRoutes(services));
+  // The blog is the site's public face: no session, read-only, and only ever
+  // what its notes have been marked as published.
+  router.use('/api/blog', blogRoutes(services));
   router.use('/api/notes', notesRoutes(services));
   router.use('/api/system', systemRoutes(services));
   router.use('/api/background', backgroundRoutes(services));
