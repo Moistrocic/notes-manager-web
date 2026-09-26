@@ -38,6 +38,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 前端全局状态（只有一个 store） | `web/src/store/useAppStore.ts` |
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
+| 分栏两侧的滚动同步 | `web/src/lib/scroll-sync.ts` + `Editor.tsx` 里的 `data-sync-scroll` 按钮与监听 |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
 | 博客（公开页面与公开接口） | `web/src/components/blog/**` + `web/src/lib/blog-api.ts` + `server/src/http/routes/blog.ts` |
 | 发布管理（把笔记发布到博客上） | `web/src/components/publish/**` + store 的 `setPublish` / `forgetPublish` + `server/src/http/routes/notes.ts` 的 `/api/notes/publish` |
@@ -50,6 +51,13 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   前端要跟随接口返回的 `id`（store 已有先例），服务端删除接口会把回收站里的新 `id` 一并返回。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
+- **滚动同步的断言要自己搭舞台**：jsdom 没有布局，`scrollHeight` / `clientHeight` 得用
+  `Object.defineProperty` 给出、`scroll` 事件得自己派发（改 `scrollTop` 不会触发它）。
+  被测的那一侧刚被写过会忽略自己那一帧的事件（防回声），所以模拟「用户滚动被镜像的那一侧」
+  之前要**等一帧**（`await flush()`），否则什么都不会发生——那是预期，不是 bug。
+  点大纲/锚点之后预览有一段「自己在滚」的时间（`PreviewApi.isSelfScrolling()`），这段时间不镜像；
+  jsdom 里 `scrollTo` 被打桩、不会自己产生 scroll 事件，所以那段等于 300ms 兜底计时——
+  要在同一个场景里测镜像，就先等它过去。
 - **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
   博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
   状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
