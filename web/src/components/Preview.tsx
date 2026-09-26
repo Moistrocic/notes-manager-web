@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { cn } from '../lib/cn';
-import { decorateMarkdown, renderMarkdown } from '../lib/markdown';
+import { decorateMarkdown, renderMarkdown, resolveImages } from '../lib/markdown';
 import { slugifyHeading } from '../lib/markdown';
 import { normaliseHeading } from '../lib/outline';
 
@@ -18,6 +18,12 @@ export interface PreviewApi {
 
 interface PreviewProps {
   content: string;
+  /**
+   * Where the note being rendered lives. Relative pictures inside it are read
+   * against this note's own folder, so `../img/a.png` finds the file the note
+   * means rather than one beside the panel's address.
+   */
+  notePath?: string;
   className?: string;
   /** Called for links that point at another note (see `isInternalLink`). */
   onOpenLink?: (href: string) => void;
@@ -26,13 +32,18 @@ interface PreviewProps {
   apiRef?: { current: PreviewApi | null };
 }
 
-export function Preview({ content, className, onOpenLink, onOpenAnchor, apiRef }: PreviewProps) {
+export function Preview({ content, notePath = '', className, onOpenLink, onOpenAnchor, apiRef }: PreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(content), [content]);
 
   useEffect(() => {
-    if (containerRef.current) decorateMarkdown(containerRef.current);
-  }, [html]);
+    const container = containerRef.current;
+    if (!container) return;
+    decorateMarkdown(container);
+    // Pictures last: a note opened from another folder has to be read against
+    // that folder, not against the one the previous note lived in.
+    resolveImages(container, notePath);
+  }, [html, notePath]);
 
   /** Scrolls only the preview pane and flashes the target. */
   const reveal = (container: HTMLElement, target: HTMLElement) => {

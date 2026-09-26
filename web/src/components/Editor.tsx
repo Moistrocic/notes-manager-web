@@ -1,32 +1,24 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Bold,
-  Code2,
   Columns2,
   Download,
   Eye,
-  Heading1,
-  Heading2,
-  Italic,
-  Link2,
-  List,
-  ListOrdered,
+  FileQuestionMark,
+  ImageOff,
   Lock,
   Maximize2,
   Minimize2,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
-  Quote,
-  Strikethrough,
   Trash2,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { noteDownloadUrl } from '../lib/api';
+import { fileUrl, noteDownloadUrl } from '../lib/api';
 import { cn } from '../lib/cn';
-import { formatDateTime, relativeTime } from '../lib/format';
+import { formatBytes, formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
 import { extractHeadings, type Heading } from '../lib/outline';
 import { replaceAnchor } from '../lib/url';
@@ -36,25 +28,6 @@ import { CodeEditor, type EditorApi } from './CodeEditor';
 import { Preview, type PreviewApi } from './Preview';
 import { NoteMetaBar } from './NoteMetaBar';
 import { OutlinePanel } from './OutlinePanel';
-
-const TOOLBAR_GROUPS: { icon: typeof Bold; label: string; run: (api: EditorApi) => void }[][] = [
-  [
-    { icon: Bold, label: '加粗 (Ctrl+B)', run: (api) => api.wrap('**', '**', '粗体') },
-    { icon: Italic, label: '斜体 (Ctrl+I)', run: (api) => api.wrap('*', '*', '斜体') },
-    { icon: Strikethrough, label: '删除线', run: (api) => api.wrap('~~', '~~', '删除线') },
-    { icon: Code2, label: '行内代码', run: (api) => api.wrap('`', '`', 'code') },
-  ],
-  [
-    { icon: Heading1, label: '一级标题', run: (api) => api.linePrefix('# ') },
-    { icon: Heading2, label: '二级标题', run: (api) => api.linePrefix('## ') },
-    { icon: Quote, label: '引用', run: (api) => api.linePrefix('> ') },
-  ],
-  [
-    { icon: List, label: '无序列表', run: (api) => api.linePrefix('- ') },
-    { icon: ListOrdered, label: '有序列表', run: (api) => api.linePrefix('1. ') },
-    { icon: Link2, label: '链接', run: (api) => api.wrap('[', '](https://)', '链接文字') },
-  ],
-];
 
 export function Editor() {
   const activeNote = useAppStore((s) => s.activeNote);
@@ -67,6 +40,8 @@ export function Editor() {
   const saving = useAppStore((s) => s.saving);
   const dirty = useAppStore((s) => s.dirty);
   const lastSavedAt = useAppStore((s) => s.lastSavedAt);
+  /** What the server is known to hold; the baseline a rename is committed against. */
+  const lastSaved = useAppStore((s) => s.lastSaved);
   const theme = useAppStore((s) => s.theme);
   const metaOpen = useAppStore((s) => s.metaOpen);
   const toggleMeta = useAppStore((s) => s.toggleMeta);
@@ -86,6 +61,20 @@ export function Editor() {
   const previewApiRef = useRef<PreviewApi | null>(null);
   const panesRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+
+  /**
+   * What is open. A note is written, a picture is looked at, and anything
+   * else is only ever downloaded. A server that predates `kind` is serving
+   * notes, which is all the editor used to open.
+   */
+  const noteKind = activeNote?.kind ?? 'note';
+  const isNote = noteKind === 'note';
+
+  // The failure belonged to the picture that was open, not to this one.
+  useEffect(() => {
+    setImageFailed(false);
+  }, [activeNote?.path]);
 
   const wordCount = useMemo(() => {
     const text = activeNote?.content ?? '';
@@ -193,6 +182,37 @@ export function Editor() {
 
   if (!activeNote) return null;
 
+  /** The title the server is known to hold - where a rollback lands. */
+  const savedTitle = lastSaved?.title ?? activeNote.title;
+
+  /** The file the server stores, front matter and all - whatever kind it is. */
+  const downloadActive = () => {
+    window.location.href = noteDownloadUrl(activeNote.id);
+  };
+
+  /**
+   * Commits the title, and the only place a rename is sent.
+   *
+   * Blur is the moment the user has stopped typing, so that is when the request
+   * goes out. An empty field is not a title - there would be no name left to
+   * slugify - so the saved one comes back instead, and an untouched field costs
+   * nothing at all.
+   */
+  const commitTitle = () => {
+    if (!canWrite) return;
+    const trimmed = activeNote.title.trim();
+    if (!trimmed) {
+      if (savedTitle !== activeNote.title) patchActive({ title: savedTitle });
+      return;
+    }
+    // Local only: patchActive writes nothing. It recomputes `dirty`
+    // synchronously, so the store - not this render - decides whether the note
+    // really holds something the server does not. Text typed and then typed
+    // back is not a change, and must not fire a request.
+    patchActive({ title: trimmed });
+    if (useAppStore.getState().dirty) void saveActive(true);
+  };
+
   const modeOptions = [
     { value: 'edit' as const, label: '编辑', icon: Pencil },
     { value: 'split' as const, label: '分栏', icon: Columns2 },
@@ -238,7 +258,7 @@ export function Editor() {
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col">
-      {focusMode ? (
+      {focusMode && isNote ? (
         /* Focus mode: nothing but the note, with a single mini bar on top. */
         <div className="flex shrink-0 items-center justify-center gap-2 border-b border-[var(--line)] px-3 py-2">
           {renderModeSwitch(true)}
@@ -266,9 +286,29 @@ export function Editor() {
         <div className="min-w-0 flex-1">
           <input
             value={activeNote.title}
+            // Typing only patches the store. A request per keystroke is what
+            // made a rename look like it rolled back: the reply came back
+            // carrying the older title and landed on the words still being
+            // typed. The blur handler below is the only writer.
             onChange={(e) => canWrite && patchActive({ title: e.target.value })}
-            onBlur={() => void saveActive(true)}
+            onBlur={commitTitle}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                // Enter commits the way leaving the field does; a newline has
+                // nowhere to go in a one-line input.
+                e.preventDefault();
+                e.currentTarget.blur();
+                return;
+              }
+              if (e.key === 'Escape') {
+                // Put the saved title back. Deliberately no blur() here: the
+                // blur handler still holds the value from before this render
+                // and would commit the title the user just escaped from.
+                if (canWrite) patchActive({ title: savedTitle });
+              }
+            }}
             readOnly={!canWrite}
+            aria-label="笔记标题"
             placeholder="笔记标题"
             className={cn(
               'focus-ring w-full truncate rounded-lg bg-transparent text-[19px] font-semibold tracking-tight text-[var(--text)] outline-none placeholder:text-[var(--faint)]',
@@ -278,11 +318,20 @@ export function Editor() {
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-[var(--faint)]">
             <span>更新于 {relativeTime(activeNote.updated)}</span>
             <span className="hidden sm:inline">·</span>
-            <span className="hidden sm:inline">{wordCount} 字</span>
+            {/* A word count is about writing; a file has a size. */}
+            <span className="hidden sm:inline">{isNote ? `${wordCount} 字` : formatBytes(activeNote.size)}</span>
             <span className="hidden md:inline">·</span>
             <span className="hidden truncate md:inline" title={activeNote.path}>
               {activeNote.path}
             </span>
+            {/* What the markdown toolbar used to carry on its right: where the
+                file lives and when it was made. Same information, one row. */}
+            <span className="hidden sm:inline">·</span>
+            <Badge tone="neutral" className="hidden sm:inline-flex">
+              {activeNote.folder ? `/${activeNote.folder}` : '根目录'}
+            </Badge>
+            <span className="hidden lg:inline">·</span>
+            <span className="hidden lg:inline">创建于 {formatDateTime(activeNote.created)}</span>
             {canWrite ? (
               <AnimatePresence mode="wait">
                 <motion.span
@@ -311,7 +360,10 @@ export function Editor() {
         </div>
 
         <div className="flex items-center gap-1.5">
-          {renderModeSwitch()}
+          {/* The three modes and the outline are about writing a note. A
+              picture has neither, and a control that cannot do anything is
+              worse than one that is not drawn. */}
+          {isNote ? renderModeSwitch() : null}
           {!sidebarOpen ? (
             <Tooltip label="显示笔记列表">
               <Button variant="ghost" size="icon" aria-label="显示笔记列表" onClick={() => toggleSidebar(true)}>
@@ -319,36 +371,33 @@ export function Editor() {
               </Button>
             </Tooltip>
           ) : null}
-          <Tooltip label={metaOpen ? '隐藏大纲' : '显示大纲'}>
-            <Button
-              variant={metaOpen ? 'soft' : 'ghost'}
-              size="icon"
-              aria-label={metaOpen ? '隐藏大纲' : '显示大纲'}
-              onClick={() => toggleMeta()}
-            >
-              <PanelRightOpen className="h-4 w-4" />
-            </Button>
-          </Tooltip>
-          <Tooltip label={focusMode ? '退出专注模式' : '专注模式（隐藏列表与工具栏）'}>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={focusMode ? '退出专注模式' : '进入专注模式'}
-              onClick={() => toggleFocusMode()}
-            >
-              <Maximize2 className="h-4 w-4" />
-            </Button>
-          </Tooltip>
-          {/* Straight to the file the server stores, front matter and all. */}
-          <Tooltip label="下载这篇笔记（.md）">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="下载这篇笔记"
-              onClick={() => {
-                window.location.href = noteDownloadUrl(activeNote.id);
-              }}
-            >
+          {isNote ? (
+            <>
+              <Tooltip label={metaOpen ? '隐藏大纲' : '显示大纲'}>
+                <Button
+                  variant={metaOpen ? 'soft' : 'ghost'}
+                  size="icon"
+                  aria-label={metaOpen ? '隐藏大纲' : '显示大纲'}
+                  onClick={() => toggleMeta()}
+                >
+                  <PanelRightOpen className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+              <Tooltip label={focusMode ? '退出专注模式' : '专注模式（隐藏列表与工具栏）'}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={focusMode ? '退出专注模式' : '进入专注模式'}
+                  onClick={() => toggleFocusMode()}
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            </>
+          ) : null}
+          {/* Straight to the file the server stores, whatever kind it is. */}
+          <Tooltip label="下载文件">
+            <Button variant="ghost" size="icon" aria-label="下载文件" onClick={downloadActive}>
               <Download className="h-4 w-4" />
             </Button>
           </Tooltip>
@@ -387,137 +436,139 @@ export function Editor() {
         </div>
       ) : null}
 
-      <NoteMetaBar readOnly={!canWrite} />
-
-      {/* Toolbar ------------------------------------------------------ */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-[var(--line)] px-4 py-2 sm:px-6">
-        {TOOLBAR_GROUPS.map((group, groupIndex) => (
-          <div key={groupIndex} className="flex items-center gap-0.5">
-            {group.map((item) => {
-              const Icon = item.icon;
-              return (
-                <Tooltip key={item.label} label={canWrite ? item.label : '没有编辑权限'} side="top">
-                <button
-                  type="button"
-                  disabled={!canWrite}
-                  onClick={() => {
-                    if (!canWrite) return;
-                    if (editorMode === 'preview') {
-                      // The editor has to mount before we can format a selection.
-                      setEditorMode('split');
-                      window.setTimeout(() => {
-                        if (apiRef.current) item.run(apiRef.current);
-                      }, 60);
-                      return;
-                    }
-                    if (apiRef.current) item.run(apiRef.current);
-                  }}
-                  className={cn(
-                    'focus-ring flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted)] transition-all duration-150',
-                    canWrite
-                      ? 'hover:bg-[color-mix(in_srgb,var(--accent)_14%,transparent)] hover:text-[var(--accent)] active:scale-90'
-                      : 'cursor-not-allowed opacity-35',
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                </button>
-                </Tooltip>
-              );
-            })}
-            {groupIndex < TOOLBAR_GROUPS.length - 1 ? <span className="mx-1 h-5 w-px bg-[var(--line)]" /> : null}
-          </div>
-        ))}
-        <div className="ml-auto flex items-center gap-2">
-          <Badge tone="neutral" className="hidden sm:inline-flex">
-            {activeNote.folder ? `/${activeNote.folder}` : '根目录'}
-          </Badge>
-          <span className="hidden text-[11px] text-[var(--faint)] lg:inline">创建于 {formatDateTime(activeNote.created)}</span>
-        </div>
-      </div>
+      {isNote ? <NoteMetaBar readOnly={!canWrite} /> : null}
 
         </>
       )}
 
       {/* Content ------------------------------------------------------ */}
       <div className="relative flex min-h-0 flex-1">
-        <div ref={panesRef} className="flex min-w-0 flex-1">
-          <AnimatePresence initial={false} mode="popLayout">
-            {editorMode !== 'preview' ? (
-              <motion.div
-                key="editor"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.22 }}
-                className="flex min-w-0 flex-col"
-                style={editorMode === 'split' ? { width: `${splitRatio * 100}%` } : { flex: '1 1 0%' }}
-              >
-                <CodeEditor
-                  value={activeNote.content}
-                  onChange={(value) => canWrite && patchActive({ content: value })}
-                  onSave={() => void saveActive(true)}
-                  dark={theme === 'dark'}
-                  apiRef={apiRef}
-                  readOnly={!canWrite}
-                  placeholderText="开始书写…  支持 Markdown 语法"
-                />
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
+        {isNote ? (
+          <>
+            <div ref={panesRef} className="flex min-w-0 flex-1">
+              <AnimatePresence initial={false} mode="popLayout">
+                {editorMode !== 'preview' ? (
+                  <motion.div
+                    key="editor"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.22 }}
+                    className="flex min-w-0 flex-col"
+                    style={editorMode === 'split' ? { width: `${splitRatio * 100}%` } : { flex: '1 1 0%' }}
+                  >
+                    <CodeEditor
+                      value={activeNote.content}
+                      // Same rule as the title: keystrokes reach the store, never the
+                      // server. The body is written when the editor loses focus or on
+                      // Ctrl/⌘+S, so a reply cannot land on top of unsaved typing.
+                      onChange={(value) => canWrite && patchActive({ content: value })}
+                      onSave={() => canWrite && void saveActive(true)}
+                      onBlur={() => canWrite && void saveActive(true)}
+                      dark={theme === 'dark'}
+                      apiRef={apiRef}
+                      readOnly={!canWrite}
+                      placeholderText="开始书写…  支持 Markdown 语法"
+                    />
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
 
-          {editorMode === 'split' ? (
-            <Tooltip label="拖动调整分栏宽度，双击恢复居中" side="top">
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="调整分栏宽度"
-                onPointerDown={startResize}
-                onDoubleClick={() => setSplitRatio(0.5)}
-                className={cn(
-                  'group relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors',
-                  dragging ? 'bg-[var(--accent)]' : 'hover:bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]',
-                )}
-              >
-                <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--line)] group-hover:bg-transparent" />
+              {editorMode === 'split' ? (
+                <Tooltip label="拖动调整分栏宽度，双击恢复居中" side="top">
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整分栏宽度"
+                    onPointerDown={startResize}
+                    onDoubleClick={() => setSplitRatio(0.5)}
+                    className={cn(
+                      'group relative w-1.5 shrink-0 cursor-col-resize bg-transparent transition-colors',
+                      dragging ? 'bg-[var(--accent)]' : 'hover:bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]',
+                    )}
+                  >
+                    <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--line)] group-hover:bg-transparent" />
+                  </div>
+                </Tooltip>
+              ) : null}
+
+              <AnimatePresence initial={false} mode="popLayout">
+                {editorMode !== 'edit' ? (
+                  <motion.div
+                    key="preview"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.22 }}
+                    className="min-w-0 flex-1"
+                  >
+                    <Preview
+                      content={activeNote.content}
+                      // Pictures inside the note are read against its own
+                      // folder, so `../img/a.png` finds the right file.
+                      notePath={activeNote.path}
+                      apiRef={previewApiRef}
+                      onOpenLink={(href) => void openInternalLink(href)}
+                      onOpenAnchor={followAnchor}
+                    />
+                  </motion.div>
+                ) : null}
+              </AnimatePresence>
+            </div>
+
+            <AnimatePresence initial={false}>
+              {metaOpen ? (
+                <motion.div
+                  key="outline"
+                  initial={{ width: 0, opacity: 0 }}
+                  animate={{ width: 228, opacity: 1 }}
+                  exit={{ width: 0, opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 320, damping: 34 }}
+                  className="shrink-0 overflow-hidden"
+                >
+                  <OutlinePanel onNavigate={goToHeading} />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
+          </>
+        ) : noteKind === 'image' ? (
+          <div className="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-auto p-6">
+            {/* A picture is shown rather than edited: no editor, no modes, no outline. */}
+            {imageFailed ? (
+              <div className="flex max-w-md flex-col items-center gap-3 text-center">
+                <ImageOff className="h-8 w-8 text-[var(--faint)]" />
+                <p className="text-sm text-[var(--muted)]">图片加载失败，可能已被移动或删除。</p>
+                <p className="max-w-full truncate text-[11.5px] text-[var(--faint)]" title={activeNote.path}>
+                  {activeNote.path}
+                </p>
+                <Button variant="soft" size="sm" onClick={downloadActive}>
+                  <Download className="h-4 w-4" />
+                  下载文件
+                </Button>
               </div>
-            </Tooltip>
-          ) : null}
-
-          <AnimatePresence initial={false} mode="popLayout">
-            {editorMode !== 'edit' ? (
-              <motion.div
-                key="preview"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.22 }}
-                className="min-w-0 flex-1"
-              >
-                <Preview
-                  content={activeNote.content}
-                  apiRef={previewApiRef}
-                  onOpenLink={(href) => void openInternalLink(href)}
-                  onOpenAnchor={followAnchor}
-                />
-              </motion.div>
-            ) : null}
-          </AnimatePresence>
-        </div>
-
-        <AnimatePresence initial={false}>
-          {metaOpen ? (
-            <motion.div
-              key="outline"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 228, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 34 }}
-              className="shrink-0 overflow-hidden"
-            >
-              <OutlinePanel onNavigate={goToHeading} />
-            </motion.div>
-          ) : null}
-        </AnimatePresence>
+            ) : (
+              <img
+                src={fileUrl(activeNote.path)}
+                alt={activeNote.title}
+                onError={() => setImageFailed(true)}
+                className="max-h-full max-w-full object-contain"
+              />
+            )}
+          </div>
+        ) : (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+            {/* Nothing else is previewed this round: the file itself is offered. */}
+            <FileQuestionMark className="h-8 w-8 text-[var(--faint)]" />
+            <p className="text-sm text-[var(--muted)]">暂不支持预览这种格式</p>
+            <p className="max-w-full truncate text-[11.5px] text-[var(--faint)]" title={activeNote.path}>
+              {activeNote.title} · {formatBytes(activeNote.size)}
+            </p>
+            <Button variant="soft" size="sm" onClick={downloadActive}>
+              <Download className="h-4 w-4" />
+              下载文件
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
