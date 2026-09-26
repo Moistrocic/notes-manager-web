@@ -11,6 +11,9 @@
   --panel: rgba(255, 255, 255, 0.72);
   --panel-solid: #ffffff;
   --elevated: #ffffff;
+  /* Menus sit over whatever they were opened on, so theirs is the one surface
+     that is fully opaque: text showing through from behind is unreadable. */
+  --menu-bg: #ffffff;
   --line: rgba(17, 24, 45, 0.09);
   --line-strong: rgba(17, 24, 45, 0.16);
   --text: #111a30;
@@ -37,6 +40,9 @@
   --panel: rgba(255, 255, 255, 0.045);
   --panel-solid: #0e1426;
   --elevated: #141b33;
+  /* Deeper than the panel it drops over, and opaque - a menu is read, not seen
+     through. */
+  --menu-bg: #070c19;
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.16);
   --text: #e9edff;

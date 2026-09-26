@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { AlertCircle, Cloud, HardDrive, KeyRound, Loader2, Lock, LogIn, Server, User, UserRound } from 'lucide-react';
+import { AlertCircle, Cloud, HardDrive, KeyRound, Loader2, Lock, LogIn, Server, User, UserRound, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Field, Input } from './ui/primitives';
 import { cn } from '../lib/cn';
@@ -7,7 +7,15 @@ import { useAppStore } from '../store/useAppStore';
 
 type Provider = 'auto' | 'openlist' | 'local';
 
-export function LoginScreen() {
+/**
+ * Signing in.
+ *
+ * `onClose` is how the front page takes itself back: the login screen is a
+ * place you entered from the blank page, so there has to be a way out of it.
+ * Rendered on its own - as the deep-link path does - there is no way back and
+ * no button offering one.
+ */
+export function LoginScreen({ onClose }: { onClose?: () => void }) {
   const providers = useAppStore((s) => s.providers);
   // Known before signing in: boot() fetches /api/system/status alongside the
   // providers, so the running version can be checked from here.
@@ -98,6 +106,16 @@ export function LoginScreen() {
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
+      {onClose ? (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="返回首页"
+          className="glass focus-ring absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-2xl text-[var(--faint)] shadow-soft transition-colors hover:text-[var(--accent)]"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      ) : null}
       <div className="relative z-10 grid w-full max-w-5xl gap-10 lg:grid-cols-[1.05fr_1fr] lg:items-center">
         {/* Hero */}
         <motion.div

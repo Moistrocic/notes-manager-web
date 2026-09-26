@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FilePlus2, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
-import { useEffect } from 'react';
+import { FilePlus2, LogIn, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { Aurora } from './components/Aurora';
 import { Wallpaper } from './components/Wallpaper';
@@ -12,13 +12,25 @@ import { NotesPanel } from './components/NoteList';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Toasts } from './components/Toasts';
 import { TrashDialog } from './components/TrashDialog';
-import { Button } from './components/ui/primitives';
+import { Button, Tooltip } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { applyAccent, applyAurora } from './lib/accent';
 import { shownWallpaper } from './lib/admin-background';
 import { cn } from './lib/cn';
+import { homeUrl, isManagerPath, noteUrl } from './lib/url';
 import { useAppStore } from './store/useAppStore';
+
+/**
+ * Which of the three front doors is showing.
+ *
+ * Two addresses, two jobs: `/` is the site's own front page - blank for now,
+ * carrying nothing but the way in - and `/manager/…` is the panel, where what
+ * follows the prefix is the note, exactly as it was before. The address decides
+ * which one is on screen, so a link to `/manager/…` opens the note and a link
+ * to `/` does not open the panel behind the visitor's back.
+ */
+type Entry = 'landing' | 'login' | 'panel';
 
 export default function App() {
   const booted = useAppStore((s) => s.booted);
@@ -38,7 +50,31 @@ export default function App() {
   // the user's own URL otherwise - the theme's background has neither.
   const layerUrl = wallpaper === settings ? wallpaperUrl : wallpaper.url;
   const wallpaperActive = wallpaper.kind !== 'none' && Boolean(layerUrl);
+  const [entered, setEntered] = useState(() =>
+    typeof window === 'undefined' ? false : isManagerPath(window.location.pathname),
+  );
   useHotkeys();
+
+  // The visitor is inside the panel's address. Whether that shows the panel or
+  // the sign-in card is then only a question of whether there is a session.
+  const entry: Entry = !entered ? 'landing' : user ? 'panel' : 'login';
+
+  /** Into the panel, address bar and all, so the link is shareable. */
+  const enterManager = () => {
+    const target = noteUrl(null);
+    if (typeof window !== 'undefined' && window.location.pathname !== target) {
+      window.history.pushState(null, '', target);
+    }
+    setEntered(true);
+  };
+
+  /** Back to the front page, which is where the login card's exit leads. */
+  const leaveManager = () => {
+    if (typeof window !== 'undefined' && window.location.pathname !== homeUrl()) {
+      window.history.replaceState(null, '', homeUrl());
+    }
+    setEntered(false);
+  };
 
   // One place decides the interface colour: the wallpaper's own when that is
   // turned on, the user's pick when it is off, the theme's colour otherwise.
@@ -61,10 +97,12 @@ export default function App() {
     void boot();
   }, [boot]);
 
-  // The address bar is the source of truth for which note is open, so the
-  // browser's back and forward buttons walk through the notes.
+  // The address bar is the source of truth for what is on screen: the back
+  // button walks through the notes, and walking back past `/manager/` leaves
+  // the panel for the front page.
   useEffect(() => {
     const onPopState = () => {
+      setEntered(isManagerPath(window.location.pathname));
       if (useAppStore.getState().user) void useAppStore.getState().openFromLocation();
     };
     window.addEventListener('popstate', onPopState);
@@ -78,9 +116,9 @@ export default function App() {
       <AnimatePresence mode="wait">
         {!booted ? (
           <Splash key="splash" />
-        ) : user ? (
+        ) : entry === 'panel' ? (
           <Workspace key="workspace" />
-        ) : (
+        ) : entry === 'login' ? (
           <motion.div
             key="login"
             initial={{ opacity: 0 }}
@@ -88,7 +126,17 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="relative z-10 h-full overflow-y-auto"
           >
-            <LoginScreen />
+            <LoginScreen onClose={leaveManager} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="landing"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="relative z-10 h-full w-full"
+          >
+            <LandingPage url={noteUrl(null)} onEnter={enterManager} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -243,23 +291,10 @@ function Workspace() {
       </AnimatePresence>
 
       {/* Always available way back to the list - the button in the editor header
-          only exists while a note is open. Anchored bottom-left rather than
-          top-left: the top-left corner is where the first card's title sits, and
-          a floating pill there covered it. */}
-      {!sidebarOpen && !focusMode ? (
-        <motion.button
-          type="button"
-          initial={{ opacity: 0, x: -14 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -14 }}
-          onClick={() => toggleSidebar(true)}
-          title="显示笔记列表"
-          className="glass focus-ring fixed bottom-4 left-4 z-30 flex items-center gap-2 rounded-full px-3.5 py-2 text-[12px] font-medium shadow-strong"
-        >
-          <PanelLeftOpen className="h-4 w-4" />
-          显示列表
-        </motion.button>
-      ) : null}
+          only exists while a note is open. A slim vertical grip on the left edge
+          rather than a pill: it is out of the way of every heading, and it can
+          be dragged to wherever it is not in the way at all. */}
+      {!sidebarOpen && !focusMode ? <PanelHandle /> : null}
 
       {/* Floating "back to list" for small screens */}
       {activeNote && !isDesktop ? (
@@ -275,6 +310,146 @@ function Workspace() {
         </motion.button>
       ) : null}
     </motion.div>
+  );
+}
+
+/** Where the grip on the left edge was last left. */
+const HANDLE_KEY = 'notes-manager-panel-handle-top';
+
+/** Keeps the grip on screen, whatever the window has become since. */
+function clampHandleTop(value: number): number {
+  if (typeof window === 'undefined') return value;
+  const limit = Math.max(8, window.innerHeight - 72);
+  return Math.max(8, Math.min(Math.round(value), limit));
+}
+
+function readHandleTop(): number {
+  const fallback = typeof window === 'undefined' ? 320 : Math.round(window.innerHeight / 2) - 28;
+  try {
+    const raw = localStorage.getItem(HANDLE_KEY);
+    const value = raw ? Number(raw) : Number.NaN;
+    return Number.isFinite(value) ? clampHandleTop(value) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * The way back to the note list, as a slim vertical grip on the left edge.
+ *
+ * A pill with a label in the corner used to do this, and it sat on top of
+ * whatever the editor put there. A flat grip takes almost no room, and since
+ * the one place it can be is a matter of taste, holding it down picks it up and
+ * it stays where it is dropped.
+ */
+function PanelHandle() {
+  const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const [top, setTop] = useState(readHandleTop);
+  const [dragging, setDragging] = useState(false);
+  const topRef = useRef(top);
+  const press = useRef<{ y: number; top: number; long: boolean; moved: boolean; timer: number } | null>(null);
+  // A press long enough to drag still ends with a click; that one must not
+  // also open the list.
+  const swallowClick = useRef(false);
+  topRef.current = top;
+
+  const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const startTop = topRef.current;
+    press.current = {
+      y: event.clientY,
+      top: startTop,
+      long: false,
+      moved: false,
+      timer: window.setTimeout(() => {
+        if (!press.current) return;
+        press.current.long = true;
+        setDragging(true);
+      }, 380),
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const state = press.current;
+    if (!state?.long) return;
+    if (Math.abs(event.clientY - state.y) > 3) state.moved = true;
+    setTop(clampHandleTop(state.top + (event.clientY - state.y)));
+  };
+
+  const release = (cancelled: boolean) => {
+    const state = press.current;
+    press.current = null;
+    if (!state) return;
+    window.clearTimeout(state.timer);
+    if (!state.long) return;
+    setDragging(false);
+    swallowClick.current = true;
+    if (state.moved && !cancelled) {
+      try {
+        localStorage.setItem(HANDLE_KEY, String(Math.round(topRef.current)));
+      } catch {
+        /* a browser with no storage still remembers it for this session */
+      }
+    }
+  };
+
+  const label = dragging ? '拖动到合适的位置，松开后固定' : '显示笔记列表（长按可移动位置）';
+
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-grabbed={dragging || undefined}
+      data-panel-handle
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={() => release(false)}
+      onPointerCancel={() => release(true)}
+      onClick={() => {
+        if (swallowClick.current) {
+          swallowClick.current = false;
+          return;
+        }
+        toggleSidebar(true);
+      }}
+      style={{ top: clampHandleTop(top) }}
+      className={cn(
+        'glass focus-ring fixed -left-px z-30 flex h-14 items-center justify-center rounded-r-full shadow-strong transition-[width,background-color] duration-200',
+        dragging ? 'w-4 cursor-grabbing opacity-90' : 'w-2.5 cursor-pointer hover:w-4',
+      )}
+    >
+      <span className="h-6 w-[2px] rounded-full bg-[color-mix(in_srgb,var(--text)_30%,transparent)]" />
+    </button>
+  );
+}
+
+/**
+ * The site's front page, still to be written.
+ *
+ * Deliberately blank: what belongs here is a page of its own, and until that
+ * exists the only thing this one carries is the way into the panel - the same
+ * door for signing in and for coming back once signed in.
+ */
+function LandingPage({ url, onEnter }: { url: string; onEnter: () => void }) {
+  return (
+    <Tooltip label="进入管理面板" side="bottom">
+      {/* A real link, so the panel has an address that can be kept, shared and
+          opened in a new tab - the click only saves it the page load. */}
+      <a
+        href={url}
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
+          event.preventDefault();
+          onEnter();
+        }}
+        aria-label="管理面板登录入口"
+        data-panel-entry
+        className="glass focus-ring fixed right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-2xl text-[var(--muted)] shadow-soft transition-colors hover:text-[var(--accent)]"
+      >
+        <LogIn className="h-4 w-4" />
+      </a>
+    </Tooltip>
   );
 }
 

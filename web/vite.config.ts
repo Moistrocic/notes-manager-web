@@ -40,6 +40,37 @@ function normaliseBase(raw: string | undefined): string {
 }
 
 /**
+ * Deep links in development.
+ *
+ * The built app is served by Express, which answers every path with
+ * index.html. Vite only does that for paths that look like pages: a note's
+ * address ends in `.md`, so opening a shared link was a 404 in development
+ * while it worked in production. This makes the two agree - the panel lives
+ * under /manager/, and anything under it that a browser asks for as a page is
+ * the app.
+ */
+function managerDeepLinks(): Plugin {
+  return {
+    name: 'manager-deep-links',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        const accepts = req.headers.accept ?? '';
+        if (!req.url || !accepts.includes('text/html')) {
+          next();
+          return;
+        }
+        const base = server.config.base;
+        const [pathname] = req.url.split('?');
+        const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname.replace(/^\/+/, '');
+        if (rest === 'manager' || rest.startsWith('manager/')) req.url = `${base}index.html`;
+        next();
+      });
+    },
+  };
+}
+
+/**
  * Serves a scene.pkg to the test bench without copying it into the repository.
  *
  * Development only, and only when SCENE_PKG names a file - the package belongs
@@ -73,7 +104,7 @@ function sceneLabPkg(): Plugin {
 
 export default defineConfig({
   base: normaliseBase(process.env.VITE_BASE_PATH),
-  plugins: [react(), tailwindcss(), sceneLabPkg()],
+  plugins: [react(), tailwindcss(), managerDeepLinks(), sceneLabPkg()],
   server: {
     port: 5173,
     watch: {
