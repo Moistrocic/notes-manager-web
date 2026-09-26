@@ -11,7 +11,6 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
   const activeNote = useAppStore((s) => s.activeNote);
   const folders = useAppStore((s) => s.folders);
   const patchActive = useAppStore((s) => s.patchActive);
-  const saveActive = useAppStore((s) => s.saveActive);
   const setColor = useAppStore((s) => s.setColor);
   const [tagInput, setTagInput] = useState('');
   const [showColors, setShowColors] = useState(false);
@@ -39,13 +38,16 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
       setTagInput('');
       return;
     }
-    patchActive({ tags: [...activeNote.tags, value] });
+    // A tag is a decision, not typing: it is written straight away. Only the
+    // two text fields wait for a blur, and the debounce that used to cover
+    // this was what made them save on every keystroke.
+    patchActive({ tags: [...activeNote.tags, value] }, { save: true });
     setTagInput('');
   };
 
   const removeTag = (tag: string) => {
     if (readOnly) return;
-    patchActive({ tags: activeNote.tags.filter((t) => t !== tag) });
+    patchActive({ tags: activeNote.tags.filter((t) => t !== tag) }, { save: true });
   };
 
   return (
@@ -121,7 +123,7 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
           variant={activeNote.pinned ? 'soft' : 'ghost'}
           size="sm"
           disabled={readOnly}
-          onClick={() => patchActive({ pinned: !activeNote.pinned })}
+          onClick={() => patchActive({ pinned: !activeNote.pinned }, { save: true })}
           hint="置顶"
         >
           <Pin className={cn('h-3.5 w-3.5', activeNote.pinned && 'fill-current')} />
@@ -131,7 +133,7 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
           variant={activeNote.favorite ? 'soft' : 'ghost'}
           size="sm"
           disabled={readOnly}
-          onClick={() => patchActive({ favorite: !activeNote.favorite })}
+          onClick={() => patchActive({ favorite: !activeNote.favorite }, { save: true })}
           hint="收藏"
         >
           <Star className={cn('h-3.5 w-3.5', activeNote.favorite && 'fill-current')} />
@@ -199,9 +201,8 @@ export function NoteMetaBar({ readOnly = false }: { readOnly?: boolean }) {
                     key={folder.path || 'root'}
                     type="button"
                     onClick={() => {
-                      patchActive({ folder: folder.path });
+                      patchActive({ folder: folder.path }, { save: true });
                       setShowFolders(false);
-                      void saveActive(true);
                     }}
                     className={cn(
                       'focus-ring flex w-full items-center justify-between rounded-xl px-2.5 py-1.5 text-left text-[12.5px] transition-colors',

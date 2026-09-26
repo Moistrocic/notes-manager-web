@@ -1,7 +1,17 @@
 import type { BackgroundOptions } from './admin-background';
 
+/**
+ * What a file in the notes tree is.
+ *
+ * The panel started as a markdown editor, but a note refers to pictures, and
+ * those live beside it in the same folders - so the tree lists every file and
+ * this says which of them the editor has any business opening.
+ */
+export type EntryKind = 'note' | 'image' | 'file';
+
 export interface NoteSummary {
   id: string;
+  kind: EntryKind;
   title: string;
   tags: string[];
   pinned: boolean;

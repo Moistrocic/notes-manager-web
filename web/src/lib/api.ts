@@ -63,6 +63,19 @@ export function noteDownloadUrl(id: string): string {
 }
 
 /**
+ * Where a file's bytes are served from, by its storage path.
+ *
+ * This is what an image in a note points at: the browser fetches it with the
+ * session cookie like any other request, and the server streams it through the
+ * active storage driver - so a picture stored locally, on OpenList, or reached
+ * through an OpenList account all arrive the same way.
+ */
+export function fileUrl(storagePath: string): string {
+  const clean = storagePath.startsWith('/') ? storagePath : `/${storagePath}`;
+  return `${API_ROOT}/notes/file?path=${encodeURIComponent(clean)}`;
+}
+
+/**
  * Where a background file is served from.
  *
  * Built from the API root rather than written out: the app can be installed
@@ -173,7 +186,10 @@ export const api = {
     request<{ note: Note }>('/notes/upload', {
       method: 'POST',
       headers: {
-        'Content-Type': 'text/markdown; charset=utf-8',
+        // Deliberately not the file's own type: the server parses JSON bodies
+        // before this route sees them, so a .json upload would arrive as an
+        // object instead of bytes. The extension is what decides the type.
+        'Content-Type': 'application/octet-stream',
         'X-Note-Filename': encodeURIComponent(file.name),
         ...(folder ? { 'X-Note-Folder': encodeURIComponent(folder) } : {}),
       },
@@ -185,7 +201,7 @@ export const api = {
   updateNote: (id: string, patch: Record<string, unknown>) =>
     request<{ note: Note }>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteNote: (id: string, permanent = false) =>
-    request<{ ok: boolean; trashed: boolean }>(
+    request<{ ok: boolean; trashed: boolean; /** Where the copy in the trash answers to. */ id?: string }>(
       `/notes/${encodeURIComponent(id)}${permanent ? '?permanent=true' : ''}`,
       { method: 'DELETE' },
     ),
@@ -225,6 +241,12 @@ export const api = {
     request<{ folder: string; folders: FolderCount[] }>('/notes/folders', {
       method: 'POST',
       body: JSON.stringify({ path }),
+    }),
+  /** Moves a folder, contents and all, under another folder ('' = the root). */
+  moveFolder: (path: string, target: string) =>
+    request<{ ok: boolean; path: string; folders: FolderCount[] }>('/notes/folders/move', {
+      method: 'POST',
+      body: JSON.stringify({ path, target }),
     }),
   deleteFolder: (path: string) =>
     request<{ ok: boolean; folders: FolderCount[] }>(`/notes/folders?path=${encodeURIComponent(path)}`, {

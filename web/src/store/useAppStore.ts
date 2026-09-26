@@ -1,8 +1,8 @@
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
-import { api, backgroundFileUrl } from '../lib/api';
+import { api, backgroundFileUrl, noteDownloadUrl } from '../lib/api';
 import { stripMarkdown } from '../lib/markdown';
-import { pushLocation, readLocation, replaceLocation } from '../lib/url';
+import { inManager, pushLocation, readLocation, replaceLocation } from '../lib/url';
 import { applyFonts } from '../lib/fonts';
 import {
   DEFAULT_WALLPAPER,
@@ -35,12 +35,22 @@ import type {
 
 export type Theme = 'dark' | 'light';
 export type SortKey = 'updated' | 'created' | 'title' | 'words';
+/** Which way the sort runs. */
+export type SortOrder = 'asc' | 'desc';
+/** The sorts the picker offers, in the order it offers them. */
+export const SORT_KEYS: SortKey[] = ['title', 'updated', 'created', 'words'];
+
 /**
- * How the note list is arranged. `tree` is the only one that shows folders:
- * the other two are flat lists of notes, because a card grid with folders
- * mixed in reads as neither.
+ * One row the user has picked out in the tree.
+ *
+ * Notes are addressed by id and folders by path, so the two live in one list
+ * rather than each needing its own selection and its own batch action.
  */
-export type ViewMode = 'tree' | 'list' | 'grid';
+export interface SelectionEntry {
+  kind: 'note' | 'folder';
+  /** Note id, or folder path. */
+  id: string;
+}
 
 /** Which fields the search box looks at. All of them unless narrowed. */
 export interface SearchScope {
@@ -108,7 +118,13 @@ interface AppState {
   setExpandedFolders: (paths: string[]) => void;
   setSearchScope: (scope: SearchScope) => void;
   sort: SortKey;
-  view: ViewMode;
+  /** Ascending by default; the picker flips it. */
+  sortOrder: SortOrder;
+  /** Rows the tree has picked out, for the batch actions. */
+  selection: SelectionEntry[];
+  setSelection: (entries: SelectionEntry[]) => void;
+  toggleSelection: (entry: SelectionEntry) => void;
+  clearSelection: () => void;
   editorMode: EditorMode;
   sidebarOpen: boolean;
   /** Outline pane on the right of the editor. */
@@ -211,8 +227,11 @@ interface AppState {
   setAppearanceOpen: (value: boolean) => void;
   closeNote: () => void;
   createNote: (input?: { title?: string; folder?: string; content?: string }) => Promise<void>;
-  /** Creates one note per uploaded .md file. Returns how many were accepted. */
-  uploadNotes: (files: File[], folder?: string) => Promise<number>;
+  /**
+   * Uploads files into a folder. A note becomes a note; anything else - a
+   * picture most obviously - is stored as it is. Returns how many arrived.
+   */
+  uploadFiles: (files: File[], folder?: string) => Promise<number>;
   patchActive: (patch: NotePatch, options?: { save?: boolean }) => void;
   saveActive: (immediate?: boolean) => Promise<void>;
   deleteNote: (id: string, options?: { permanent?: boolean }) => Promise<void>;
@@ -229,6 +248,22 @@ interface AppState {
   renameFolder: (path: string, name: string) => Promise<void>;
   /** Moves a note to another folder. An empty string means the root. */
   moveNote: (id: string, folder: string) => Promise<void>;
+  /** Moves several notes at once. */
+  moveNotes: (ids: string[], folder: string) => Promise<void>;
+  /** Moves everything the tree has selected - notes and folders alike. */
+  moveSelection: (folder: string) => Promise<void>;
+  /** Downloads everything the tree has selected, one file after another. */
+  downloadSelection: () => Promise<void>;
+  /** Sends everything the tree has selected to the trash. */
+  deleteSelection: () => Promise<void>;
+  /** Puts a batch deletion back, for the undo action on its toast. */
+  restoreSelection: (notes: string[], folders: string[]) => Promise<void>;
+  /** Moves a folder, contents and all, under another folder. */
+  moveFolder: (path: string, target: string) => Promise<void>;
+  /**
+   * Renames a note. The title is the file name, so this renames the file on
+   * disk too, and the note comes back with its new path.
+   */
   renameNote: (id: string, title: string) => Promise<void>;
 
   setQuery: (value: string) => void;
@@ -236,7 +271,7 @@ interface AppState {
   setActiveFolder: (folder: string | null) => void;
   setFavoriteOnly: (value: boolean) => void;
   setSort: (sort: SortKey) => void;
-  setView: (view: ViewMode) => void;
+  setSortOrder: (order: SortOrder) => void;
   setEditorMode: (mode: EditorMode) => void;
   toggleSidebar: (value?: boolean) => void;
   toggleMeta: (value?: boolean) => void;
@@ -255,12 +290,20 @@ interface AppState {
 }
 
 const THEME_KEY = 'notes-manager-theme';
-const VIEW_KEY = 'notes-manager-view';
+const SORT_KEY = 'notes-manager-sort';
+const SORT_ORDER_KEY = 'notes-manager-sort-order';
 const EXPANDED_KEY = 'notes-manager-expanded-folders';
 const MODE_KEY = 'notes-manager-editor-mode';
 const SPLIT_KEY = 'notes-manager-split-ratio';
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+/**
+ * A save that was asked for while one was already in flight.
+ *
+ * Blurring two fields in a row used to drop the second request on the floor;
+ * the note then sat dirty until the next blur. One flag is enough: when the
+ * request settles, a queued save runs if anything is still unsaved.
+ */
+let saveQueued = false;
 
 function readLocal<T extends string>(key: string, fallback: T): T {
   try {
@@ -409,13 +452,14 @@ export const appStore = createStore<AppState>((set, get) => ({
   pinnedOnly: false,
   searchScope: { ...DEFAULT_SEARCH_SCOPE },
   expandedFolders: readExpanded(),
-  sort: 'updated',
-  // A stored 'compact' predates the tree view; fall back rather than render
-  // a mode that no longer exists.
-  view: (() => {
-    const stored = readLocal<ViewMode>(VIEW_KEY, 'list');
-    return stored === 'tree' || stored === 'list' || stored === 'grid' ? stored : 'list';
+  // Titles are what people look for: an alphabetical list is the one that can
+  // be scanned, and the timestamp sorts are a click away.
+  sort: (() => {
+    const stored = readLocal<SortKey>(SORT_KEY, 'title');
+    return SORT_KEYS.includes(stored) ? stored : 'title';
   })(),
+  sortOrder: readLocal<SortOrder>(SORT_ORDER_KEY, 'asc') === 'desc' ? 'desc' : 'asc',
+  selection: [],
   editorMode: readLocal<EditorMode>(MODE_KEY, 'split'),
   sidebarOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1024,
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
@@ -489,10 +533,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
 
   logout: async () => {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    saveQueued = false;
     await api.logout().catch(() => undefined);
     set({
       user: null,
@@ -581,6 +622,9 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
 
   openFromLocation: async () => {
+    // The front page is not the panel: its address names no note, and rewriting
+    // it into a note URL would drag a visitor off the page they asked for.
+    if (!inManager()) return;
     const { path, anchor } = readLocation();
     if (!path) {
       // the notes root: make sure a stale note is not left in the address bar
@@ -645,21 +689,18 @@ export const appStore = createStore<AppState>((set, get) => ({
     replaceLocation(null);
   },
 
-  uploadNotes: async (files, folder) => {
-    // Only note files. A zip or an image would come back as a note containing
-    // binary noise, which is worse than refusing it.
-    const accepted = files.filter((file) => /\.(md|markdown|txt)$/i.test(file.name));
-    const rejected = files.length - accepted.length;
-    if (accepted.length === 0) {
-      get().pushToast({ title: '没有可上传的笔记', message: '只支持 .md / .markdown / .txt 文件', tone: 'error' });
-      return 0;
-    }
+  uploadFiles: async (files, folder) => {
+    if (files.length === 0) return 0;
 
     const target = folder ?? get().activeFolder ?? undefined;
     let uploaded = 0;
     const failures: string[] = [];
-    for (const file of accepted) {
+    for (const file of files) {
       try {
+        // Every file goes up as it is: a .md becomes a note, a picture stays a
+        // picture. Nothing is renamed on the way in - the name the file has is
+        // the name it keeps.
+        // eslint-disable-next-line no-await-in-loop
         await api.uploadNote(file, target);
         uploaded += 1;
       } catch (err) {
@@ -672,16 +713,12 @@ export const appStore = createStore<AppState>((set, get) => ({
 
     if (failures.length > 0) {
       get().pushToast({
-        title: `${uploaded} 篇已上传，${failures.length} 篇失败`,
+        title: `${uploaded} 个已上传，${failures.length} 个失败`,
         message: failures.slice(0, 3).join('；'),
         tone: 'error',
       });
     } else {
-      get().pushToast({
-        title: `已上传 ${uploaded} 篇笔记`,
-        message: rejected > 0 ? `另有 ${rejected} 个文件不是笔记，已跳过` : undefined,
-        tone: 'success',
-      });
+      get().pushToast({ title: `已上传 ${uploaded} 个文件`, tone: 'success' });
     }
     return uploaded;
   },
@@ -749,21 +786,21 @@ export const appStore = createStore<AppState>((set, get) => ({
       ),
     }));
 
-    if (options?.save === false) return;
-    if (saveTimer) clearTimeout(saveTimer);
-    if (!dirty) return;
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      void get().saveActive(true);
-    }, 900);
+    // Editing never writes by itself. A rename used to fire a request every
+    // few keystrokes and the reply then overwrote the field that was still
+    // being typed in, so the title appeared to roll back; now the field only
+    // marks the note dirty and the save happens on blur or on Ctrl/⌘+S.
+    if (options?.save === true) void get().saveActive(true);
   },
 
-  saveActive: async (immediate = false) => {
+  saveActive: async (_immediate = false) => {
     const { activeNote, dirty, saving, lastSaved } = get();
-    if (!activeNote || saving) return;
-    if (saveTimer && immediate) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
+    if (!activeNote) return;
+    // Already writing: remember that another save is wanted and let the one in
+    // flight finish, rather than dropping the request.
+    if (saving) {
+      saveQueued = true;
+      return;
     }
     const snapshot = activeNote;
     const payload = notePayload(snapshot);
@@ -788,23 +825,53 @@ export const appStore = createStore<AppState>((set, get) => ({
         color: snapshot.color,
         folder: snapshot.folder,
       });
-      const stillSame = get().activeNote?.id === note.id;
-      const sameContent = get().activeNote?.content === snapshot.content;
+      // Compared against what was sent, not against the reply: renaming a file
+      // changes its id (a file has no front matter to hold one), so the note
+      // that comes back is the same note under a new name.
+      const stillSame = get().activeNote?.id === snapshot.id;
+      const current = get().activeNote;
+      // Whether anything was typed while the request was in flight. The reply
+      // may only replace what was sent: the note came back with the title and
+      // body of the snapshot, and applying that over newer keystrokes is what
+      // made a rename look like it had been rolled back.
+      const untouched = stillSame && Boolean(current) && samePayload(notePayload(current as Note), payload);
       // The server normalises the file (front matter layout, trailing newline),
       // so its body can differ from what was typed. Keeping the local text and
       // recording what was sent avoids an immediate echo-edit - and a second
       // save - through the editor's value sync.
+      const merged: Note = untouched
+        ? { ...note, content: snapshot.content }
+        : {
+            ...(current as Note),
+            id: note.id,
+            path: note.path,
+            updated: note.updated,
+            size: note.size,
+            hasFrontMatter: note.hasFrontMatter,
+            created: note.created,
+          };
       set((state) => ({
         saving: false,
-        dirty: stillSame ? !sameContent : state.dirty,
+        dirty: untouched ? false : !samePayload(notePayload(merged), payload),
         lastSavedAt: Date.now(),
         lastSaved: payload,
-        activeNote: stillSame && sameContent ? { ...note, content: snapshot.content } : state.activeNote,
-        notes: state.notes.map((n) => (n.id === note.id ? { ...n, ...toSummary(note) } : n)),
+        activeNote: stillSame ? merged : state.activeNote,
+        activeId: stillSame && state.activeId === snapshot.id ? note.id : state.activeId,
+        notes: state.notes.map((n) => (n.id === snapshot.id ? { ...n, ...toSummary(merged) } : n)),
       }));
+      // A title change renames the file, so the address of the open note moves
+      // with it - the link in the address bar has to keep pointing at the note.
+      if (stillSame && note.path !== snapshot.path) {
+        replaceLocation(absoluteNotePath(note, get().capabilities));
+      }
     } catch (err) {
       set({ saving: false });
       get().pushToast({ title: '保存失败', message: errorMessage(err), tone: 'error' });
+    } finally {
+      if (saveQueued) {
+        saveQueued = false;
+        if (get().dirty && get().activeNote) void get().saveActive(true);
+      }
     }
   },
 
@@ -812,7 +879,10 @@ export const appStore = createStore<AppState>((set, get) => ({
     const previous = get().notes.find((n) => n.id === id);
     const wasActive = get().activeId === id;
     try {
-      await api.deleteNote(id, options?.permanent);
+      const result = await api.deleteNote(id, options?.permanent);
+      // A file has no front matter to carry an id, so its id is derived from
+      // where it lies - and that changes the moment it lands in the trash.
+      const trashedId = result.id ?? id;
       set((state) => ({
         notes: state.notes.filter((n) => n.id !== id),
         activeId: wasActive ? null : state.activeId,
@@ -826,7 +896,7 @@ export const appStore = createStore<AppState>((set, get) => ({
           title: '已移入回收站',
           message: previous?.title,
           tone: 'info',
-          action: { label: '撤销', run: () => get().restoreNote(id) },
+          action: { label: '撤销', run: () => get().restoreNote(trashedId) },
         });
       }
       void get().refreshMeta();
@@ -1015,12 +1085,24 @@ export const appStore = createStore<AppState>((set, get) => ({
     const next = title.trim();
     if (!next) return;
     try {
+      // The server renames the file to match, so the note comes back with a new
+      // path - and the address bar has to follow, or the link would point at a
+      // file that no longer exists.
       const { note } = await api.updateNote(id, { title: next });
       const summary = toSummary(note);
+      const isActive = get().activeId === id;
       set((state) => ({
         notes: state.notes.map((n) => (n.id === id ? summary : n)),
-        activeNote: state.activeNote?.id === id ? note : state.activeNote,
+        // Unsaved edits stay on screen: the reply carries the file as it was
+        // before them.
+        activeNote:
+          state.activeNote?.id === id ? { ...note, content: state.activeNote.content } : state.activeNote,
+        // A file's id is derived from its path, so renaming it re-addresses it:
+        // whatever pointed at the old id has to point at the new one.
+        activeId: isActive ? note.id : state.activeId,
+        lastSaved: isActive && !state.dirty ? notePayload(note) : state.lastSaved,
       }));
+      if (isActive) replaceLocation(absoluteNotePath(note, get().capabilities));
       get().pushToast({ title: '笔记已重命名', message: next, tone: 'success' });
     } catch (err) {
       get().pushToast({ title: '重命名失败', message: errorMessage(err), tone: 'error' });
@@ -1031,14 +1113,179 @@ export const appStore = createStore<AppState>((set, get) => ({
     try {
       const { note } = await api.updateNote(id, { folder });
       const summary = toSummary(note);
+      const wasActive = get().activeId === id;
       set((state) => ({
         notes: state.notes.map((n) => (n.id === id ? summary : n)),
-        activeNote: state.activeNote?.id === id ? note : state.activeNote,
+        activeNote: state.activeNote?.id === id ? { ...note, content: state.activeNote.content } : state.activeNote,
+        // Moving a file re-addresses it too, so the open note follows.
+        activeId: wasActive ? note.id : state.activeId,
       }));
+      if (wasActive) replaceLocation(absoluteNotePath(note, get().capabilities));
       await get().refreshMeta();
       get().pushToast({ title: '笔记已移动', message: folder || '根目录', tone: 'success' });
     } catch (err) {
       get().pushToast({ title: '移动失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
+  moveNotes: async (ids, folder) => {
+    const wanted = [...new Set(ids)];
+    if (wanted.length === 0) return;
+    const target = folder.replace(/^\/+|\/+$/g, '');
+    const moved: string[] = [];
+    const failures: string[] = [];
+    for (const id of wanted) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await api.updateNote(id, { folder: target });
+        moved.push(id);
+      } catch (err) {
+        failures.push(errorMessage(err));
+      }
+    }
+    if (moved.length > 0) await get().refreshNotes({ silent: true });
+    set({ selection: [] });
+    get().pushToast({
+      title: `已移动 ${moved.length} 篇笔记`,
+      message: failures.length > 0 ? `${failures.length} 篇失败：${failures.slice(0, 2).join('；')}` : target || '根目录',
+      tone: failures.length > 0 ? 'error' : 'success',
+    });
+  },
+
+  moveSelection: async (folder) => {
+    const entries = get().selection;
+    if (entries.length === 0) return;
+    const target = folder.replace(/^\/+|\/+$/g, '');
+    const notes = entries.filter((e) => e.kind === 'note').map((e) => e.id);
+    const folders = entries
+      .filter((e) => e.kind === 'folder')
+      .map((e) => e.id)
+      // A folder cannot be moved inside itself or into what is already below it.
+      .filter((path) => target !== path && !target.startsWith(`${path}/`));
+    let moved = notes.length;
+    const failures: string[] = [];
+    for (const id of notes) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await api.updateNote(id, { folder: target });
+      } catch (err) {
+        moved -= 1;
+        failures.push(errorMessage(err));
+      }
+    }
+    for (const path of folders) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await api.moveFolder(path, target);
+        moved += 1;
+      } catch (err) {
+        failures.push(errorMessage(err));
+      }
+    }
+    await get().refreshNotes({ silent: true });
+    set({ selection: [] });
+    get().pushToast({
+      title: `已移动 ${moved} 项`,
+      message: failures.length > 0 ? `${failures.length} 项失败：${failures.slice(0, 2).join('；')}` : target || '根目录',
+      tone: failures.length > 0 ? 'error' : 'success',
+    });
+  },
+
+  downloadSelection: async () => {
+    const entries = get().selection.filter((e) => e.kind === 'note');
+    if (entries.length === 0) {
+      get().pushToast({ title: '没有可下载的文件', message: '文件夹不能下载', tone: 'info' });
+      return;
+    }
+    // One click per file, spaced out: a browser asked for ten downloads at once
+    // treats them as a pop-up storm and drops most of them.
+    for (const entry of entries) {
+      const anchor = document.createElement('a');
+      anchor.href = noteDownloadUrl(entry.id);
+      anchor.download = '';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    get().pushToast({
+      title: `已开始下载 ${entries.length} 个文件`,
+      message: entries.length > 3 ? '浏览器可能询问是否允许批量下载' : undefined,
+      tone: 'success',
+    });
+  },
+
+  deleteSelection: async () => {
+    const entries = get().selection;
+    if (entries.length === 0) return;
+    const notes = entries.filter((e) => e.kind === 'note').map((e) => e.id);
+    const folders = entries.filter((e) => e.kind === 'folder').map((e) => e.id);
+    const removedNotes: string[] = [];
+    const failures: string[] = [];
+    for (const id of notes) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await api.deleteNote(id);
+        removedNotes.push(id);
+      } catch (err) {
+        failures.push(errorMessage(err));
+      }
+    }
+    for (const path of folders) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await api.deleteFolder(path);
+      } catch (err) {
+        failures.push(errorMessage(err));
+      }
+    }
+    set((state) => ({
+      notes: state.notes.filter((n) => !removedNotes.includes(n.id)),
+      activeId: state.activeId && removedNotes.includes(state.activeId) ? null : state.activeId,
+      activeNote: state.activeNote && removedNotes.includes(state.activeNote.id) ? null : state.activeNote,
+      selection: [],
+    }));
+    await get().refreshMeta();
+    get().pushToast({
+      title: `已移入回收站 ${entries.length} 项`,
+      message: failures.length > 0 ? `${failures.length} 项失败：${failures.slice(0, 2).join('；')}` : '可在回收站里恢复',
+      tone: failures.length > 0 ? 'error' : 'info',
+      action: { label: '撤销', run: () => get().restoreSelection(removedNotes, folders) },
+    });
+  },
+
+  restoreSelection: async (notes, folders) => {
+    for (const id of notes) {
+      // eslint-disable-next-line no-await-in-loop
+      await api.restoreNote(id).catch(() => undefined);
+    }
+    for (const path of folders) {
+      // eslint-disable-next-line no-await-in-loop
+      await api.restoreTrashFolder(path).catch(() => undefined);
+    }
+    await get().refreshNotes({ silent: true });
+    get().pushToast({ title: `已恢复 ${notes.length + folders.length} 项`, tone: 'success' });
+  },
+
+  moveFolder: async (path, target) => {
+    try {
+      const clean = target.replace(/^\/+|\/+$/g, '');
+      const result = await api.moveFolder(path, clean);
+      await get().refreshNotes({ silent: true });
+      // Whatever was pointed at the old path now points at the new one.
+      const state = get();
+      if (state.activeFolder === path) set({ activeFolder: result.path });
+      else if (state.activeFolder?.startsWith(`${path}/`)) {
+        set({ activeFolder: `${result.path}${state.activeFolder.slice(path.length)}` });
+      }
+      get().pushToast({
+        title: '文件夹已移动',
+        message: `${path} → ${clean || '根目录'}`,
+        tone: 'success',
+      });
+    } catch (err) {
+      get().pushToast({ title: '移动文件夹失败', message: errorMessage(err), tone: 'error' });
     }
   },
 
@@ -1165,11 +1412,25 @@ export const appStore = createStore<AppState>((set, get) => ({
     set({ expandedFolders: paths });
   },
   setSearchScope: (scope) => set({ searchScope: scope }),
-  setSort: (sort) => set({ sort }),
-  setView: (view) => {
-    writeLocal(VIEW_KEY, view);
-    set({ view });
+  setSort: (sort) => {
+    writeLocal(SORT_KEY, sort);
+    set({ sort });
   },
+  setSortOrder: (order) => {
+    writeLocal(SORT_ORDER_KEY, order);
+    set({ sortOrder: order });
+  },
+  setSelection: (entries) => set({ selection: entries }),
+  toggleSelection: (entry) =>
+    set((state) => {
+      const exists = state.selection.some((e) => e.kind === entry.kind && e.id === entry.id);
+      return {
+        selection: exists
+          ? state.selection.filter((e) => !(e.kind === entry.kind && e.id === entry.id))
+          : [...state.selection, entry],
+      };
+    }),
+  clearSelection: () => set({ selection: [] }),
   setEditorMode: (mode) => {
     writeLocal(MODE_KEY, mode);
     set({ editorMode: mode });
