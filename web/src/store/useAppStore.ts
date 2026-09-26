@@ -133,6 +133,9 @@ interface AppState {
 
   /** Editor/preview split, 0.2 - 0.8. */
   splitRatio: number;
+  /** Whether the two split panes scroll together. */
+  syncScroll: boolean;
+  toggleSyncScroll: (value?: boolean) => void;
   /** Focus mode hides the note list and every toolbar above the note. */
   focusMode: boolean;
   /** Panes to restore when leaving focus mode. */
@@ -302,6 +305,7 @@ const SORT_ORDER_KEY = 'notes-manager-sort-order';
 const EXPANDED_KEY = 'notes-manager-expanded-folders';
 const MODE_KEY = 'notes-manager-editor-mode';
 const SPLIT_KEY = 'notes-manager-split-ratio';
+const SYNC_SCROLL_KEY = 'notes-manager-sync-scroll';
 
 /**
  * A save that was asked for while one was already in flight.
@@ -472,6 +476,9 @@ export const appStore = createStore<AppState>((set, get) => ({
   metaOpen: typeof window === 'undefined' ? true : window.innerWidth >= 1280,
 
   splitRatio: Number(readLocal(SPLIT_KEY, '0.5')) || 0.5,
+  // Off to begin with: reading two panes that move on their own is a surprise,
+  // and a note long enough to need it is a deliberate choice.
+  syncScroll: readLocal<string>(SYNC_SCROLL_KEY, 'off') === 'on',
   focusMode: false,
   focusRestore: null,
 
@@ -1509,6 +1516,12 @@ export const appStore = createStore<AppState>((set, get) => ({
         metaOpen: state.focusRestore?.metaOpen ?? state.metaOpen,
         focusRestore: null,
       };
+    }),
+  toggleSyncScroll: (value) =>
+    set((state) => {
+      const next = value ?? !state.syncScroll;
+      writeLocal(SYNC_SCROLL_KEY, next ? 'on' : 'off');
+      return { syncScroll: next };
     }),
   setSplitRatio: (value) => {
     const clamped = Math.min(0.8, Math.max(0.2, value));
