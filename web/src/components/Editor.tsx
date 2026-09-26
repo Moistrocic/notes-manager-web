@@ -177,6 +177,12 @@ export function Editor() {
    * `mirrorScroll` does. It answers null when the other pane is already there,
    * and that is what stops the two of them answering each other.
    *
+   * A jump the preview makes for itself - an outline entry, an anchor, a deep
+   * link - is not a reading position. Its frames are skipped rather than
+   * mirrored: following them would drag this pane along with the animation
+   * (and be dragged back by it), which is what made clicking the outline look
+   * like a stutter with the two panes tied together.
+   *
    * Mounted with the split view: the children's effects publish their scroll
    * elements before this one runs, so both are there to be listened to.
    */
@@ -201,13 +207,16 @@ export function Editor() {
 
     const follow = (from: HTMLElement, to: HTMLElement) => () => {
       if (justMoved === from) return;
+      // The preview is on its way somewhere under its own steam: those are
+      // not positions to be followed. Where it lands is where the panes meet
+      // again, on the reader's next move.
+      if (previewApiRef.current?.isSelfScrolling()) return;
       const target = mirrorScroll(from, to);
       if (target === null) return;
       justMoved = to;
       // Assigned, never animated: a smooth scroll here would still be
       // travelling when the next event arrives, and the panes would trail each
-      // other instead of moving together. (The preview's own jumps to a heading
-      // are smooth, which is a separate thing from keeping two panes level.)
+      // other instead of moving together.
       to.scrollTop = target;
       later(release);
     };

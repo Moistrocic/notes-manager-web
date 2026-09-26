@@ -21,6 +21,17 @@ export interface PreviewApi {
    * Reading it changes nothing: the preview still scrolls exactly as it did.
    */
   scrollElement: () => HTMLElement | null;
+  /**
+   * Whether this pane is moving itself somewhere right now - a jump to a
+   * heading, or to an anchor.
+   *
+   * A smooth scroll reports a position every frame. A pane mirroring those
+   * positions would be dragged along with the animation and drag this one
+   * back in turn, which is the jitter seen when an outline entry is clicked
+   * with the two panes tied together. While this is true the move is the
+   * preview's own, and nobody should mirror it.
+   */
+  isSelfScrolling: () => boolean;
 }
 
 interface PreviewProps {
@@ -51,6 +62,31 @@ interface PreviewProps {
 export function Preview({ content, notePath = '', imageUrl, className, onOpenLink, onOpenAnchor, apiRef }: PreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(content), [content]);
+  /** True while a smooth move of this pane's own making is under way. */
+  const selfScroll = useRef(false);
+  const selfScrollTimer = useRef<number | null>(null);
+
+  // Every position the smooth scroll reports pushes its end a little further
+  // away: a long jump runs longer than a short one, and neither is cut short
+  // by a fixed wait. The timer armed in reveal covers a move that reports
+  // nothing at all, having been told to go where it already was.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const onScroll = () => {
+      if (!selfScroll.current || selfScrollTimer.current === null) return;
+      window.clearTimeout(selfScrollTimer.current);
+      selfScrollTimer.current = window.setTimeout(() => {
+        selfScroll.current = false;
+        selfScrollTimer.current = null;
+      }, 160);
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      if (selfScrollTimer.current !== null) window.clearTimeout(selfScrollTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -65,6 +101,17 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
   const reveal = (container: HTMLElement, target: HTMLElement) => {
     const containerRect = container.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
+    // Said before the move: the positions this starts belong to this move, and
+    // a pane mirroring them would fight the animation and be fought back.
+    selfScroll.current = true;
+    if (selfScrollTimer.current !== null) window.clearTimeout(selfScrollTimer.current);
+    // A move that reports nothing - it was already there - would otherwise
+    // hold the flag forever; a real animation replaces this on its first
+    // frame, so the number only ever decides the quiet case.
+    selfScrollTimer.current = window.setTimeout(() => {
+      selfScroll.current = false;
+      selfScrollTimer.current = null;
+    }, 300);
     container.scrollTo({
       top: container.scrollTop + (targetRect.top - containerRect.top) - 12,
       behavior: 'smooth',
@@ -80,6 +127,9 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
     apiRef.current = {
       scrollElement() {
         return containerRef.current;
+      },
+      isSelfScrolling() {
+        return selfScroll.current;
       },
       scrollToAnchor(id) {
         const container = containerRef.current;
