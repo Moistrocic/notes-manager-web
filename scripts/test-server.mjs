@@ -861,7 +861,9 @@ console.log('note rename + folder move');
     const withdrawn = await call('PUT', '/' + secondBlog.payload.note.id, { blog: false });
     check('withdrawing clears both marks', [withdrawn.payload.note.blog, withdrawn.payload.note.blogAt], [false, null]);
     const withdrawnFile = readFileSync(fsPath(withdrawn.payload.note.path), 'utf8');
-    check('and removes them from the file', [withdrawnFile.includes('blog:'), withdrawnFile.includes('blogAt:')], [false, false]);
+    // A trace stays behind: "取消发布" and "删除发布信息" are different actions,
+    // and only the second one is supposed to take the row off the list.
+    check('leaving a trace behind instead of the date', [withdrawnFile.includes('blog: false'), withdrawnFile.includes('blogAt:')], [true, false]);
     const gonePost = await blogCall('GET', '/post?path=' + encodeURIComponent(withdrawn.payload.note.path));
     check('so it is no longer readable', [gonePost.status, gonePost.payload.error.code], [404, 'post_not_found']);
 
@@ -896,6 +898,130 @@ console.log('note rename + folder move');
     check('nor an unpublished note', [draftFile.status, draftFile.payload.error.code], [404, 'file_not_published']);
     const internalFile = await blogCall('GET', '/file?path=' + encodeURIComponent('/.trash-files.json'));
     check('and never an internal file', [internalFile.status, internalFile.payload.error.code], [404, 'file_not_published']);
+
+    /* ---- the publish manager --------------------------------------------- */
+    const rowOf = (list, id) => list.find((entry) => entry.id === id);
+    const publishRows = async () => (await call('GET', '/publish')).payload.entries;
+
+    const atStart = await call('GET', '/publish');
+    check('the publish list answers with an array', [atStart.status, Array.isArray(atStart.payload.entries)], [200, true]);
+    check('a note that never used the dialog is not on it', rowOf(atStart.payload.entries, draft.payload.note.id), undefined);
+
+    // One note per front matter key, so which one put a note on the list is
+    // never a guess.
+    const onlyTitle = await call('POST', '', { title: '只有卡片标题' });
+    await call('PUT', '/' + onlyTitle.payload.note.id, { blogTitle: '卡片上的标题' });
+    const onlySummary = await call('POST', '', { title: '只有卡片简介' });
+    await call('PUT', '/' + onlySummary.payload.note.id, { blogSummary: '卡片上的简介' });
+    const switchedOff = await call('POST', '', { title: '取消发布过的' });
+    await call('PUT', '/' + switchedOff.payload.note.id, { blog: false });
+    // The date has no dialog of its own, so it is written by hand.
+    writeFileSync(path.join(root, '只有日期.md'), '---\nid: onlydate\ntitle: 只有日期\nblogAt: "2021-01-01T00:00:00.000Z"\n---\n\n正文\n', 'utf8');
+    notes.clearCaches();
+
+    const publishList = await publishRows();
+    check('a card title alone puts a note on the list', rowOf(publishList, onlyTitle.payload.note.id).editedTitle, true);
+    check('a card summary alone does too', rowOf(publishList, onlySummary.payload.note.id).editedSummary, true);
+    check('and so does switching publishing off again', rowOf(publishList, switchedOff.payload.note.id).published, false);
+    check('and a publication date written by hand', rowOf(publishList, 'onlydate').name, '只有日期.md');
+    check('a note that never used the dialog stays off', rowOf(publishList, draft.payload.note.id), undefined);
+
+    const noteFields = (await call('GET', '')).payload.notes.find((note) => note.id === onlyTitle.payload.note.id);
+    check('the note list carries the publish fields', [noteFields.hasPublishInfo, noteFields.blogTitle, noteFields.blogSummary], [true, '卡片上的标题', null]);
+
+    const publishedRow = rowOf(publishList, firstBlog.payload.note.id);
+    check(
+      'a row carries exactly what the table needs',
+      Object.keys(publishedRow).sort(),
+      ['editedSummary', 'editedTitle', 'id', 'name', 'path', 'published', 'publishedAt', 'summary', 'title', 'updatedAt'],
+    );
+    check('name is the file name and path the storage path', [publishedRow.name, publishedRow.path], ['博客第一篇.md', '/博客第一篇.md']);
+    check('an untouched card falls back to the note', [publishedRow.editedTitle, publishedRow.title], [false, '博客第一篇']);
+    check('a row that is off the blog shows no date', rowOf(publishList, switchedOff.payload.note.id).publishedAt, null);
+
+    // Published rows first, newest publication first; the rest follow, most
+    // recently touched first. The two sleeps keep the dates from tying.
+    const ordered = await call('POST', '', { title: '排序用甲', content: '甲正文' });
+    await call('PUT', '/' + ordered.payload.note.id, { blog: true });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const later = await call('POST', '', { title: '排序用乙', content: '乙正文' });
+    await call('PUT', '/' + later.payload.note.id, { blog: true });
+
+    const sorted = await publishRows();
+    const mine = sorted.filter((entry) => [ordered.payload.note.id, later.payload.note.id, onlyTitle.payload.note.id].includes(entry.id));
+    check('published rows come before the ones that are off', mine.map((entry) => entry.published), [true, true, false]);
+    check('and the newest publication leads', mine.slice(0, 2).map((entry) => entry.id), [later.payload.note.id, ordered.payload.note.id]);
+
+    const blogBefore = (await blogCall('GET', '')).payload.posts;
+    check('the blog is newest publication first as well', blogBefore.slice(0, 2).map((post) => post.id), [later.payload.note.id, ordered.payload.note.id]);
+
+    /* ---- the card's own title and summary -------------------------------- */
+    const overridden = await call('PUT', '/' + ordered.payload.note.id, { blogTitle: '卡片标题甲', blogSummary: '卡片简介甲' });
+    check('the overrides are written', [overridden.payload.note.blogTitle, overridden.payload.note.blogSummary], ['卡片标题甲', '卡片简介甲']);
+    const overrideFile = readFileSync(fsPath(overridden.payload.note.path), 'utf8');
+    check('and reach the file', [overrideFile.includes('blogTitle: 卡片标题甲'), overrideFile.includes('blogSummary: 卡片简介甲')], [true, true]);
+    check('while the derived flag stays out of it', overrideFile.includes('hasPublishInfo'), false);
+
+    const cardNow = (await blogCall('GET', '')).payload.posts.find((post) => post.id === ordered.payload.note.id);
+    check('the card uses the overrides', [cardNow.title, cardNow.summary], ['卡片标题甲', '卡片简介甲']);
+    const postNow = await blogCall('GET', '/post?path=' + encodeURIComponent(cardNow.path));
+    check('so does the post page', postNow.payload.post.title, '卡片标题甲');
+    const plainCard = (await blogCall('GET', '')).payload.posts.find((post) => post.id === later.payload.note.id);
+    check('a post without overrides falls back to the note', [plainCard.title, plainCard.summary], ['排序用乙', '乙正文']);
+
+    const clearedOverrides = await call('PUT', '/' + ordered.payload.note.id, { blogTitle: '', blogSummary: null });
+    check('an empty override is removed, not stored empty', [clearedOverrides.payload.note.blogTitle, clearedOverrides.payload.note.blogSummary], [null, null]);
+    const cardCleared = (await blogCall('GET', '')).payload.posts.find((post) => post.id === ordered.payload.note.id);
+    check('so the card falls back again', [cardCleared.title, cardCleared.summary], ['排序用甲', '甲正文']);
+
+    /* ---- the row follows the file ---------------------------------------- */
+    await call('POST', '/folders', { path: '发布区' });
+    const movedPost = await call('PUT', '/' + ordered.payload.note.id, { blog: true, folder: '发布区' });
+    const afterMove = rowOf(await publishRows(), ordered.payload.note.id);
+    check('a post that moved keeps its row, at its new path', [afterMove.published, afterMove.path], [true, '/发布区/排序用甲.md']);
+    check('and the publish date it already had', afterMove.publishedAt, movedPost.payload.note.blogAt);
+
+    const renamedPost = await call('PUT', '/' + ordered.payload.note.id, { title: '排序用甲改名' });
+    const afterRename = rowOf(await publishRows(), ordered.payload.note.id);
+    check('renaming keeps the row, the id and the date', [afterRename.path, afterRename.name, afterRename.publishedAt], ['/发布区/排序用甲改名.md', '排序用甲改名.md', afterMove.publishedAt]);
+    check('with the file renamed on disk', onDisk(renamedPost.payload.note.path), true);
+
+    await call('POST', '/folders', { path: '归档区' });
+    await call('POST', '/folders/move', { path: '发布区', target: '归档区' });
+    const afterFolderMove = rowOf(await publishRows(), ordered.payload.note.id);
+    check('moving the folder takes the row with it', [afterFolderMove.path, afterFolderMove.published], ['/归档区/发布区/排序用甲改名.md', true]);
+
+    /* ---- and goes when the note goes ------------------------------------- */
+    await call('DELETE', '/' + ordered.payload.note.id);
+    check('a note in the trash leaves the publish list', rowOf(await publishRows(), ordered.payload.note.id), undefined);
+    const restoredPost = await call('POST', '/' + ordered.payload.note.id + '/restore');
+    const afterRestore = rowOf(await publishRows(), ordered.payload.note.id);
+    check('and comes back with its publish information', [afterRestore.published, afterRestore.publishedAt], [true, afterRename.publishedAt]);
+    check('at the path it was restored to', afterRestore.path, restoredPost.payload.note.path);
+
+    const purgedPost = await call('DELETE', '/' + ordered.payload.note.id + '?permanent=true');
+    check('a permanently deleted note leaves the list too', [onDisk(restoredPost.payload.note.path), rowOf(await publishRows(), ordered.payload.note.id)], [false, undefined]);
+
+    /* ---- forgetting ------------------------------------------------------ */
+    const forgettable = await call('POST', '', { title: '要忘记的笔记', content: '正文' });
+    await call('PUT', '/' + forgettable.payload.note.id, { blog: true, blogTitle: '临时标题', blogSummary: '临时简介' });
+    const forgotten = await call('DELETE', '/' + forgettable.payload.note.id + '/publish');
+    check(
+      'deleting the publish information clears all four fields',
+      [forgotten.status, forgotten.payload.note.blog, forgotten.payload.note.blogAt, forgotten.payload.note.blogTitle, forgotten.payload.note.blogSummary, forgotten.payload.note.hasPublishInfo],
+      [200, false, null, null, null, false],
+    );
+    check('but leaves the note where it was', [onDisk(forgotten.payload.note.path), forgotten.payload.note.content.trim()], [true, '正文']);
+    const forgottenFile = readFileSync(fsPath(forgotten.payload.note.path), 'utf8');
+    check('and out of the file', ['blog:', 'blogAt:', 'blogTitle:', 'blogSummary:'].some((key) => forgottenFile.includes(key)), false);
+    check('so its row is gone', rowOf(await publishRows(), forgettable.payload.note.id), undefined);
+
+    session.guest = true;
+    const guestList = await call('GET', '/publish');
+    const guestForget = await call('DELETE', '/' + onlyTitle.payload.note.id + '/publish');
+    session.guest = false;
+    check('a guest can read the publish list', guestList.status, 200);
+    check('but cannot clear publish information', [guestForget.status, guestForget.payload.error.code], [403, 'guest_readonly']);
   } finally {
     const closed = new Promise((resolve) => server.close(resolve));
     server.closeAllConnections?.();

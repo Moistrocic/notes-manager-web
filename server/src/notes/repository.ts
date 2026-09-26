@@ -55,6 +55,18 @@ export interface NoteSummary {
   blog: boolean;
   /** When it was first published, so the blog never reorders itself. */
   blogAt: string | null;
+  /** The card's own title, when the publish dialog set one. */
+  blogTitle: string | null;
+  /** The card's own summary, when the publish dialog set one. */
+  blogSummary: string | null;
+  /**
+   * Whether the publish dialog has ever been used on this note.
+   *
+   * Derived from the front matter rather than stored in it: any one of the four
+   * publish fields is enough, which is what keeps a withdrawn note in the
+   * publish manager instead of making "unpublish" and "forget" the same thing.
+   */
+  hasPublishInfo: boolean;
   title: string;
   tags: string[];
   pinned: boolean;
@@ -86,6 +98,29 @@ export interface NotePatch {
   folder?: string;
   /** Publish to, or withdraw from, the blog. */
   blog?: boolean;
+  /** The card's own title; empty or null removes the override. */
+  blogTitle?: string | null;
+  /** The card's own summary; empty or null removes the override. */
+  blogSummary?: string | null;
+}
+
+/** One row of the publish manager: a note the publish dialog has been used on. */
+export interface PublishEntry {
+  id: string;
+  /** Storage path, which is how the note is addressed. */
+  path: string;
+  /** File name, as it is on disk. */
+  name: string;
+  published: boolean;
+  /** Null while the note is not on the blog. */
+  publishedAt: string | null;
+  /** What a card shows: the override when there is one, else the note's own. */
+  title: string;
+  summary: string;
+  /** Whether each of those is an override rather than a fallback. */
+  editedTitle: boolean;
+  editedSummary: boolean;
+  updatedAt: string;
 }
 
 /** One card on the blog: a published note, without its body. */
@@ -205,6 +240,25 @@ function toIso(value: unknown, fallback: number): string {
   }
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
   return new Date(fallback || Date.now()).toISOString();
+}
+
+/** The front matter keys the publish dialog writes. */
+const PUBLISH_KEYS = ['blog', 'blogAt', 'blogTitle', 'blogSummary'] as const;
+
+/**
+ * Whether a note's front matter has ever held publish information.
+ *
+ * Presence rather than truth: `blog: false`, left behind by "取消发布", is
+ * exactly the trace that keeps the note in the publish manager. Reading it as
+ * a boolean would make the row disappear the moment it was switched off.
+ */
+function hasPublishInfo(attrs: Record<string, unknown>): boolean {
+  return PUBLISH_KEYS.some((key) => Object.prototype.hasOwnProperty.call(attrs, key));
+}
+
+/** A front matter override: a trimmed string, or null when there is none. */
+function toOverride(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /** An ISO timestamp from front matter, or null when there is no usable one. */
@@ -376,6 +430,9 @@ export class NotesRepository {
       kind: 'note',
       blog: attrs.blog === true,
       blogAt: toIsoOrNull(attrs.blogAt),
+      blogTitle: toOverride(attrs.blogTitle),
+      blogSummary: toOverride(attrs.blogSummary),
+      hasPublishInfo: hasPublishInfo(attrs),
       title,
       tags: toTags(attrs.tags),
       pinned: attrs.pinned === true,
@@ -417,6 +474,9 @@ export class NotesRepository {
       // blog - which is also why nothing else here has to think about it.
       blog: false,
       blogAt: null,
+      blogTitle: null,
+      blogSummary: null,
+      hasPublishInfo: false,
       title: baseName(file.path),
       tags: [],
       pinned: false,
@@ -679,11 +739,23 @@ export class NotesRepository {
         // top of the blog.
         if (!current.blog || !current.blogAt) attributes.blogAt = now.toISOString();
       } else {
-        // Withdrawn means gone: a stale blogAt would publish it again, dated,
-        // the moment somebody flipped the switch back.
-        delete attributes.blog;
+        // Not published, but said out loud. `blog: false` is what keeps the
+        // note in the publish manager: deleting the field would make
+        // "取消发布" and "删除发布信息" the same action, and a row would vanish
+        // because somebody only wanted to take a post off the blog. The date
+        // goes, though - a stale one would republish the note, dated, the
+        // moment the switch was flipped back.
+        attributes.blog = false;
         delete attributes.blogAt;
       }
+    }
+    if (patch.blogTitle !== undefined) {
+      if (patch.blogTitle) attributes.blogTitle = patch.blogTitle.trim();
+      else delete attributes.blogTitle;
+    }
+    if (patch.blogSummary !== undefined) {
+      if (patch.blogSummary) attributes.blogSummary = patch.blogSummary.trim();
+      else delete attributes.blogSummary;
     }
     attributes.id = current.id;
     if (!attributes.created) attributes.created = current.created;
@@ -723,6 +795,36 @@ export class NotesRepository {
     this.invalidate(ns);
     const note = this.buildNote(targetPath, raw, { size: raw.length, modified: now.getTime() });
     this.cacheFor(ns).set(targetPath, { note, size: raw.length, modified: now.getTime() });
+    return note;
+  }
+
+  /**
+   * Forgets a note's publish information, leaving the note itself alone.
+   *
+   * This is the one action that takes a row off the publish list: withdrawing a
+   * post keeps `blog: false` behind as a trace, deleting the note takes the
+   * front matter with the file, and neither is what "删除发布信息" means.
+   */
+  async clearPublish(user: SessionUser | null | undefined, id: string): Promise<Note> {
+    const storage = await this.storageManager.resolve(user);
+    const ns = this.namespace(storage, user);
+    const driver = storage.driver;
+    const current = await this.get(user, id);
+    if (current.kind !== 'note') {
+      throw new StorageError('只有笔记可以发布', 400, 'not_a_note');
+    }
+    const doc = parseDocument(await driver.readText(current.path));
+    const attributes: Record<string, unknown> = { ...doc.attributes };
+    for (const key of PUBLISH_KEYS) delete attributes[key];
+    const now = new Date();
+    attributes.updated = now.toISOString();
+    const raw = serialiseDocument(attributes, doc.body);
+    await driver.write(current.path, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
+
+    this.invalidate(ns);
+    const note = this.buildNote(current.path, raw, { size: raw.length, modified: now.getTime() });
+    this.cacheFor(ns).set(current.path, { note, size: raw.length, modified: now.getTime() });
+    log.info(`cleared publish info of ${current.path}`);
     return note;
   }
 
@@ -1439,12 +1541,47 @@ export class NotesRepository {
     return this.readBinary(user, path);
   }
 
+  /**
+   * The publish manager's rows: every note the publish dialog has been used on,
+   * published first and then newest first.
+   *
+   * Unpublished rows stay in the list on purpose - that is what the row is for:
+   * finding a post again after it was taken off the blog.
+   */
+  async publishEntries(user: SessionUser | null | undefined): Promise<PublishEntry[]> {
+    const notes = await this.list(user);
+    return notes
+      .filter((note) => note.kind === 'note' && note.hasPublishInfo)
+      .map((note) => ({
+        id: note.id,
+        path: note.path,
+        name: baseName(note.path),
+        published: note.blog,
+        // A row that is not on the blog has no date to show: the interface
+        // prints a dash rather than a misleading one.
+        publishedAt: note.blog ? note.blogAt || note.updated || note.created : null,
+        title: note.blogTitle || note.title,
+        summary: note.blogSummary || toSummaryMarkdown(note.content),
+        editedTitle: Boolean(note.blogTitle),
+        editedSummary: Boolean(note.blogSummary),
+        updatedAt: note.updated,
+      }))
+      .sort((a, b) => {
+        if (a.published !== b.published) return a.published ? -1 : 1;
+        const right = Date.parse(b.publishedAt ?? b.updatedAt) || 0;
+        const left = Date.parse(a.publishedAt ?? a.updatedAt) || 0;
+        return right - left;
+      });
+  }
+
   private toBlogSummary(note: Note): BlogPostSummary {
     return {
       id: note.id,
       path: note.path,
-      title: note.title,
-      summary: toSummaryMarkdown(note.content),
+      // What the publish dialog wrote wins; the note's own wording is the
+      // fallback, so a card is never blank because nobody edited it.
+      title: note.blogTitle || note.title,
+      summary: note.blogSummary || toSummaryMarkdown(note.content),
       // A note published before the timestamp existed still needs a date; its
       // last change is the closest true answer there is.
       publishedAt: note.blogAt || note.updated || note.created,

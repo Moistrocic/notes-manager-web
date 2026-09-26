@@ -307,6 +307,18 @@ router.use((req, res, next) => {
     }),
   );
 
+  /**
+   * Every note the publish dialog has been used on, published or not.
+   *
+   * Registered before `/:id`, which would otherwise read "publish" as a note id.
+   */
+  router.get(
+    '/publish',
+    handler(async (req, res) => {
+      res.json({ entries: await services.notes.publishEntries(req.session) });
+    }),
+  );
+
   router.post(
     '/',
     handler(async (req, res) => {
@@ -452,6 +464,10 @@ router.use((req, res, next) => {
       if (body.color === null || typeof body.color === 'string') patch.color = body.color as string | null;
       if (typeof body.folder === 'string') patch.folder = body.folder;
       if (typeof body.blog === 'boolean') patch.blog = body.blog;
+      // An empty string clears the override rather than storing an empty one:
+      // null and "" mean the same thing to the dialog.
+      if (body.blogTitle === null || typeof body.blogTitle === 'string') patch.blogTitle = body.blogTitle as string | null;
+      if (body.blogSummary === null || typeof body.blogSummary === 'string') patch.blogSummary = body.blogSummary as string | null;
       const note = await services.notes.update(req.session, String(req.params.id), patch);
       res.json({ note });
     }),
@@ -463,6 +479,21 @@ router.use((req, res, next) => {
       const permanent = String(req.query.permanent ?? '') === 'true';
       const result = await services.notes.remove(req.session, String(req.params.id), permanent);
       res.json({ ok: true, ...result });
+    }),
+  );
+
+  /**
+   * Forgets a note's publish information without touching the note itself.
+   *
+   * Withdrawing a post keeps its row (and its overrides) in the publish list;
+   * this is how a row is taken off it, and it is deliberately not a delete.
+   */
+  router.delete(
+    '/:id/publish',
+    handler(async (req, res) => {
+      const note = await services.notes.clearPublish(req.session, String(req.params.id));
+      log.info(`publish info cleared: ${note.path}`);
+      res.json({ note });
     }),
   );
 
