@@ -1,8 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { FilePlus2, LogIn, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
+import { FilePlus2, Menu, PanelLeftOpen, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AppearanceDialog } from './components/AppearanceDialog';
 import { Aurora } from './components/Aurora';
+import { BlogIndexPage } from './components/blog/BlogIndexPage';
+import { BlogPostPage } from './components/blog/BlogPostPage';
 import { Wallpaper } from './components/Wallpaper';
 import { WallpaperLoading } from './components/WallpaperLoading';
 import { CommandPalette } from './components/CommandPalette';
@@ -12,25 +14,46 @@ import { NotesPanel } from './components/NoteList';
 import { SettingsDialog } from './components/SettingsDialog';
 import { Toasts } from './components/Toasts';
 import { TrashDialog } from './components/TrashDialog';
-import { Button, Tooltip } from './components/ui/primitives';
+import { Button } from './components/ui/primitives';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { applyAccent, applyAurora } from './lib/accent';
 import { shownWallpaper } from './lib/admin-background';
 import { cn } from './lib/cn';
-import { homeUrl, isManagerPath, noteUrl } from './lib/url';
+import {
+  homeUrl,
+  isBlogPostPath,
+  isManagerPath,
+  noteUrl,
+  pushBlogLocation,
+  readBlogLocation,
+} from './lib/url';
 import { useAppStore } from './store/useAppStore';
 
 /**
- * Which of the three front doors is showing.
+ * What the address is asking for.
  *
- * Two addresses, two jobs: `/` is the site's own front page - blank for now,
- * carrying nothing but the way in - and `/manager/…` is the panel, where what
- * follows the prefix is the note, exactly as it was before. The address decides
- * which one is on screen, so a link to `/manager/…` opens the note and a link
- * to `/` does not open the panel behind the visitor's back.
+ * Three address spaces, three jobs: `/` is the blog, `/notes/…` is one post on
+ * it (public, like the blog itself), and `/manager/…` is the panel with a note
+ * after the prefix. Reading the address rather than keeping a mode in state is
+ * what makes a link to a post open that post, and a link to the panel open the
+ * panel - and the back button walk between them.
  */
-type Entry = 'landing' | 'login' | 'panel';
+interface Where {
+  manager: boolean;
+  /** The post a `/notes/…` address names, if that is where we are. */
+  post: { path: string; anchor: string } | null;
+}
+
+function readWhere(): Where {
+  if (typeof window === 'undefined') return { manager: false, post: null };
+  if (isManagerPath(window.location.pathname)) return { manager: true, post: null };
+  if (isBlogPostPath(window.location.pathname)) {
+    const { path, anchor } = readBlogLocation();
+    if (path) return { manager: false, post: { path, anchor } };
+  }
+  return { manager: false, post: null };
+}
 
 export default function App() {
   const booted = useAppStore((s) => s.booted);
@@ -50,31 +73,57 @@ export default function App() {
   // the user's own URL otherwise - the theme's background has neither.
   const layerUrl = wallpaper === settings ? wallpaperUrl : wallpaper.url;
   const wallpaperActive = wallpaper.kind !== 'none' && Boolean(layerUrl);
-  const [entered, setEntered] = useState(() =>
-    typeof window === 'undefined' ? false : isManagerPath(window.location.pathname),
-  );
+  const [where, setWhere] = useState<Where>(readWhere);
   useHotkeys();
+  // Read before signing in: the front page has to know whether it is a blog or
+  // a door into the panel.
+  const blogEnabled = useAppStore((s) => Boolean(s.status?.blog?.enabled));
 
-  // The visitor is inside the panel's address. Whether that shows the panel or
-  // the sign-in card is then only a question of whether there is a session.
-  const entry: Entry = !entered ? 'landing' : user ? 'panel' : 'login';
-
-  /** Into the panel, address bar and all, so the link is shareable. */
-  const enterManager = () => {
-    const target = noteUrl(null);
-    if (typeof window !== 'undefined' && window.location.pathname !== target) {
-      window.history.pushState(null, '', target);
-    }
-    setEntered(true);
-  };
-
-  /** Back to the front page, which is where the login card's exit leads. */
+  /** To the blog's index - what the login card's exit leads to, when there is one. */
   const leaveManager = () => {
     if (typeof window !== 'undefined' && window.location.pathname !== homeUrl()) {
-      window.history.replaceState(null, '', homeUrl());
+      window.history.pushState(null, '', homeUrl());
     }
-    setEntered(false);
+    setWhere({ manager: false, post: null });
   };
+
+  /** Opening a post from a card, or from a link inside another post. */
+  const openPost = (path: string, anchor?: string) => {
+    pushBlogLocation(path, anchor ?? null);
+    setWhere({ manager: false, post: { path, anchor: anchor ?? '' } });
+  };
+
+  const openIndex = () => {
+    if (typeof window !== 'undefined' && window.location.pathname + window.location.hash !== homeUrl()) {
+      window.history.pushState(null, '', homeUrl());
+    }
+    setWhere({ manager: false, post: null });
+  };
+
+  // One place decides what is on screen. Before boot() answers there is
+  // nothing to decide with - the blog's switch comes from the server.
+  const view: 'splash' | 'panel' | 'login' | 'blog' | 'post' = !booted
+    ? 'splash'
+    : where.manager
+      ? user
+        ? 'panel'
+        : 'login'
+      : where.post && blogEnabled
+        ? 'post'
+        : blogEnabled
+          ? 'blog'
+          : 'splash';
+
+  // The blog is off: its addresses belong to the panel instead, so the site's
+  // front page is the way in rather than a page nobody asked for.
+  useEffect(() => {
+    if (!booted || where.manager || blogEnabled) return;
+    const target = noteUrl(null);
+    if (typeof window !== 'undefined' && window.location.pathname !== target) {
+      window.history.replaceState(null, '', target);
+    }
+    setWhere({ manager: true, post: null });
+  }, [booted, where.manager, blogEnabled]);
 
   // One place decides the interface colour: the wallpaper's own when that is
   // turned on, the user's pick when it is off, the theme's colour otherwise.
@@ -98,12 +147,13 @@ export default function App() {
   }, [boot]);
 
   // The address bar is the source of truth for what is on screen: the back
-  // button walks through the notes, and walking back past `/manager/` leaves
-  // the panel for the front page.
+  // button walks through the notes, posts and the panel.
   useEffect(() => {
     const onPopState = () => {
-      setEntered(isManagerPath(window.location.pathname));
-      if (useAppStore.getState().user) void useAppStore.getState().openFromLocation();
+      setWhere(readWhere());
+      if (isManagerPath(window.location.pathname) && useAppStore.getState().user) {
+        void useAppStore.getState().openFromLocation();
+      }
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
@@ -114,11 +164,11 @@ export default function App() {
       <Wallpaper />
       <Aurora />
       <AnimatePresence mode="wait">
-        {!booted ? (
+        {view === 'splash' ? (
           <Splash key="splash" />
-        ) : entry === 'panel' ? (
+        ) : view === 'panel' ? (
           <Workspace key="workspace" />
-        ) : entry === 'login' ? (
+        ) : view === 'login' ? (
           <motion.div
             key="login"
             initial={{ opacity: 0 }}
@@ -128,24 +178,46 @@ export default function App() {
           >
             <LoginScreen onClose={leaveManager} />
           </motion.div>
+        ) : view === 'post' && where.post ? (
+          <motion.div
+            key={'post:' + where.post.path}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="relative z-10 h-full"
+          >
+            <BlogPostPage
+              path={where.post.path}
+              anchor={where.post.anchor}
+              onOpenPost={openPost}
+              onOpenIndex={openIndex}
+            />
+          </motion.div>
         ) : (
           <motion.div
-            key="landing"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
+            key="blog"
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="relative z-10 h-full w-full"
+            className="relative z-10 h-full"
           >
-            <LandingPage url={noteUrl(null)} onEnter={enterManager} />
+            <BlogIndexPage onOpenPost={openPost} />
           </motion.div>
         )}
       </AnimatePresence>
       <Toasts />
       <WallpaperLoading />
-      <CommandPalette />
-      <SettingsDialog />
-      <AppearanceDialog />
-      <TrashDialog />
+      {/* The panel's own furniture: a visitor reading the blog has no use for a
+          command palette that only knows about notes, or for the settings of an
+          account they are not signed into. */}
+      {where.manager ? (
+        <>
+          <CommandPalette />
+          <SettingsDialog />
+          <AppearanceDialog />
+          <TrashDialog />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -424,34 +496,7 @@ function PanelHandle() {
   );
 }
 
-/**
- * The site's front page, still to be written.
- *
- * Deliberately blank: what belongs here is a page of its own, and until that
- * exists the only thing this one carries is the way into the panel - the same
- * door for signing in and for coming back once signed in.
- */
-function LandingPage({ url, onEnter }: { url: string; onEnter: () => void }) {
-  return (
-    <Tooltip label="进入管理面板" side="bottom">
-      {/* A real link, so the panel has an address that can be kept, shared and
-          opened in a new tab - the click only saves it the page load. */}
-      <a
-        href={url}
-        onClick={(event) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return;
-          event.preventDefault();
-          onEnter();
-        }}
-        aria-label="管理面板登录入口"
-        data-panel-entry
-        className="glass focus-ring fixed right-4 top-4 z-20 flex h-10 w-10 items-center justify-center rounded-2xl text-[var(--muted)] shadow-soft transition-colors hover:text-[var(--accent)]"
-      >
-        <LogIn className="h-4 w-4" />
-      </a>
-    </Tooltip>
-  );
-}
+// The front page is the blog now; when the blog is off, `/` belongs to the panel.
 
 function EmptyWorkspace() {
   const createNote = useAppStore((s) => s.createNote);

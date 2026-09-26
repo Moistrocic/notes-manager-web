@@ -90,6 +90,8 @@ export function SettingsDialog() {
   const [background, setBackground] = useState<BackgroundSettings>(DEFAULT_BACKGROUND);
   /** Whether visitors who never sign in may browse read-only. */
   const [guestEnabled, setGuestEnabled] = useState(true);
+  /** Whether the site's front page is the public blog. Off unless turned on. */
+  const [blogEnabled, setBlogEnabled] = useState(false);
   /** A composited frame of the scene being picked, for the crop editor. */
   const [cropStill, setCropStill] = useState<string | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
@@ -109,6 +111,7 @@ export function SettingsDialog() {
         setPerUser(data.settings.storage.openlist.perUser);
         setBackground(data.settings.background ?? DEFAULT_BACKGROUND);
         setGuestEnabled(data.settings.guest?.enabled ?? true);
+        setBlogEnabled(data.settings.blog?.enabled ?? false);
       })
       .catch((err: Error) => pushToast({ title: '读取设置失败', message: err.message, tone: 'error' }));
   }, [open, pushToast]);
@@ -123,6 +126,7 @@ export function SettingsDialog() {
         },
         background,
         guest: { enabled: guestEnabled },
+        blog: { enabled: blogEnabled },
       });
       pushToast({ title: '设置已保存', tone: 'success' });
       await Promise.all([
@@ -588,6 +592,25 @@ export function SettingsDialog() {
               </p>
             </div>
             <Switch checked={guestEnabled} onChange={setGuestEnabled} className="mt-0.5 shrink-0" />
+          </div>
+
+          {/* What the site's front page is. The wording has to say both states:
+              this is the one switch here that changes what an address means. */}
+          <div
+            data-testid="blog-setting"
+            className="mt-1.5 flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3"
+          >
+            <div className="min-w-0">
+              <div className="text-[12px] text-[var(--muted)]">开启博客</div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
+                {blogEnabled
+                  ? '已开启：站点根 / 是博客首页。'
+                  : '已关闭：访问站点根 / 会直接跳到管理面板的登录页。'}{' '}
+                博客只展示被标记为发布的笔记 —— 本轮先在笔记的 front matter 里写 blog: true，
+                管理界面上的发布开关随后再加。保存后立即生效。
+              </p>
+            </div>
+            <Switch checked={blogEnabled} onChange={setBlogEnabled} className="mt-0.5 shrink-0" />
           </div>
         </section>
 

@@ -73,6 +73,8 @@ function makeNote(id: string, content: string): Note {
   return {
     id,
     kind: 'note',
+    blog: false,
+    blogAt: null,
     title: `标题 ${id}`,
     tags: ['t'],
     pinned: false,

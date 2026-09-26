@@ -12,6 +12,9 @@ export type EntryKind = 'note' | 'image' | 'file';
 export interface NoteSummary {
   id: string;
   kind: EntryKind;
+  /** Published to the blog, and when it was. */
+  blog: boolean;
+  blogAt: string | null;
   title: string;
   tags: string[];
   pinned: boolean;
@@ -31,6 +34,41 @@ export interface NoteSummary {
 
 export interface Note extends NoteSummary {
   content: string;
+}
+
+/** One card on the blog: a published note, without its body. */
+export interface BlogPostSummary {
+  id: string;
+  /** Storage path, which is also the address of its page. */
+  path: string;
+  title: string;
+  /**
+   * The opening of the note, as markdown.
+   *
+   * Markdown rather than plain text because the card renders it: a summary
+   * that starts with a list or a bold sentence should look like one.
+   */
+  summary: string;
+  publishedAt: string;
+  updatedAt: string;
+  wordCount: number;
+  tags: string[];
+}
+
+export interface BlogPost extends BlogPostSummary {
+  content: string;
+}
+
+export interface BlogIndexPayload {
+  /** Whether the blog is on at all; when it is not, the site shows the panel. */
+  enabled: boolean;
+  title: string;
+  posts: BlogPostSummary[];
+}
+
+export interface BlogPostPayload {
+  enabled: boolean;
+  post: BlogPost;
 }
 
 export interface TagCount {
@@ -109,6 +147,8 @@ export interface SystemStatus {
     openlistSiteTitle: string | null;
   };
   user: SessionUser | null;
+  /** Read before signing in: the site's front page needs to know what it is. */
+  blog: { enabled: boolean };
 }
 
 export interface NotesPayload {
@@ -193,6 +233,7 @@ export interface AppSettingsPayload {
     };
     background: BackgroundSettings;
     guest: { enabled: boolean };
+    blog: { enabled: boolean };
   };
   effective: {
     storage: {
@@ -202,6 +243,7 @@ export interface AppSettingsPayload {
     };
     background: BackgroundSettings;
     guest: { enabled: boolean };
+    blog: { enabled: boolean };
     sources: Record<string, 'env' | 'file' | 'default'>;
   };
   paths: {

@@ -1,4 +1,5 @@
-import { FileText, ImagePlus, LogOut, Moon, Settings, Sun, UserRound } from 'lucide-react';
+import { FileText, ImagePlus, LogOut, Moon, Newspaper, Settings, Sun, UserRound } from 'lucide-react';
+import { blogUrl } from '../lib/url';
 import { useAppStore } from '../store/useAppStore';
 import { Tooltip } from './ui/primitives';
 
@@ -10,6 +11,11 @@ export function SessionFooter() {
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setAppearanceOpen = useAppStore((s) => s.setAppearanceOpen);
   const logout = useAppStore((s) => s.logout);
+  // The blog is the site's front page: there is a way back to it only while the
+  // administrator has it switched on.
+  // Both levels optional: a status from an older server carries no blog in it,
+  // and the panel must not go blank over a field it does not need.
+  const blogEnabled = useAppStore((s) => s.status?.blog?.enabled ?? false);
 
   return (
     <div className="space-y-2">
@@ -34,6 +40,18 @@ export function SessionFooter() {
             {user?.openlistBasePath && user.openlistBasePath !== '/' ? ` · ${user.openlistBasePath}` : ''}
           </div>
         </div>
+        {blogEnabled ? (
+          <Tooltip label="返回博客" side="top">
+            <button
+              type="button"
+              aria-label="返回博客"
+              onClick={() => window.location.assign(blogUrl(null))}
+              className="focus-ring flex h-7 w-7 items-center justify-center rounded-xl text-[var(--faint)] transition-colors hover:text-[var(--accent)]"
+            >
+              <Newspaper className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        ) : null}
         <Tooltip label="外观（壁纸）" side="top">
           <button
             type="button"
