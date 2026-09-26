@@ -458,7 +458,11 @@ select optgroup {
   font-size: 14.5px;
 }
 .cm-editor.cm-focused { outline: none !important; }
-.cm-scroller { padding-bottom: 40vh; }
+/* The editor's typing margin lives on .cm-content (see CodeEditor's theme): one
+   place, so the scroll sync can read it back and leave it out of the progress.
+   A second one here doubled the blank and made the editor's end land a
+   screenful past the preview's. */
+.cm-scroller { padding-bottom: 0; }
 .cm-gutters {
   background: transparent !important;
   border-right: 1px solid var(--line) !important;

@@ -84,7 +84,12 @@ const lightHighlight = HighlightStyle.define([...lightProse, ...codeTagStyles(fa
 
 const transparentTheme = EditorView.theme({
   '&': { backgroundColor: 'transparent', height: '100%', fontSize: CODE_FONT_SIZE },
-  '.cm-content': { caretColor: 'var(--accent)', padding: '20px 8px 45vh 4px' },
+  // The bottom margin is room to type in, not room to scroll through: it keeps
+  // the last line off the edge of the pane. Deliberately modest, and in one
+  // place - the scroll sync reads it back and leaves it out of the progress, so
+  // a page of it only made the two panes look like they disagreed about where
+  // the note ends.
+  '.cm-content': { caretColor: 'var(--accent)', padding: '20px 8px 12vh 4px' },
   '.cm-line': { padding: '0 4px' },
   '.cm-gutters': { backgroundColor: 'transparent', border: 'none', paddingRight: '6px', paddingLeft: '10px' },
   '.cm-foldGutter span': { color: 'var(--faint)' },

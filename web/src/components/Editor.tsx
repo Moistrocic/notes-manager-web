@@ -22,7 +22,7 @@ import { cn } from '../lib/cn';
 import { formatBytes, formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
 import { extractHeadings, type Heading } from '../lib/outline';
-import { mirrorScroll } from '../lib/scroll-sync';
+import { mirrorScroll, readScrollable, trailingSpaceOf } from '../lib/scroll-sync';
 import { replaceAnchor } from '../lib/url';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
@@ -205,13 +205,25 @@ export function Editor() {
         ? window.requestAnimationFrame.bind(window)
         : (callback) => window.setTimeout(() => callback(Date.now()), 16);
 
-    const follow = (from: HTMLElement, to: HTMLElement) => () => {
+    // What each pane keeps below its last line, which is room to type in rather
+    // than something to read: left in the arithmetic, the editor's end sits a
+    // margin past the preview's and the two never look level. Read from the
+    // styles (they are in vh, so a resize moves them) rather than guessed here.
+    let editorMargin = trailingSpaceOf(editor);
+    let previewMargin = trailingSpaceOf(preview);
+    const remeasure = () => {
+      editorMargin = trailingSpaceOf(editor);
+      previewMargin = trailingSpaceOf(preview);
+    };
+    window.addEventListener('resize', remeasure);
+
+    const follow = (from: HTMLElement, fromMargin: () => number, to: HTMLElement, toMargin: () => number) => () => {
       if (justMoved === from) return;
       // The preview is on its way somewhere under its own steam: those are
       // not positions to be followed. Where it lands is where the panes meet
       // again, on the reader's next move.
       if (previewApiRef.current?.isSelfScrolling()) return;
-      const target = mirrorScroll(from, to);
+      const target = mirrorScroll(readScrollable(from, fromMargin()), readScrollable(to, toMargin()));
       if (target === null) return;
       justMoved = to;
       // Assigned, never animated: a smooth scroll here would still be
@@ -221,11 +233,12 @@ export function Editor() {
       later(release);
     };
 
-    const onEditorScroll = follow(editor, preview);
-    const onPreviewScroll = follow(preview, editor);
+    const onEditorScroll = follow(editor, () => editorMargin, preview, () => previewMargin);
+    const onPreviewScroll = follow(preview, () => previewMargin, editor, () => editorMargin);
     editor.addEventListener('scroll', onEditorScroll, { passive: true });
     preview.addEventListener('scroll', onPreviewScroll, { passive: true });
     return () => {
+      window.removeEventListener('resize', remeasure);
       editor.removeEventListener('scroll', onEditorScroll);
       preview.removeEventListener('scroll', onPreviewScroll);
     };
