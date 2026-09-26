@@ -104,6 +104,11 @@ export interface EditorApi {
   /** Scrolls to (and places the cursor on) a 1-based line number. */
   revealLine: (line: number) => void;
   focus: () => void;
+  /**
+   * The element CodeMirror itself scrolls, for a pane that wants to follow
+   * this one's progress. Null before the view exists.
+   */
+  scrollElement: () => HTMLElement | null;
   /* --- what the right-click menu drives ---------------------------------- */
   undo: () => void;
   redo: () => void;
@@ -411,6 +416,11 @@ export function CodeEditor({ value, onChange, onSave, onBlur, dark, placeholderT
       },
       focus() {
         viewRef.current?.focus();
+      },
+      scrollElement() {
+        // The scroller rather than the wrapper: what the other pane has to
+        // match is the thing that actually moves.
+        return viewRef.current?.scrollDOM ?? null;
       },
       undo() {
         const view = viewRef.current;

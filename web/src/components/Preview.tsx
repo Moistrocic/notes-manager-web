@@ -14,6 +14,13 @@ export interface PreviewApi {
   scrollToHeading: (target: { index: number; text: string; level: number }) => boolean;
   /** Scrolls to any element by id - used for `#anchor` links and deep links. */
   scrollToAnchor: (id: string) => boolean;
+  /**
+   * The element this pane scrolls, so a pane beside it can follow the same
+   * progress through the document. Null before it is on screen.
+   *
+   * Reading it changes nothing: the preview still scrolls exactly as it did.
+   */
+  scrollElement: () => HTMLElement | null;
 }
 
 interface PreviewProps {
@@ -71,6 +78,9 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
   useEffect(() => {
     if (!apiRef) return undefined;
     apiRef.current = {
+      scrollElement() {
+        return containerRef.current;
+      },
       scrollToAnchor(id) {
         const container = containerRef.current;
         if (!container || !id) return false;

@@ -8,6 +8,7 @@ import {
   Lock,
   Maximize2,
   Minimize2,
+  MoveVertical,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
@@ -21,6 +22,7 @@ import { cn } from '../lib/cn';
 import { formatBytes, formatDateTime, relativeTime } from '../lib/format';
 import { slugifyHeading } from '../lib/markdown';
 import { extractHeadings, type Heading } from '../lib/outline';
+import { mirrorScroll } from '../lib/scroll-sync';
 import { replaceAnchor } from '../lib/url';
 import { useAppStore, useCanWrite, useReadOnlyReason } from '../store/useAppStore';
 import { Badge, Button, Tooltip } from './ui/primitives';
@@ -52,6 +54,8 @@ export function Editor() {
   const setPendingAnchor = useAppStore((s) => s.setPendingAnchor);
   const splitRatio = useAppStore((s) => s.splitRatio);
   const setSplitRatio = useAppStore((s) => s.setSplitRatio);
+  const syncScroll = useAppStore((s) => s.syncScroll);
+  const toggleSyncScroll = useAppStore((s) => s.toggleSyncScroll);
   const focusMode = useAppStore((s) => s.focusMode);
   const toggleFocusMode = useAppStore((s) => s.toggleFocusMode);
   const canWrite = useCanWrite();
@@ -163,6 +167,60 @@ export function Editor() {
       document.body.style.cursor = '';
     };
   }, [dragging]);
+
+  /**
+   * Both panes at the same progress through the document.
+   *
+   * Equal scrollTop would mean nothing here: one pane scrolls source lines and
+   * the other rendered blocks, and their heights have nothing to do with each
+   * other. What they can share is how far down the reader is, which is the sum
+   * `mirrorScroll` does. It answers null when the other pane is already there,
+   * and that is what stops the two of them answering each other.
+   *
+   * Mounted with the split view: the children's effects publish their scroll
+   * elements before this one runs, so both are there to be listened to.
+   */
+  useEffect(() => {
+    if (!syncScroll || editorMode !== 'split') return undefined;
+    const editor = apiRef.current?.scrollElement() ?? null;
+    const preview = previewApiRef.current?.scrollElement() ?? null;
+    // One of them is not on screen: there is nothing to keep level with.
+    if (!editor || !preview) return undefined;
+
+    // The pane that was just moved reports its own move. That report is not an
+    // instruction, and treating it as one is what makes two panes fight.
+    let justMoved: HTMLElement | null = null;
+    const release = () => {
+      justMoved = null;
+    };
+    // Released on the next frame: by then the move has been reported.
+    const later: (callback: FrameRequestCallback) => void =
+      typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (callback) => window.setTimeout(() => callback(Date.now()), 16);
+
+    const follow = (from: HTMLElement, to: HTMLElement) => () => {
+      if (justMoved === from) return;
+      const target = mirrorScroll(from, to);
+      if (target === null) return;
+      justMoved = to;
+      // Assigned, never animated: a smooth scroll here would still be
+      // travelling when the next event arrives, and the panes would trail each
+      // other instead of moving together. (The preview's own jumps to a heading
+      // are smooth, which is a separate thing from keeping two panes level.)
+      to.scrollTop = target;
+      later(release);
+    };
+
+    const onEditorScroll = follow(editor, preview);
+    const onPreviewScroll = follow(preview, editor);
+    editor.addEventListener('scroll', onEditorScroll, { passive: true });
+    preview.addEventListener('scroll', onPreviewScroll, { passive: true });
+    return () => {
+      editor.removeEventListener('scroll', onEditorScroll);
+      preview.removeEventListener('scroll', onPreviewScroll);
+    };
+  }, [syncScroll, editorMode]);
 
   if (!activeNote && !loadingNote) return null;
 
@@ -364,6 +422,24 @@ export function Editor() {
               picture has neither, and a control that cannot do anything is
               worse than one that is not drawn. */}
           {isNote ? renderModeSwitch() : null}
+          {/* One switch for both panes. Only in split: with a single pane on
+              screen there is nothing to keep level with, and a control that
+              cannot do anything is worse than one that is not drawn. */}
+          {isNote && editorMode === 'split' ? (
+            <Tooltip label={syncScroll ? '取消同步滚动' : '同步滚动'}>
+              <Button
+                variant={syncScroll ? 'soft' : 'ghost'}
+                size="icon"
+                aria-label={syncScroll ? '取消同步滚动' : '同步滚动'}
+                aria-pressed={syncScroll}
+                data-sync-scroll
+                onClick={() => toggleSyncScroll()}
+                className={syncScroll ? 'text-[var(--accent)]' : undefined}
+              >
+                <MoveVertical className="h-4 w-4" />
+              </Button>
+            </Tooltip>
+          ) : null}
           {!sidebarOpen ? (
             <Tooltip label="显示笔记列表">
               <Button variant="ghost" size="icon" aria-label="显示笔记列表" onClick={() => toggleSidebar(true)}>
