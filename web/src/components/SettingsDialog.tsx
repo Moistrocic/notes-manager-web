@@ -606,8 +606,8 @@ export function SettingsDialog() {
                 {blogEnabled
                   ? '已开启：站点根 / 是博客首页。'
                   : '已关闭：访问站点根 / 会直接跳到管理面板的登录页。'}{' '}
-                博客只展示被标记为发布的笔记 —— 本轮先在笔记的 front matter 里写 blog: true，
-                管理界面上的发布开关随后再加。保存后立即生效。
+                博客只展示被标记为发布的笔记：是否发布、以及卡片上的标题与简介，都在左侧列表的「发布管理」里设置
+                （也可以右键一篇笔记，选「发布管理」）。保存后立即生效。
               </p>
             </div>
             <Switch checked={blogEnabled} onChange={setBlogEnabled} className="mt-0.5 shrink-0" />

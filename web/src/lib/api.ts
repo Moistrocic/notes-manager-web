@@ -8,6 +8,7 @@ import type {
   Note,
   NoteSummary,
   NotesPayload,
+  PublishListPayload,
   SessionUser,
   SystemStatus,
   TagCount,
@@ -242,6 +243,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+  /** Every note the publish dialog has been used on, published or not. */
+  listPublish: () => request<PublishListPayload>('/notes/publish'),
+  /**
+   * Forgets a note's publish information without touching the note itself.
+   *
+   * Deleting the note takes the information with it (it lives in the note), so
+   * this is the only way to take a row off the publish list and leave the file
+   * where it is.
+   */
+  clearPublish: (id: string) =>
+    request<{ note: Note }>(`/notes/${encodeURIComponent(id)}/publish`, { method: 'DELETE' }),
+
   /** Moves a folder, contents and all, under another folder ('' = the root). */
   moveFolder: (path: string, target: string) =>
     request<{ ok: boolean; path: string; folders: FolderCount[] }>('/notes/folders/move', {

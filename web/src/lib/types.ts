@@ -15,6 +15,17 @@ export interface NoteSummary {
   /** Published to the blog, and when it was. */
   blog: boolean;
   blogAt: string | null;
+  /**
+   * The blog's own title and summary, when the publish dialog has been used.
+   *
+   * Null means "not edited": the card falls back to the note's own title and to
+   * the opening of its body. Clearing the field in the dialog removes the
+   * override, so an empty string is never stored.
+   */
+  blogTitle: string | null;
+  blogSummary: string | null;
+  /** Whether the publish dialog has ever been used on this note. */
+  hasPublishInfo: boolean;
   title: string;
   tags: string[];
   pinned: boolean;
@@ -64,6 +75,29 @@ export interface BlogIndexPayload {
   enabled: boolean;
   title: string;
   posts: BlogPostSummary[];
+}
+
+/** One row of the publish manager: a note the publish dialog has been used on. */
+export interface PublishEntry {
+  id: string;
+  /** Storage path, which is how the note is addressed. */
+  path: string;
+  /** File name, as it is on disk. */
+  name: string;
+  published: boolean;
+  /** Null while the note is not on the blog. */
+  publishedAt: string | null;
+  /** What a card shows: the override when there is one, else the note's own. */
+  title: string;
+  summary: string;
+  /** Whether each of those is an override rather than a fallback. */
+  editedTitle: boolean;
+  editedSummary: boolean;
+  updatedAt: string;
+}
+
+export interface PublishListPayload {
+  entries: PublishEntry[];
 }
 
 export interface BlogPostPayload {

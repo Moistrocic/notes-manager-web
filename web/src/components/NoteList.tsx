@@ -9,6 +9,7 @@ import {
   Pin,
   Plus,
   Search,
+  Send,
   SlidersHorizontal,
   Sparkles,
   Star,
@@ -30,6 +31,8 @@ import {
 } from '../store/useAppStore';
 import { NoteTree } from './NoteTree';
 import { SessionFooter } from './Sidebar';
+import { PublishDialog } from './publish/PublishDialog';
+import { PublishManagerDialog } from './publish/PublishManagerDialog';
 import { Badge, Button, Field, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
 
 /** What each sort is called. Titles first: an alphabetical list is the one that
@@ -140,6 +143,10 @@ export function NotesPanel() {
         ? '搜索标题与内容…'
         : '搜索笔记、标签…';
   const [dialog, setDialog] = useState<PromptState>(null);
+  /** The note the publishing panel is open for, or null when it is closed. */
+  const [publishTarget, setPublishTarget] = useState<string | null>(null);
+  /** Whether the list of everything published is open. */
+  const [publishManagerOpen, setPublishManagerOpen] = useState(false);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -278,6 +285,19 @@ export function NotesPanel() {
         <Tooltip label="回收站">
           <Button variant="outline" size="icon" className="h-10 w-10" onClick={() => setTrashOpen(true)}>
             <Trash2 className="h-4 w-4" />
+          </Button>
+        </Tooltip>
+        {/* What the blog shows is decided next to the trash, where the other
+            list-wide panels live. */}
+        <Tooltip label="发布管理">
+          <Button
+            variant="outline"
+            size="icon"
+            className="h-10 w-10"
+            data-open-publish-manager
+            onClick={() => setPublishManagerOpen(true)}
+          >
+            <Send className="h-4 w-4" />
           </Button>
         </Tooltip>
       </div>
@@ -525,6 +545,8 @@ export function NotesPanel() {
               onDeleteNote: (id) => void deleteNote(id),
               onTogglePin: (id) => void togglePinned(id),
               onToggleFavorite: (id) => void toggleFavorite(id),
+              // One note's publishing panel, from that row's own menu.
+              onPublish: (id) => setPublishTarget(id),
               onMoveSelection: () => setDialog({ kind: 'moveSelection', value: '', count: selection.length }),
               // A drag that ends on a folder has already answered the only
               // question a move asks, so neither of these opens a dialog.
@@ -581,6 +603,11 @@ export function NotesPanel() {
             }
           }}
         />
+
+        {/* The publishing panels: one note's, opened from the tree's menu, and
+            the whole list, opened from the button above the search box. */}
+        <PublishDialog noteId={publishTarget} open={publishTarget !== null} onClose={() => setPublishTarget(null)} />
+        <PublishManagerDialog open={publishManagerOpen} onClose={() => setPublishManagerOpen(false)} />
       </div>
 
       <div className="border-t border-[var(--line)] p-3">

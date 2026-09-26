@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Pencil,
   Pin,
+  Send,
   Star,
   Trash2,
   X,
@@ -37,6 +38,8 @@ export interface NoteTreeActions {
   onDeleteNote: (id: string) => void;
   onTogglePin: (id: string) => void;
   onToggleFavorite: (id: string) => void;
+  /** Opens the publishing panel for one note: what the blog makes of it. */
+  onPublish: (id: string) => void;
   /** Moves every selected row; the panel asks where to. */
   onMoveSelection: () => void;
   /**
@@ -692,6 +695,13 @@ export function NoteTree({
     ];
     if (isNote) {
       items.push(
+        {
+          id: 'note-publish',
+          label: '发布管理',
+          icon: <Send className="h-3.5 w-3.5" />,
+          disabled: !canWrite,
+          run: () => actions.onPublish(note.id),
+        },
         {
           id: 'note-pin',
           label: note.pinned ? '取消置顶' : '置顶',

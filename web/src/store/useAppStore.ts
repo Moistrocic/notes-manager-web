@@ -265,6 +265,13 @@ interface AppState {
    * disk too, and the note comes back with its new path.
    */
   renameNote: (id: string, title: string) => Promise<void>;
+  /**
+   * Publishes a note to the blog, or takes it off it, with the title and
+   * summary the card should show. Empty strings mean no override.
+   */
+  setPublish: (id: string, patch: { published: boolean; title: string; summary: string }) => Promise<void>;
+  /** Forgets a note's publish information; the note itself is left alone. */
+  forgetPublish: (id: string) => Promise<void>;
 
   setQuery: (value: string) => void;
   setActiveTag: (tag: string | null) => void;
@@ -1125,6 +1132,52 @@ export const appStore = createStore<AppState>((set, get) => ({
       get().pushToast({ title: '笔记已移动', message: folder || '根目录', tone: 'success' });
     } catch (err) {
       get().pushToast({ title: '移动失败', message: errorMessage(err), tone: 'error' });
+    }
+  },
+
+  setPublish: async (id, patch) => {
+    try {
+      const current =
+        get().notes.find((n) => n.id === id) ?? (get().activeNote?.id === id ? get().activeNote : null);
+      const title = patch.title.trim();
+      const { note } = await api.updateNote(id, {
+        blog: patch.published,
+        // An empty box means "no override": the card falls back to the note's
+        // own title. So does a title that already says the same thing - storing
+        // it would freeze the card against a later rename of the note.
+        blogTitle: title && current && title !== current.title ? title : '',
+        blogSummary: patch.summary.trim(),
+      });
+      const summary = toSummary(note);
+      set((state) => ({
+        notes: state.notes.map((n) => (n.id === id ? summary : n)),
+        activeNote: state.activeNote?.id === id ? { ...note, content: state.activeNote.content } : state.activeNote,
+      }));
+      void get().refreshMeta();
+      get().pushToast({
+        title: patch.published ? '已发布到博客' : '已取消发布',
+        message: note.blogTitle || note.title,
+        tone: 'success',
+      });
+    } catch (err) {
+      get().pushToast({ title: '保存发布信息失败', message: errorMessage(err), tone: 'error' });
+      throw err;
+    }
+  },
+
+  forgetPublish: async (id) => {
+    try {
+      const { note } = await api.clearPublish(id);
+      const summary = toSummary(note);
+      set((state) => ({
+        notes: state.notes.map((n) => (n.id === id ? summary : n)),
+        activeNote: state.activeNote?.id === id ? { ...note, content: state.activeNote.content } : state.activeNote,
+      }));
+      void get().refreshMeta();
+      get().pushToast({ title: '已删除发布信息', message: note.title, tone: 'info' });
+    } catch (err) {
+      get().pushToast({ title: '删除发布信息失败', message: errorMessage(err), tone: 'error' });
+      throw err;
     }
   },
 
