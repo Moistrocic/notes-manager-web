@@ -14,6 +14,9 @@ const note: Note = {
   kind: 'note',
   blog: false,
   blogAt: null,
+  blogTitle: null,
+  blogSummary: null,
+  hasPublishInfo: false,
   title: '渲染检查笔记',
   tags: ['check', '渲染'],
   pinned: true,
@@ -191,7 +194,7 @@ const scenarios: Scenario[] = [
     },
     // The storage card is gone; where notes live is a badge beside the version
     // now, and the connection detail is in the server settings.
-    expect: ['笔记管理面板', '搜索笔记、标签', '新建笔记', '回收站', 'OpenList'],
+    expect: ['笔记管理面板', '搜索笔记、标签', '新建笔记', '回收站', 'data-open-publish-manager', 'OpenList'],
   },
   {
     name: 'workspace: read-only account',

@@ -1120,6 +1120,9 @@ const summaryNote = (
   // A fixture is not published to the blog unless it says so.
   blog: false,
   blogAt: null,
+  blogTitle: null,
+  blogSummary: null,
+  hasPublishInfo: false,
   title,
   tags: [],
   pinned: false,
@@ -3020,6 +3023,15 @@ console.log('\nthe blog switch (jsdom)');
   check('the settings offer the blog', Boolean(setting), true);
   check('with the switch where the server left it', blogSwitch()?.getAttribute('aria-checked'), 'true');
   check('and the wording says what the front page is', (setting?.textContent ?? '').includes('站点根 / 是博客首页'), true);
+  // Where the switch points is the publish screens, and it says so: the note's
+  // front matter is an implementation detail, not something to send a reader to.
+  check(
+    'pointing at where publishing is decided',
+    ['发布管理', '标题与简介', '右键一篇笔记'].every((text) => (setting?.textContent ?? '').includes(text)),
+    true,
+  );
+  check('with nothing about front matter left in it', (setting?.textContent ?? '').includes('front matter'), false);
+  check('nor about a switch still to come', (setting?.textContent ?? '').includes('随后再加'), false);
 
   await act(async () => {
     blogSwitch()?.click();
@@ -3046,6 +3058,317 @@ console.log('\nthe blog switch (jsdom)');
   host.remove();
   appStore.setState(hold);
   globalThis.fetch = realFetch;
+}
+
+/* --- publishing a note ------------------------------------------------------ */
+console.log('\npublishing a note (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+
+  const noteA = summaryNote('a', '笔记A的标题', '', {
+    blog: true,
+    blogAt: '2026-01-02T03:04:00.000Z',
+    blogTitle: '卡片上的标题',
+    blogSummary: '**卡片**上的简介',
+    hasPublishInfo: true,
+  });
+  const noteB = summaryNote('b', '笔记B的标题', '', { hasPublishInfo: true });
+  const picture = summaryNote('p', '风景.png', '', { kind: 'image', size: 2048, excerpt: '' });
+
+  const entries = [
+    {
+      id: 'a',
+      path: '/a.md',
+      name: 'a.md',
+      published: true,
+      publishedAt: '2026-01-02T03:04:00.000Z',
+      title: '卡片上的标题',
+      summary: '卡片上的简介',
+      editedTitle: true,
+      editedSummary: true,
+      updatedAt: '2026-02-03T04:05:00.000Z',
+    },
+    {
+      id: 'b',
+      path: '/b.md',
+      name: 'b.md',
+      published: false,
+      publishedAt: null,
+      title: '笔记B的标题',
+      summary: '',
+      editedTitle: false,
+      editedSummary: false,
+      updatedAt: '2026-02-04T05:06:00.000Z',
+    },
+  ];
+
+  // Whatever is sent to the server is recorded, so a button that must send
+  // nothing can be told apart from one that sends something.
+  const writes: { method: string; url: string; body: string }[] = [];
+  // The store call that takes a note off the publish list, recorded rather than
+  // performed: the note itself is not what is being tested here.
+  const forgotten: string[] = [];
+
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [noteA, noteB, picture],
+    folders: [],
+    expandedFolders: [],
+    activeFolder: null,
+    activeId: null,
+    query: '',
+    selection: [],
+    loadingNotes: false,
+    notesError: null,
+    forgetPublish: async (id: string) => {
+      forgotten.push(id);
+    },
+  } as never);
+
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (method !== 'GET') writes.push({ method, url, body: String(init.body ?? '') });
+    if (url.includes('/api/notes/publish')) return reply({ entries });
+    if (method === 'PUT' && /\/api\/notes\//.test(url)) {
+      const patch = JSON.parse(String(init.body ?? '{}')) as Record<string, unknown>;
+      return reply({ note: { ...noteA, ...patch } });
+    }
+    // Saving asks for the list again (refreshMeta), so the list has to answer.
+    if (url.includes('/api/notes')) {
+      return reply({
+        notes: [noteA, noteB, picture],
+        stats: { notes: 3, tags: 0, folders: 0, words: 0, updatedAt: null },
+        tags: [],
+        folders: [],
+        capabilities: WRITABLE,
+      });
+    }
+    return reply({});
+  }) as typeof fetch;
+
+  const panel = await mountPanel();
+  const row = (key: string) => panel.host.querySelector('[data-tree-row="' + key + '"]');
+
+  // The way in, beside the trash: the two list-wide panels sit together.
+  const entry = panel.host.querySelector<HTMLButtonElement>('button[data-open-publish-manager]');
+  check('the panel offers a publish manager', Boolean(entry), true);
+  check('named for what it opens', entry?.getAttribute('aria-label'), '发布管理');
+  const trash = panel.host.querySelector('button[aria-label="回收站"]');
+  check(
+    'sitting right after the trash',
+    Boolean(entry && trash?.parentElement && trash.parentElement.nextElementSibling === entry.parentElement),
+    true,
+  );
+
+  // A note's own menu carries it, and opening it asks about that note.
+  await rightClick(row('note:a') as Element);
+  check('a note can be published from its own menu', openMenuItems().includes('note-publish'), true);
+  check('called what it does', openMenuLabels().some((label) => label.includes('发布管理')), true);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="note-publish"]')?.click();
+  });
+  await flush();
+  check('which opens the publish settings for it', Boolean(document.querySelector('[data-publish-form]')), true);
+  check(
+    'starting from what that note holds',
+    document.querySelector<HTMLInputElement>('input[aria-label="博客标题"]')?.value,
+    '卡片上的标题',
+  );
+  check(
+    'and its summary',
+    document.querySelector<HTMLTextAreaElement>('[data-publish-summary]')?.value,
+    '**卡片**上的简介',
+  );
+  await act(async () => {
+    Array.from(document.querySelectorAll('button')).find((button) => button.textContent?.trim() === '取消')?.click();
+  });
+  await settled();
+
+  // A picture has no blog entry of its own.
+  await rightClick(row('note:p') as Element);
+  check('a picture is not offered publish settings', openMenuItems().includes('note-publish'), false);
+  await closeMenu();
+
+  // Nothing may be published by an account that cannot write.
+  await act(async () => {
+    appStore.setState({
+      capabilities: { ...WRITABLE, writable: false, permissions: { write: false, rename: false, move: false, remove: false } },
+    } as never);
+  });
+  await rightClick(row('note:a') as Element);
+  check('and a read-only account is not offered it either', document.querySelector('[data-menu-item="note-publish"]')?.hasAttribute('disabled'), true);
+  await closeMenu();
+  await act(async () => {
+    appStore.setState({ capabilities: WRITABLE } as never);
+  });
+
+  // The manager itself.
+  await act(async () => {
+    entry?.click();
+  });
+  await flush();
+  check('the manager lists what has publish settings', Boolean(document.querySelector('[data-publish-table]')), true);
+  const rows = Array.from(document.querySelectorAll<HTMLTableRowElement>('[data-publish-row]'));
+  check('a row each', rows.length, 2);
+  check(
+    'saying which of them is on the blog',
+    rows.map((item) => item.getAttribute('data-publish-state')),
+    ['published', 'draft'],
+  );
+  check('a note that is not published has no date', rows[1]?.querySelectorAll('td')[1]?.textContent?.trim(), '-');
+
+  // A row is one line per cell, so double-clicking shows the whole thing.
+  await act(async () => {
+    rows[0]?.dispatchEvent(new w.MouseEvent('dblclick', { bubbles: true }));
+  });
+  await flush();
+  const detail = document.querySelector('[data-publish-detail]');
+  check('double-clicking a row shows the whole of it', Boolean(detail), true);
+  check('with the title in full', (detail?.textContent ?? '').includes('卡片上的标题'), true);
+  check('and the summary in full', (detail?.textContent ?? '').includes('卡片上的简介'), true);
+  await act(async () => {
+    w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+  // A modal leaves on a spring, and jsdom has to run every frame of it.
+  await settled(1500);
+  check('Escape puts the detail away and leaves the table', Boolean(document.querySelector('[data-publish-table]')), true);
+  check('with the detail gone', Boolean(document.querySelector('[data-publish-detail]')), false);
+
+  // Editing a row is the same dialog the panel opens.
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('button[aria-label="编辑发布信息"]')?.click();
+  });
+  await flush();
+  check('editing a row opens the publish settings', Boolean(document.querySelector('[data-publish-form]')), true);
+  check(
+    'with that row\'s title',
+    document.querySelector<HTMLInputElement>('input[aria-label="博客标题"]')?.value,
+    '卡片上的标题',
+  );
+  await act(async () => {
+    Array.from(document.querySelectorAll('button')).find((button) => button.textContent?.trim() === '取消')?.click();
+  });
+  await settled();
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('button[aria-label="删除发布信息"]')?.click();
+  });
+  await flush();
+  const confirm = document.querySelector('[data-publish-confirm]');
+  check('deleting the information asks first', Boolean(confirm), true);
+  check('saying that the note itself stays', (confirm?.textContent ?? '').includes('笔记文件本身不会被删除'), true);
+  await act(async () => {
+    Array.from(document.querySelectorAll('button')).find((button) => button.textContent?.trim() === '删除发布信息')?.click();
+  });
+  await flush();
+  check('and it is the information that goes', forgotten, ['a']);
+  check('with the row off the table', document.querySelectorAll('[data-publish-row]').length, 1);
+  await panel.unmount();
+
+  // The dialog on its own: what it starts from, what it sends, and what
+  // cancelling sends (nothing).
+  const { PublishDialog } = await import('./src/components/publish/PublishDialog');
+  const openDialog = async (noteId: string) => {
+    let closed = 0;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(
+        React.createElement(PublishDialog, {
+          noteId,
+          open: true,
+          onClose: () => {
+            closed += 1;
+          },
+        }),
+      );
+    });
+    await flush();
+    return {
+      host,
+      closed: () => closed,
+      async unmount() {
+        await act(async () => {
+          root.unmount();
+        });
+        host.remove();
+      },
+    };
+  };
+  const field = (selector: string) => document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector);
+  const press = (label: string) =>
+    Array.from(document.querySelectorAll('button')).find((button) => button.textContent?.trim() === label)?.click();
+  const typeInto = async (selector: string, value: string) => {
+    const element = field(selector) as HTMLTextAreaElement | HTMLInputElement | null;
+    if (!element) return;
+    const proto = element.tagName === 'TEXTAREA' ? w.HTMLTextAreaElement.prototype : w.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    await act(async () => {
+      setter?.call(element, value);
+      element.dispatchEvent(new w.Event('input', { bubbles: true }));
+    });
+    await flush();
+  };
+
+  writes.length = 0;
+  const visitor = await openDialog('a');
+  check('the dialog opens with the note\'s own override', field('input[aria-label="博客标题"]')?.value, '卡片上的标题');
+  check('and its summary', (field('[data-publish-summary]') as HTMLTextAreaElement | null)?.value, '**卡片**上的简介');
+  check('and its state', document.querySelector('[role="switch"]')?.getAttribute('aria-checked'), 'true');
+  await act(async () => {
+    press('取消');
+  });
+  await flush();
+  check('cancelling sends nothing at all', writes.length, 0);
+  check('and closes the dialog', visitor.closed(), 1);
+  await visitor.unmount();
+  await settled();
+
+  // A title nobody changed is the note's own title: sending it would freeze the
+  // card against a later rename, so it goes as an empty string.
+  writes.length = 0;
+  const draft = await openDialog('b');
+  check('a note without an override starts at its own title', field('input[aria-label="博客标题"]')?.value, '笔记B的标题');
+  await typeInto('[data-publish-summary]', '**实时**预览');
+  check('the summary is previewed as markdown while it is typed', Boolean(document.querySelector('[data-publish-preview] strong')), true);
+  await act(async () => {
+    press('确定');
+  });
+  await flush();
+  check('saving sends one request', writes.length, 1);
+  check('as a PUT to that note', writes[0]?.method + ' ' + (writes[0]?.url.includes('/api/notes/b') ?? false), 'PUT true');
+  check(
+    'with the switch, the title and the summary',
+    JSON.parse(writes[0]?.body ?? '{}'),
+    { blog: false, blogTitle: '', blogSummary: '**实时**预览' },
+  );
+  await draft.unmount();
+  await settled();
+
+  // A title of its own is an override, and goes as it stands.
+  writes.length = 0;
+  const renamed = await openDialog('b');
+  await typeInto('input[aria-label="博客标题"]', '全新的标题');
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[role="switch"]')?.click();
+  });
+  await flush();
+  await act(async () => {
+    press('确定');
+  });
+  await flush();
+  check(
+    'a title of its own is sent as it stands',
+    JSON.parse(writes[0]?.body ?? '{}'),
+    { blog: true, blogTitle: '全新的标题', blogSummary: '' },
+  );
+  await renamed.unmount();
+  await settled();
+
+  globalThis.fetch = realFetch;
+  appStore.setState(hold);
 }
 
 /* --- a tooltip wrapper does not fight the placement it is given ------------ */
