@@ -474,3 +474,18 @@ select optgroup {
 /* Syntax colours for the rendered preview are generated at start-up from
    lib/code-theme.ts, which is also what the editor's HighlightStyle is built
    from - the two panes cannot disagree. See <style id="code-theme">. */
+
+/* ------------------------------------------------------------------ */
+/* The blog's cards                                                    */
+/* ------------------------------------------------------------------ */
+/* A card shows the opening of a note written the way the note is written - the
+   markdown is rendered rather than flattened - but only a few lines of it: a
+   card is a way in, and the post is where the whole thing is read. */
+.blog-summary {
+  font-size: 14.5px;
+  color: var(--muted);
+  max-height: calc(1.78em * 3.4);
+  overflow: hidden;
+}
+.blog-summary > *:first-child { margin-top: 0; }
+.blog-summary > *:last-child { margin-bottom: 0; }

@@ -24,6 +24,15 @@ interface PreviewProps {
    * means rather than one beside the panel's address.
    */
   notePath?: string;
+  /**
+   * Where a picture's bytes are fetched from, given its storage path.
+   *
+   * Left out, pictures come from `/api/notes/file`, which is the panel's own
+   * door and asks who is asking. The public blog passes its own reader for the
+   * same path, because a visitor has no account. The path a picture resolves
+   * to is the same either way.
+   */
+  imageUrl?: (storagePath: string) => string;
   className?: string;
   /** Called for links that point at another note (see `isInternalLink`). */
   onOpenLink?: (href: string) => void;
@@ -32,7 +41,7 @@ interface PreviewProps {
   apiRef?: { current: PreviewApi | null };
 }
 
-export function Preview({ content, notePath = '', className, onOpenLink, onOpenAnchor, apiRef }: PreviewProps) {
+export function Preview({ content, notePath = '', imageUrl, className, onOpenLink, onOpenAnchor, apiRef }: PreviewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const html = useMemo(() => renderMarkdown(content), [content]);
 
@@ -42,8 +51,8 @@ export function Preview({ content, notePath = '', className, onOpenLink, onOpenA
     decorateMarkdown(container);
     // Pictures last: a note opened from another folder has to be read against
     // that folder, not against the one the previous note lived in.
-    resolveImages(container, notePath);
-  }, [html, notePath]);
+    resolveImages(container, notePath, imageUrl ? { fileUrl: imageUrl } : undefined);
+  }, [html, notePath, imageUrl]);
 
   /** Scrolls only the preview pane and flashes the target. */
   const reveal = (container: HTMLElement, target: HTMLElement) => {

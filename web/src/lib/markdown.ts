@@ -118,21 +118,36 @@ export function stripMarkdown(source: string, limit = 200): string {
  * `blob:` - is left exactly as written; those are other stores and inline
  * pictures, not this one. A path starting with `/` is already a storage path.
  *
+ * Where the bytes come from is the caller's choice. The panel's notes are
+ * behind a login, so it uses the default - `/api/notes/file` - while the
+ * public blog passes its own reader for the same storage path. The path a
+ * picture is resolved to does not change either way: only who is asked for
+ * it does.
+ *
  * Safe to run more than once: the `src` the note was written with is kept on
- * the element, so a second pass - the same preview reused for another note -
- * resolves from the note rather than from what the first pass produced.
+ * the element, so a second pass - the same preview reused for another note,
+ * or the same picture asked for through another door - resolves from the note
+ * rather than from what the first pass produced.
  */
-export function resolveImages(root: HTMLElement, notePath: string): void {
+export function resolveImages(
+  root: HTMLElement,
+  notePath: string,
+  options?: { fileUrl?: ImageUrlBuilder },
+): void {
+  const imageUrl = options?.fileUrl ?? fileUrl;
   root.querySelectorAll<HTMLImageElement>('img').forEach((image) => {
     const original = image.dataset.originalSrc ?? image.getAttribute('src') ?? '';
     if (image.dataset.originalSrc === undefined) image.dataset.originalSrc = original;
     dressImage(image);
-    const resolved = imageSource(original, notePath);
+    const resolved = imageSource(original, notePath, imageUrl);
     if (resolved) image.setAttribute('src', resolved);
   });
 
-  showLinkedImages(root, notePath);
+  showLinkedImages(root, notePath, imageUrl);
 }
+
+/** How a storage path becomes something the browser can load. */
+export type ImageUrlBuilder = (storagePath: string) => string;
 
 /** How a picture is shown wherever this panel draws one. */
 function dressImage(image: HTMLImageElement): void {
@@ -159,10 +174,10 @@ function nameOfUrl(url: string): string {
 }
 
 /** A picture element for a URL, ready to be put in the page. */
-function pictureFor(doc: Document, url: string, notePath: string): HTMLImageElement {
+function pictureFor(doc: Document, url: string, notePath: string, imageUrl: ImageUrlBuilder): HTMLImageElement {
   const image = doc.createElement('img');
   image.dataset.originalSrc = url;
-  image.setAttribute('src', imageSource(url, notePath) ?? url);
+  image.setAttribute('src', imageSource(url, notePath, imageUrl) ?? url);
   image.setAttribute('alt', nameOfUrl(url));
   dressImage(image);
   return image;
@@ -179,7 +194,7 @@ function pictureFor(doc: Document, url: string, notePath: string): HTMLImageElem
  * sample (the sample itself is left exactly as written, because a URL in
  * code is part of the code).
  */
-function showLinkedImages(root: HTMLElement, notePath: string): void {
+function showLinkedImages(root: HTMLElement, notePath: string, imageUrl: ImageUrlBuilder): void {
   const doc = root.ownerDocument;
 
   // A link that points straight at a picture: the picture goes under the link.
@@ -191,7 +206,7 @@ function showLinkedImages(root: HTMLElement, notePath: string): void {
     // The link is corrected too: it was the same address with a quote stuck to
     // it, and following it would have asked for a file whose name ended in one.
     anchor.setAttribute('href', href);
-    anchor.insertAdjacentElement('afterend', pictureFor(doc, href, notePath));
+    anchor.insertAdjacentElement('afterend', pictureFor(doc, href, notePath, imageUrl));
   });
 
   // URLs written as text, in a sentence or in a pasted payload.
@@ -211,7 +226,7 @@ function showLinkedImages(root: HTMLElement, notePath: string): void {
       // picture that pass drew is still sitting right after this address, and
       // drawing another one would double it.
       if (!alreadyDrawnNextTo(node, url)) {
-        fragment.appendChild(pictureFor(doc, url, notePath));
+        fragment.appendChild(pictureFor(doc, url, notePath, imageUrl));
         drawn += 1;
       }
       cursor = match.index + url.length;
@@ -232,7 +247,7 @@ function showLinkedImages(root: HTMLElement, notePath: string): void {
     block.dataset.imagePreview = 'true';
     const holder = doc.createElement('div');
     holder.className = 'code-image-preview my-2 flex flex-wrap gap-2';
-    for (const url of [...seen].slice(0, 12)) holder.appendChild(pictureFor(doc, url, notePath));
+    for (const url of [...seen].slice(0, 12)) holder.appendChild(pictureFor(doc, url, notePath, imageUrl));
     block.insertAdjacentElement('afterend', holder);
   });
 }
@@ -301,9 +316,9 @@ export function isImageUrl(url: string): boolean {
 }
 
 /** The URL the browser should load an image reference from, or null to leave it. */
-function imageSource(src: string, notePath: string): string | null {
+function imageSource(src: string, notePath: string, imageUrl: ImageUrlBuilder): string | null {
   const storagePath = resolveImagePath(src, notePath);
-  return storagePath ? fileUrl(storagePath) : null;
+  return storagePath ? imageUrl(storagePath) : null;
 }
 
 /**
