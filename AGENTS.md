@@ -40,6 +40,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
 | 博客（公开页面与公开接口） | `web/src/components/blog/**` + `web/src/lib/blog-api.ts` + `server/src/http/routes/blog.ts` |
+| 发布管理（把笔记发布到博客上） | `web/src/components/publish/**` + store 的 `setPublish` / `forgetPublish` + `server/src/http/routes/notes.ts` 的 `/api/notes/publish` |
 | 地址与深链（站点根 `/` 是博客，面板在 `/manager/` 之下） | `web/src/lib/url.ts` |
 | 主题变量（颜色/间距只定义一次） | `web/src/styles.css` |
 
@@ -49,9 +50,15 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   前端要跟随接口返回的 `id`（store 已有先例），服务端删除接口会把回收站里的新 `id` 一并返回。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
-- **发布标记在 front matter 的 `blog` / `blogAt`**：博客只列这两项齐全的笔记。
-  公开取图必须走 `/api/blog/file`（面板的 `/api/notes/file` 会先要账号），
+- **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
+  博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
+  状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
+  不要写成覆盖值（送空串）：存下来会把卡片标题冻住，笔记之后改名，卡片就不再跟着变。
+- **公开取图必须走 `/api/blog/file`**（面板的 `/api/notes/file` 会先要账号），
   而它的白名单只认「已发布笔记引用过的文件」——换了取图地址就会 404，不是权限问题。
+- **发布弹窗在 SSR 里也会被渲染**：`NoteList` 一直挂着 `PublishDialog`（关着也挂），
+  所以它内部不能在组件体里无条件调 `renderMarkdown`——Node 里 DOMPurify 没有 DOM，
+  一调就 `DOMPurify.sanitize is not a function`，整个面板都别想服务端渲染。
 - **上传接口固定发 `application/octet-stream`**：`express.json()` 挂在前面，浏览器对 `.json` 会报 `application/json`，
   那样 body 会被先解析掉、拿不到字节。
 - **jsdom 没有 `document.elementFromPoint`，也没有暴露 `DOMParser`**：手势与图片解析的断言要先打桩；
