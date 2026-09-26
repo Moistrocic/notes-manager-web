@@ -39,7 +39,8 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
-| 地址与深链（站点根 `/` 是首页，面板在 `/manager/` 之下） | `web/src/lib/url.ts` |
+| 博客（公开页面与公开接口） | `web/src/components/blog/**` + `web/src/lib/blog-api.ts` + `server/src/http/routes/blog.ts` |
+| 地址与深链（站点根 `/` 是博客，面板在 `/manager/` 之下） | `web/src/lib/url.ts` |
 | 主题变量（颜色/间距只定义一次） | `web/src/styles.css` |
 
 ## 几个坑
@@ -48,6 +49,9 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   前端要跟随接口返回的 `id`（store 已有先例），服务端删除接口会把回收站里的新 `id` 一并返回。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
+- **发布标记在 front matter 的 `blog` / `blogAt`**：博客只列这两项齐全的笔记。
+  公开取图必须走 `/api/blog/file`（面板的 `/api/notes/file` 会先要账号），
+  而它的白名单只认「已发布笔记引用过的文件」——换了取图地址就会 404，不是权限问题。
 - **上传接口固定发 `application/octet-stream`**：`express.json()` 挂在前面，浏览器对 `.json` 会报 `application/json`，
   那样 body 会被先解析掉、拿不到字节。
 - **jsdom 没有 `document.elementFromPoint`，也没有暴露 `DOMParser`**：手势与图片解析的断言要先打桩；
