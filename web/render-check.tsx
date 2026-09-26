@@ -130,7 +130,8 @@ const scenarios: Scenario[] = [
     name: 'front page: the blog',
     pathname: '/',
     state: { booted: true, user: null, status: { ...status, blog: { enabled: true } } },
-    expect: ['博客', '载入中…'],
+    // The way into the panel is on the page whether or not anybody is signed in.
+    expect: ['博客', '载入中…', 'data-blog-manager', '登录'],
     absent: ['data-panel-entry', '新建笔记', '搜索笔记、标签'],
   },
   {
@@ -138,7 +139,7 @@ const scenarios: Scenario[] = [
     name: 'the blog: one post at its own address',
     pathname: '/notes/posts/hello.md',
     state: { booted: true, user: null, status: { ...status, blog: { enabled: true } } },
-    expect: ['data-blog-home', '全部文章', '载入中…'],
+    expect: ['data-blog-home', '全部文章', '载入中…', 'data-blog-manager'],
     absent: ['data-blog-card', '新建笔记', 'data-note-tree'],
   },
   {

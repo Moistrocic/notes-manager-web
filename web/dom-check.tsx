@@ -1964,6 +1964,21 @@ console.log('\nthe menu background (styles.css)');
   check('neither of them is translucent', /--menu-bg:\s*(?:transparent|color-mix|rgba)/i.test(css), false);
 }
 
+/* --- the blog card is as tall as what it says ----------------------------- */
+console.log('\nthe blog card summary (styles.css)');
+{
+  // jsdom never applies the sheet, so the rule itself is what is read - and only
+  // that rule, so an `overflow: hidden` somewhere else in the file cannot stand
+  // in for it.
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+  const rule = /\.blog-summary\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+
+  check('the card summary has a rule to read', rule.length > 0, true);
+  check('with nothing clipped out of it', /overflow/.test(rule), false);
+  check('and no height it has to fit into', /max-height/.test(rule), false);
+}
+
 /* --- the order the tree is drawn in --------------------------------------- */
 console.log('\nsorting the panel (jsdom)');
 {
@@ -2619,6 +2634,8 @@ console.log('\nthe blog\'s front page (jsdom)');
     blogSummary('/posts/hello.md', '第一篇文章'),
     blogSummary('/posts/second.md', '第二篇文章', { summary: '带 *斜体* 的摘要' }),
   ];
+  // A visitor is the reader this page is for.
+  appStore.setState({ user: null });
   const page = await mountIndex(() => reply({ enabled: true, title: '测试博客', posts }));
   const cards = Array.from(page.host.querySelectorAll<HTMLAnchorElement>('[data-blog-card]'));
   check('two published notes make two cards', cards.length, 2);
@@ -2640,7 +2657,24 @@ console.log('\nthe blog\'s front page (jsdom)');
   });
   check('clicking a card is the app\'s business', click.defaultPrevented, true);
   check('and asks for that post', opened, ['/posts/second.md']);
+  // The way into the panel is always on the page: the reader who is not signed
+  // in is exactly the one who needs it.
+  const visitor = page.host.querySelector<HTMLButtonElement>('[data-blog-manager]');
+  check('a visitor is offered a way in', Boolean(visitor), true);
+  check('called what it does for them', visitor?.getAttribute('aria-label'), '登录');
+  check('and saying so on the button', visitor?.textContent?.trim(), '登录');
   await page.unmount();
+
+  // Signed in, the same door is the panel itself.
+  appStore.setState({
+    user: { sid: 's', id: 'u', username: 'u', displayName: 'u', role: 'admin', provider: 'local', createdAt: 0, expiresAt: 0 },
+  } as never);
+  const signedIn = await mountIndex(() => reply({ enabled: true, title: '测试博客', posts }));
+  const owner = signedIn.host.querySelector<HTMLButtonElement>('[data-blog-manager]');
+  check('and to somebody signed in it is the panel', owner?.getAttribute('aria-label'), '管理面板');
+  check('which it says too', owner?.textContent?.trim(), '管理面板');
+  await signedIn.unmount();
+  appStore.setState({ user: null });
 
   // Nothing published yet.
   const empty = await mountIndex(() => reply({ enabled: true, title: '测试博客', posts: [] }));
@@ -2714,9 +2748,20 @@ console.log('\none post on the blog (jsdom)');
     };
   };
 
+  appStore.setState({ user: null });
   w.history.replaceState(null, '', '/notes/posts/hello.md');
   const page = await mountPost('');
   check('the post is headed by its title', page.host.querySelector('h1')?.textContent, '第一篇文章');
+  // The reading card is the screen: no width limit of its own, and no page
+  // padding around it. The text inside keeps a readable column.
+  const surface = page.host.querySelector('[data-blog-surface]');
+  const surfaceClass = surface?.className ?? '';
+  check('the reading card is there', Boolean(surface), true);
+  check('taking the whole width', surfaceClass.includes('w-full'), true);
+  check('and the whole height', surfaceClass.includes('h-full'), true);
+  check('with no width limit of its own', /(^|\s)max-w-/.test(surfaceClass), false);
+  check('while the text keeps a readable column', Boolean(page.host.querySelector('.max-w-4xl')), true);
+  check('and the way into the panel is here too', Boolean(page.host.querySelector('[data-blog-manager]')), true);
   check('with when it went up', page.host.innerHTML.includes('发布'), true);
   check('when it last changed', page.host.innerHTML.includes('修改'), true);
   check('and how long it is', page.host.innerHTML.includes('42 字'), true);
