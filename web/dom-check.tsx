@@ -2350,75 +2350,121 @@ console.log('\nthe editor and files that are not notes (jsdom)');
 /* --- keeping two panes level, the arithmetic ------------------------------- */
 console.log('\nkeeping two panes level (pure)');
 {
-  const { mirrorScroll, readScrollable, scrollProgress, scrollTopForProgress } = await import('./src/lib/scroll-sync');
-  const pane = (scrollTop: number, scrollHeight: number, clientHeight: number, bottomInset?: number) => ({
-    scrollTop,
-    scrollHeight,
-    clientHeight,
-    bottomInset,
-  });
+  const { sourcePositionAt, topForSourcePosition } = await import('./src/lib/scroll-sync');
+  const {
+    annotateSourceLines,
+    renderMarkdown,
+    sourceBlocks,
+    SOURCE_LINE_ATTR,
+    SOURCE_LINE_END_ATTR,
+  } = await import('./src/lib/markdown');
 
-  // Progress is how far down the reader is, not how many pixels: the two panes
-  // scroll different things and their heights have nothing to do with each other.
-  check('the top is no progress', scrollProgress(pane(0, 1000, 200)), 0);
-  check('the bottom is all of it', scrollProgress(pane(800, 1000, 200)), 1);
-  check('and half way is half', scrollProgress(pane(400, 1000, 200)), 0.5);
-  check('a pane with nothing to scroll has no progress', scrollProgress(pane(50, 200, 200)), 0);
-  check('nor has an empty one', scrollProgress(pane(0, 0, 0)), 0);
-  check('scrolled above the top is still no progress', scrollProgress(pane(-40, 1000, 200)), 0);
-  check('and past the bottom is still all of it', scrollProgress(pane(9999, 1000, 200)), 1);
+  // A note with everything that can shift a line: a heading, blank lines, a link
+  // definition (which renders nothing at all), a list and a fenced block.
+  const source = [
+    '# 标题',
+    '',
+    '正文第一段。',
+    '',
+    '[link]: https://example.com',
+    '',
+    '- 项目一',
+    '- 项目二',
+    '',
+    '```js',
+    'const a = 1;',
+    '```',
+    '',
+    '尾段。',
+    '',
+  ].join('\n');
 
-  check('half way down a pane is half its range', scrollTopForProgress(pane(0, 1000, 200), 0.5), 400);
-  check('in whole pixels, because scrollTop is', scrollTopForProgress(pane(0, 1001, 200), 0.333), 267);
-  check('a pane with nothing to scroll stays at the top', scrollTopForProgress(pane(0, 200, 200), 0.5), 0);
-  check('progress below the top is the top', scrollTopForProgress(pane(0, 1000, 200), -3), 0);
-  check('and progress past the end is the end', scrollTopForProgress(pane(0, 1000, 200), 7), 800);
-  check('nonsense progress is the top', scrollTopForProgress(pane(0, 1000, 200), Number.NaN), 0);
+  // Blank lines and link definitions are counted even though they render
+  // nothing: leave them out and the whole document slips a line at every gap.
+  check('each block knows the lines it came from', sourceBlocks(source), [
+    { line: 1, endLine: 2 },
+    { line: 3, endLine: 4 },
+    { line: 7, endLine: 9 },
+    { line: 10, endLine: 13 },
+    { line: 14, endLine: 15 },
+  ]);
+  check('an empty note has no blocks', sourceBlocks(''), []);
+  check('nor have blank lines on their own', sourceBlocks('\n\n\n'), []);
+  check('a link definition is not a block', sourceBlocks('[a]: https://x\n'), []);
+  check('a single line is a block of its own', sourceBlocks('就一行'), [{ line: 1, endLine: 2 }]);
 
-  // Null is the answer when nothing would change: assigning it would fire the
-  // other pane's handler, which would fire this one again.
-  check('a pane already level is left alone', mirrorScroll(pane(400, 1000, 200), pane(400, 1000, 200)), null);
-  check('one a single step out is left alone too', mirrorScroll(pane(400, 1000, 200), pane(401, 1000, 200)), null);
-  check('but further than that is moved', mirrorScroll(pane(400, 1000, 200), pane(500, 1000, 200)), 400);
-  check('and the tolerance can be widened', mirrorScroll(pane(400, 1000, 200), pane(405, 1000, 200), 5), null);
+  // The rendered document carries the same numbers, one per top-level element.
+  const rendered = document.createElement('div');
+  rendered.innerHTML = renderMarkdown(source);
+  annotateSourceLines(rendered, source);
+  const children = Array.from(rendered.children) as HTMLElement[];
+  check('the rendered blocks are one for one', children.map((child) => child.tagName), ['H1', 'P', 'UL', 'PRE', 'P']);
+  check(
+    'and each is marked with the line it came from',
+    children.map((child) => child.getAttribute(SOURCE_LINE_ATTR)),
+    ['1', '3', '7', '10', '14'],
+  );
+  check(
+    'and with the line after its last one',
+    children.map((child) => child.getAttribute(SOURCE_LINE_END_ATTR)),
+    ['2', '4', '9', '13', '15'],
+  );
 
-  // The room an editor keeps below its last line is somewhere to type, not
-  // something to read: counted as content, the editor's end lands a margin past
-  // the preview's and the two are never level.
-  const withMargin = (scrollTop: number, bottomInset?: number) => pane(scrollTop, 1000, 200, bottomInset);
-  check('the typing margin is not part of the range', scrollProgress(withMargin(354, 92)), 0.5);
-  check('so half of the range is where half the progress is', scrollTopForProgress(withMargin(0, 92), 0.5), 354);
-  check('and the end of the content is all of it', scrollTopForProgress(withMargin(0, 92), 1), 708);
-  check('scrolling into the margin is still all of it', scrollProgress(withMargin(760, 92)), 1);
-  check('with no margin it is the whole pane again', scrollProgress(withMargin(400, 0)), 0.5);
-  check('an absent margin is no margin', scrollProgress(withMargin(400, undefined)), 0.5);
-  check('nor is a negative one', scrollProgress(withMargin(400, -50)), 0.5);
-  check('and nonsense is no margin either', scrollProgress(withMargin(400, Number.NaN)), 0.5);
-  check('a margin larger than the pane leaves nothing to scroll', scrollTopForProgress(withMargin(0, 5000), 0.5), 0);
+  // Two blocks with a gap between them: a note is a different height in each
+  // pane, so what the two panes can share is the source line, not a percentage.
+  const anchors = [
+    { line: 1, endLine: 3, top: 0, height: 100 },
+    { line: 6, endLine: 8, top: 200, height: 60 },
+  ];
 
-  // Reading a pane off the DOM, with the margin the caller measured for it.
-  const measured = document.createElement('div');
-  Object.defineProperty(measured, 'scrollTop', { value: 120, configurable: true });
-  Object.defineProperty(measured, 'scrollHeight', { value: 900, configurable: true });
-  Object.defineProperty(measured, 'clientHeight', { value: 100, configurable: true });
-  check('a pane is read as it stands', readScrollable(measured, 92), {
-    scrollTop: 120,
-    scrollHeight: 900,
-    clientHeight: 100,
-    bottomInset: 92,
-  });
-  check('and with nothing said, no margin', readScrollable(measured), {
-    scrollTop: 120,
-    scrollHeight: 900,
-    clientHeight: 100,
-    bottomInset: 0,
-  });
+  check('the top of the document is the first line', topForSourcePosition(anchors, { line: 1, fraction: 0 }), 0);
+  check('a line inside a block is a place inside it', topForSourcePosition(anchors, { line: 2, fraction: 0 }), 50);
+  check(
+    'part way into a line is that far into its slice of the block',
+    topForSourcePosition(anchors, { line: 2, fraction: 0.5 }),
+    75,
+  );
+  check('the line after a block ends it', topForSourcePosition(anchors, { line: 3, fraction: 0 }), 100);
+  check(
+    'the blank lines between two blocks are travelled between them',
+    topForSourcePosition(anchors, { line: 4, fraction: 0.5 }),
+    150,
+  );
+  check('and the next block starts where it starts', topForSourcePosition(anchors, { line: 6, fraction: 0 }), 200);
+  check('the last block ends the document', topForSourcePosition(anchors, { line: 8, fraction: 0 }), 260);
+  check('a line past the end is the end', topForSourcePosition(anchors, { line: 99, fraction: 0 }), 260);
+  check('and a line before the start is the start', topForSourcePosition(anchors, { line: -5, fraction: 0 }), 0);
+  check('with no blocks there is nowhere to go', topForSourcePosition([], { line: 1, fraction: 0 }), null);
+
+  check('the reader at the top is at the first line', sourcePositionAt(anchors, 0), { line: 1, fraction: 0 });
+  check('half way down a block is half way through its lines', sourcePositionAt(anchors, 50), { line: 2, fraction: 0 });
+  check('the bottom of a block is the line after it', sourcePositionAt(anchors, 100), { line: 3, fraction: 0 });
+  check('a place in the gap belongs to the block above', sourcePositionAt(anchors, 150), { line: 3, fraction: 0 });
+  check('the last block ends at its own end', sourcePositionAt(anchors, 260), { line: 8, fraction: 0 });
+  check('and past the end is still the end', sourcePositionAt(anchors, 9999), { line: 8, fraction: 0 });
+  check('with no blocks there is no position', sourcePositionAt([], 0), null);
+  check(
+    'anchors that arrive out of order are put in order',
+    sourcePositionAt([...anchors].reverse(), 50),
+    { line: 2, fraction: 0 },
+  );
+
+  // The two have to invert each other: if they did not, touching either pane
+  // would move the other one somewhere else.
+  const roundTrip = (line: number, fraction: number) => {
+    const top = topForSourcePosition(anchors, { line, fraction });
+    const back = top === null ? null : sourcePositionAt(anchors, top);
+    return back ? back.line + back.fraction : null;
+  };
+  check('a place inside a block comes back where it started', Math.abs((roundTrip(1, 0.5) ?? 0) - 1.5) < 0.05, true);
+  check('and so does one further down', Math.abs((roundTrip(7, 0.25) ?? 0) - 7.25) < 0.05, true);
+  check('the very end comes back as the end', roundTrip(8, 0), 8);
 }
 
 /* --- keeping two panes level, in the split view ---------------------------- */
 console.log('\nkeeping two panes level (jsdom)');
 {
-  const { trailingSpaceOf } = await import('./src/lib/scroll-sync');
+  const { topForSourcePosition } = await import('./src/lib/scroll-sync');
   const hold = appStore.getState();
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => reply({})) as typeof fetch;
@@ -2458,12 +2504,9 @@ console.log('\nkeeping two panes level (jsdom)');
   check('and offers the way back', button()?.getAttribute('aria-label'), '取消同步滚动');
   check('with the choice written down', w.localStorage.getItem('notes-manager-sync-scroll'), 'on');
 
-  // jsdom has no layout, so each pane is told how tall it is - and every value
-  // written to scrollTop is recorded, which is what "the other pane moved" means.
-  const sizePane = (element: HTMLElement, scrollHeight: number, clientHeight: number) => {
-    Object.defineProperty(element, 'scrollHeight', { value: scrollHeight, configurable: true });
-    Object.defineProperty(element, 'clientHeight', { value: clientHeight, configurable: true });
-  };
+  // jsdom has no layout, so the document is placed by hand: the preview's blocks
+  // are given the geometry they would have, and every value written to a pane's
+  // scrollTop is recorded - that is what "the other pane moved" means.
   const trackScrollTop = (element: HTMLElement) => {
     const writes: number[] = [];
     let value = element.scrollTop;
@@ -2483,20 +2526,28 @@ console.log('\nkeeping two panes level (jsdom)');
   check('both panes are on screen to be kept level', Boolean(editorEl && previewEl), true);
   const editorWrites = trackScrollTop(editorEl);
   const previewWrites = trackScrollTop(previewEl);
-  sizePane(editorEl, 1000, 200);
-  sizePane(previewEl, 1800, 200);
 
-  // The editor keeps room below its last line to type in, and jsdom works the
-  // theme's 12vh out into pixels: 0.12 x 768 = 92. That room is not content, so
-  // the editor's range here is 1000 - 200 - 92 = 708 while the preview's is the
-  // plain 1800 - 200 = 1600.
-  const editorRange = 708;
-  const previewRange = 1600;
-  check('the editor reports the room it keeps below its text', trailingSpaceOf(editorEl) > 0, true);
-  check('and the preview keeps none', trailingSpaceOf(previewEl), 0);
-  check('an element with no styles keeps none either', trailingSpaceOf(document.createElement('div')), 0);
-  check('and neither does nothing at all', trailingSpaceOf(null), 0);
-  /** What the app wrote - the test's own assignments are cleared away first. */
+  // The preview marks every rendered block with the source lines it came from,
+  // and takes its geometry from the DOM. jsdom gives none, so each block is
+  // placed down a document of its own: the first at 40, then every 200.
+  const blocks = Array.from(previewEl.querySelectorAll<HTMLElement>('[data-line]'));
+  check('the preview marks its blocks with source lines', blocks.length > 1, true);
+  const rect = (top: number, height: number) =>
+    ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top }) as DOMRect;
+  previewEl.getBoundingClientRect = () => rect(0, 0);
+  const placed = blocks.map((block, index) => ({
+    line: Number(block.getAttribute('data-line')),
+    endLine: Number(block.getAttribute('data-line-end')),
+    top: 40 + index * 200,
+    height: 100,
+  }));
+  blocks.forEach((block, index) => {
+    const spot = placed[index];
+    // The rect is where the block sits in the document; what the pane has
+    // scrolled is added back on the way in, so the anchor stays put.
+    block.getBoundingClientRect = () => rect(spot.top - previewEl.scrollTop, spot.height);
+  });
+  const lastBlock = placed[placed.length - 1];
   const clearWrites = () => {
     editorWrites.length = 0;
     previewWrites.length = 0;
@@ -2511,39 +2562,48 @@ console.log('\nkeeping two panes level (jsdom)');
     await flush();
   };
 
-  // Half way down the source is half way down the rendered text, whatever the
-  // two heights are: 354 of the editor's 708 is 800 of the preview's 1600.
-  await scrollPane(editorEl, editorRange / 2);
-  check('scrolling the editor carries the preview to the same place in the text', previewWrites, [previewRange / 2]);
+  // The editor at its top is the first source line, so the preview goes to where
+  // that line is rendered - the first block's own place in the document. A
+  // percentage would have put it at 0% of a range that has nothing to do with
+  // this document's blocks, which is exactly the drift the change removes.
+  await scrollPane(editorEl, 0);
+  check('the editor at the top puts the preview on the first block', previewWrites, [placed[0].top]);
 
-  // And the other way round, once the frame that guarded the echo has passed.
-  await scrollPane(previewEl, previewRange / 4);
-  check('and scrolling the preview brings the editor along', editorWrites, [editorRange / 4]);
+  // And back: where the preview is, read as a source line, is where the editor
+  // is put. Two different places in the preview are two different places in the
+  // editor, which is what says the line travelled rather than a number.
+  await scrollPane(previewEl, placed[1].top);
+  check('scrolling the preview moves the editor to that line', editorWrites.length, 1);
+  const firstStop = editorWrites[0];
+  await scrollPane(previewEl, placed[2].top);
+  check('and a different place in the preview is a different place in the editor', editorWrites[0] !== firstStop, true);
 
-  // The end of the text is the end of both: the editor's typing room is not
-  // something to read, so it must not push the preview past its own end. This is
-  // the bug where scrolling the editor to the bottom left the preview a screen
-  // short of the end.
-  await scrollPane(editorEl, editorRange);
-  check('the end of the editor is the end of the preview', previewWrites, [previewRange]);
-  // Carrying on into that room moves nothing on the other side.
-  await scrollPane(editorEl, 1000);
-  check('and scrolling on into the typing room leaves it there', previewWrites, []);
-  check('which is where it still is', previewEl.scrollTop, previewRange);
+  // The end of the note is the bottom of the last block, whatever room the
+  // editor keeps below its last line to type in - that room is not something to
+  // read, and counting it is what left the preview a screen short of the end.
+  check(
+    'the end of the note is the bottom of the last block',
+    topForSourcePosition(placed, { line: lastBlock.endLine, fraction: 0 }),
+    lastBlock.top + lastBlock.height,
+  );
 
-  // The pane that was just put somewhere reports its own move. That report is
-  // not an instruction: answering it is what makes two panes fight.
-  await scrollPane(editorEl, editorRange / 2);
-  check('the editor moved the preview', previewWrites.length, 1);
+  // The pane that was just put somewhere reports its own move. That report is not
+  // an instruction: answering it is what makes two panes fight. Both events go in
+  // in the same frame, because a frame later the report is a scroll of its own.
+  // Where the test puts the pane is its own bookkeeping, not the app's: it is
+  // cleared away after the move and before the events.
+  editorEl.scrollTop = 0;
   clearWrites();
   await act(async () => {
+    editorEl.dispatchEvent(new w.Event('scroll'));
     previewEl.dispatchEvent(new w.Event('scroll'));
   });
-  check('and the preview repeating that move moves nothing back', editorWrites, []);
+  check('the editor moved the preview', previewWrites.length, 1);
+  check('and the preview repeating that move in the same frame moves nothing back', editorWrites, []);
   // A frame later it is a scroll of its own again.
   await flush();
-  await scrollPane(previewEl, previewRange / 4);
-  check('after that frame the preview scrolls the editor again', editorWrites, [editorRange / 4]);
+  await scrollPane(previewEl, placed[2].top);
+  check('after that frame the preview moves the editor again', editorWrites.length, 1);
 
   // A jump the preview makes on its own - an outline entry, an anchor - is not
   // followed either: mirroring those positions drags the editor along with the
@@ -2561,15 +2621,15 @@ console.log('\nkeeping two panes level (jsdom)');
     previewEl.dispatchEvent(new w.Event('scroll'));
   });
   await flush();
-  check('a jump to a heading is not mirrored into the editor', editorWrites.includes(editorRange / 4), false);
+  check('a jump to a heading does not move the editor', editorWrites, []);
   // The jump reports nothing in jsdom, so its own guard lapses on the fallback
-  // timer; after that the next real scroll lines the panes up again.
+  // timer; after that the next real scroll moves the editor again.
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 340));
   });
   editorEl.scrollTop = 600;
-  await scrollPane(previewEl, previewRange / 4);
-  check('and once it has landed, scrolling lines them up again', editorWrites, [editorRange / 4]);
+  await scrollPane(previewEl, placed[2].top);
+  check('and once it has landed, scrolling moves the editor again', editorWrites.length, 1);
 
   // Off: the listeners go with it.
   await act(async () => {
