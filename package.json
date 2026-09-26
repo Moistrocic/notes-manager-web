@@ -23,6 +23,7 @@
     "scene-lab": "node scripts/scene-lab.mjs",
     "start": "node server/dist/index.js",
     "typecheck": "npm run typecheck --workspace server && npm run typecheck --workspace web",
+    "check": "npm run check:repo && npm run typecheck && npm run build:server && npm run test:server && npm run check:web",
     "check:web": "npm run check:web --workspace web",
     "check:repo": "node scripts/check-repo-files.mjs",
     "icons": "node scripts/generate-icons.mjs",
