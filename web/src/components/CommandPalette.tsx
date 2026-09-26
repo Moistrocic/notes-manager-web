@@ -1,10 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  ArrowUpDown,
   Columns2,
   Eye,
   FileText,
   ListTree,
-  LayoutGrid,
   List as ListIcon,
   Moon,
   Pencil,
@@ -36,7 +36,8 @@ export function CommandPalette() {
   const createNote = useAppStore((s) => s.createNote);
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
-  const setView = useAppStore((s) => s.setView);
+  const sortOrder = useAppStore((s) => s.sortOrder);
+  const setSortOrder = useAppStore((s) => s.setSortOrder);
   const setEditorMode = useAppStore((s) => s.setEditorMode);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const setTrashOpen = useAppStore((s) => s.setTrashOpen);
@@ -86,11 +87,11 @@ export function CommandPalette() {
         run: () => setTheme(theme === 'dark' ? 'light' : 'dark'),
       },
       {
-        id: 'view',
-        label: '切换列表 / 网格视图',
+        id: 'sort-order',
+        label: sortOrder === 'asc' ? '切换为降序排列' : '切换为升序排列',
         group: '操作',
-        icon: LayoutGrid,
-        run: () => setView(useAppStore.getState().view === 'list' ? 'grid' : 'list'),
+        icon: ArrowUpDown,
+        run: () => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'),
       },
       {
         id: 'edit',
@@ -131,9 +132,10 @@ export function CommandPalette() {
     metaOpen,
     setEditorMode,
     setSettingsOpen,
+    setSortOrder,
     setTheme,
     setTrashOpen,
-    setView,
+    sortOrder,
     theme,
     toggleMeta,
     user?.role,

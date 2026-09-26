@@ -1,92 +1,83 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Cloud,
-  HardDrive,
+  ArrowDown,
+  ArrowUp,
   ChevronLeft,
+  Cloud,
   FileText,
-  LayoutGrid,
+  HardDrive,
   Pin,
   Plus,
   Search,
   SlidersHorizontal,
-  Upload,
   Sparkles,
   Star,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '../lib/cn';
-import { relativeTime } from '../lib/format';
-import { useAppStore, useCanWrite, useReadOnlyReason, type SortKey } from '../store/useAppStore';
 import type { NoteSummary } from '../lib/types';
-import { DEFAULT_SEARCH_SCOPE } from '../store/useAppStore';
+import {
+  DEFAULT_SEARCH_SCOPE,
+  SORT_KEYS,
+  useAppStore,
+  useCanWrite,
+  useReadOnlyReason,
+  type SortKey,
+  type SortOrder,
+} from '../store/useAppStore';
 import { NoteTree } from './NoteTree';
-import { Badge, Button, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
 import { SessionFooter } from './Sidebar';
+import { Badge, Button, Field, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
 
-const SORTS: { value: SortKey; label: string }[] = [
-  { value: 'updated', label: '最近更新' },
-  { value: 'created', label: '创建时间' },
-  { value: 'title', label: '标题' },
-  { value: 'words', label: '字数' },
+/** What each sort is called. Titles first: an alphabetical list is the one that
+ * can be scanned, and the timestamp sorts are a click away. */
+const SORT_LABELS: Record<SortKey, string> = {
+  title: '标题',
+  updated: '最近更新',
+  created: '创建时间',
+  words: '字数',
+};
+
+// Built from the store's own list so the picker cannot drift out of step with
+// what the store accepts, and so titles stay first.
+const SORTS = SORT_KEYS.map((value) => ({ value, label: SORT_LABELS[value] }));
+
+/** The two directions, in the order the buttons are drawn. */
+const ORDERS: { value: SortOrder; label: string; hint: string; Icon: typeof ArrowUp }[] = [
+  { value: 'asc', label: '升序', hint: '升序排列', Icon: ArrowUp },
+  { value: 'desc', label: '降序', hint: '降序排列（倒序）', Icon: ArrowDown },
 ];
 
 /**
- * The single left column: navigation, filters and the note list in one place.
- * It used to be two columns (a nav column plus a list column) which wasted
- * horizontal space on narrow screens.
- */
-/**
- * Three boxes standing in a row, seen slightly from the side.
+ * What the inline prompt is asking for.
  *
- * The card list is a stack of cards, and a generic "rows" glyph said nothing
- * about that; these are drawn to look like the cards they switch to.
+ * One piece of state rather than eight, because only one can be up at a time.
+ * `value` is the typed answer - a folder name, a note title, or the destination
+ * the move prompts pick from the dropdown. `folder` is the destination of the
+ * prompts that also ask for something to type (a new note, an upload).
  */
-function CardsIcon({ className }: { className?: string }) {
-  const width = 9;
-  const height = 3.4;
-  const depth = 1.4;
-  return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
-      {[2.2, 6.6, 11].map((y) => {
-        const x = (16 - width) / 2;
-        return (
-          <g key={y}>
-            <rect x={x} y={y} width={width} height={height} rx={0.6} stroke="currentColor" strokeWidth={1.1} />
-            <path
-              d={`M${x} ${y} L${x + depth} ${y - depth} L${x + width + depth} ${y - depth} L${x + width} ${y}`}
-              stroke="currentColor"
-              strokeWidth={1.1}
-              strokeLinejoin="round"
-            />
-            <path
-              d={`M${x + width} ${y} L${x + width + depth} ${y - depth} L${x + width + depth} ${y + height - depth} L${x + width} ${y + height}`}
-              stroke="currentColor"
-              strokeWidth={1.1}
-              strokeLinejoin="round"
-            />
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
+export type PromptState =
+  | { kind: 'newFolder'; parent: string; value: string }
+  | { kind: 'renameFolder'; path: string; value: string }
+  | { kind: 'renameNote'; id: string; value: string }
+  | { kind: 'newNote'; value: string; folder: string }
+  | { kind: 'upload'; folder: string }
+  | { kind: 'moveNote'; id: string; value: string }
+  | { kind: 'moveFolder'; path: string; value: string }
+  | { kind: 'moveSelection'; value: string; count: number }
+  | null;
 
-/** Three bullets and their lines - the shape of an outline. */
-function TreeIcon({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" className={className} aria-hidden>
-      {[3.4, 8, 12.6].map((y) => (
-        <g key={y}>
-          <circle cx={2.6} cy={y} r={1.15} fill="currentColor" />
-          <path d={`M5.6 ${y} H13.6`} stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" />
-        </g>
-      ))}
-    </svg>
-  );
-}
-
+/**
+ * The single left column: navigation, filters and the note tree in one place.
+ *
+ * The card list and the grid are gone. Notes live in folders on disk, and the
+ * tree is the one arrangement that says where a note actually is; the two card
+ * modes could only answer "which notes are there", which is what the search box
+ * is for.
+ */
 export function NotesPanel() {
   const version = useAppStore((s) => s.status?.version);
   const notes = useAppStore((s) => s.notes);
@@ -95,14 +86,14 @@ export function NotesPanel() {
   const activeId = useAppStore((s) => s.activeId);
   const selectNote = useAppStore((s) => s.selectNote);
   const createNote = useAppStore((s) => s.createNote);
-  const uploadNotes = useAppStore((s) => s.uploadNotes);
+  const uploadFiles = useAppStore((s) => s.uploadFiles);
   const setTrashOpen = useAppStore((s) => s.setTrashOpen);
   const query = useAppStore((s) => s.query);
   const setQuery = useAppStore((s) => s.setQuery);
   const sort = useAppStore((s) => s.sort);
   const setSort = useAppStore((s) => s.setSort);
-  const view = useAppStore((s) => s.view);
-  const setView = useAppStore((s) => s.setView);
+  const sortOrder = useAppStore((s) => s.sortOrder);
+  const setSortOrder = useAppStore((s) => s.setSortOrder);
   const activeTag = useAppStore((s) => s.activeTag);
   const setActiveTag = useAppStore((s) => s.setActiveTag);
   const activeFolder = useAppStore((s) => s.activeFolder);
@@ -115,6 +106,7 @@ export function NotesPanel() {
   const folders = useAppStore((s) => s.folders);
   const renameFolder = useAppStore((s) => s.renameFolder);
   const moveNote = useAppStore((s) => s.moveNote);
+  const moveFolder = useAppStore((s) => s.moveFolder);
   const renameNote = useAppStore((s) => s.renameNote);
   const createFolder = useAppStore((s) => s.createFolder);
   const deleteFolder = useAppStore((s) => s.deleteFolder);
@@ -123,16 +115,21 @@ export function NotesPanel() {
   const toggleFavorite = useAppStore((s) => s.toggleFavorite);
   const setFavoriteOnly = useAppStore((s) => s.setFavoriteOnly);
   const toggleSidebar = useAppStore((s) => s.toggleSidebar);
+  const selection = useAppStore((s) => s.selection);
+  const moveSelection = useAppStore((s) => s.moveSelection);
+  const deleteSelection = useAppStore((s) => s.deleteSelection);
+  const downloadSelection = useAppStore((s) => s.downloadSelection);
   const capabilities = useAppStore((s) => s.capabilities);
   // 'degraded' is OpenList configured but unreachable, so notes fall back to disk.
   const storageDegraded = useAppStore((s) => Boolean(s.status?.storage?.degraded));
   const driver = capabilities?.driver === 'openlist' ? 'openlist' : storageDegraded ? 'degraded' : 'local';
   const canWrite = useCanWrite();
   const readOnlyReason = useReadOnlyReason();
-  const searchRef = useRef<HTMLInputElement | null>(null);
   const uploadRef = useRef<HTMLInputElement | null>(null);
-  // Which inline prompt is open, if any. One piece of state rather than three,
-  // because only one can be up at a time.
+  // Where the files picked by the upload button are going. Held here rather than
+  // in the dialog because the dialog is gone by the time the picker answers.
+  const uploadTarget = useRef('');
+  // Which inline prompt is open, if any.
   const [scopeOpen, setScopeOpen] = useState(false);
   const narrowed =
     favoriteOnly || pinnedOnly || !searchScope.title || !searchScope.content || !searchScope.tags;
@@ -142,25 +139,7 @@ export function NotesPanel() {
       : searchScope.title && !searchScope.tags
         ? '搜索标题与内容…'
         : '搜索笔记、标签…';
-  const [dialog, setDialog] = useState<
-    | { kind: 'newFolder'; parent: string; value: string }
-    | { kind: 'renameFolder'; path: string; value: string }
-    | { kind: 'renameNote'; id: string; value: string }
-    | { kind: 'moveNote'; id: string; value: string }
-    | null
-  >(null);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') return;
-      if (event.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
-        event.preventDefault();
-        searchRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  const [dialog, setDialog] = useState<PromptState>(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -168,13 +147,6 @@ export function NotesPanel() {
     if (favoriteOnly) list = list.filter((n) => n.favorite);
     if (pinnedOnly) list = list.filter((n) => n.pinned);
     if (activeTag) list = list.filter((n) => n.tags.includes(activeTag));
-    // In the tree, the selected folder is highlighted rather than filtered to -
-    // narrowing a tree to one of its own branches removes the context that made
-    // it a tree.
-    if (activeFolder !== null && view !== 'tree') {
-      const folder = activeFolder.replace(/^\//, '');
-      list = list.filter((n) => n.folder === folder);
-    }
     if (q) {
       // Only the fields the scope allows, so a search can be aimed at titles
       // without every body match drowning the result.
@@ -185,26 +157,37 @@ export function NotesPanel() {
       ].filter((f): f is (n: NoteSummary) => boolean => f !== null);
       list = fields.length === 0 ? [] : list.filter((n) => fields.some((match) => match(n)));
     }
-    const sorted = [...list];
-    sorted.sort((a, b) => {
+    // Pinned first whatever the sort, then the sort itself, then its direction.
+    // One comparator rather than four: the direction is a property of the
+    // ordering, not of any one key, so flipping it has to flip all of them.
+    const direction = sortOrder === 'desc' ? -1 : 1;
+    return [...list].sort((a, b) => {
       const pin = Number(b.pinned) - Number(a.pinned);
       if (pin !== 0) return pin;
       switch (sort) {
         case 'created':
-          return Date.parse(b.created) - Date.parse(a.created);
+          return (Date.parse(b.created) - Date.parse(a.created)) * direction;
         case 'title':
-          return a.title.localeCompare(b.title, 'zh-Hans-CN');
+          return a.title.localeCompare(b.title, 'zh-Hans-CN') * direction;
         case 'words':
-          return b.wordCount - a.wordCount;
+          return (b.wordCount - a.wordCount) * direction;
         default:
-          return Date.parse(b.updated) - Date.parse(a.updated);
+          return (Date.parse(b.updated) - Date.parse(a.updated)) * direction;
       }
     });
-    return sorted;
-  }, [notes, query, sort, activeTag, activeFolder, favoriteOnly, view, searchScope, pinnedOnly]);
+  }, [notes, query, sort, sortOrder, activeTag, favoriteOnly, searchScope, pinnedOnly]);
 
-  const pinned = filtered.filter((n) => n.pinned);
-  const rest = filtered.filter((n) => !n.pinned);
+  /**
+   * A quick move names one dragged row, and which request that means depends on
+   * what the id names: a folder moves by its path through the folder call, a
+   * note by its id through the note one. They are not interchangeable - a
+   * folder's path is not a note id. The folders the panel was given say which
+   * it is, rather than the selection: a drag moves the row it set out from
+   * whether or not that row was ever picked.
+   */
+  const quickMove = (id: string, folder: string) =>
+    folders.some((entry) => entry.path === id) ? moveFolder(id, folder) : moveNote(id, folder);
+
   const filterLabel = favoriteOnly ? '收藏' : activeTag ? `#${activeTag}` : activeFolder !== null ? `/${activeFolder}` : '全部笔记';
 
   return (
@@ -252,38 +235,42 @@ export function NotesPanel() {
       </div>
 
       <div className="flex items-center gap-2 px-3 pb-2">
+        {/* Both actions ask where the note is going before anything is made:
+            the folder is a choice, not something inferred from the last click. */}
         <Button
           variant="primary"
           size="md"
           className="flex-1 justify-center"
           disabled={!canWrite}
-          onClick={() => void createNote({ folder: activeFolder ?? undefined })}
+          onClick={() => setDialog({ kind: 'newNote', value: '', folder: activeFolder ?? '' })}
           hint={canWrite ? '新建笔记' : (readOnlyReason ?? '没有写入权限')}
         >
           <Plus className="h-4 w-4" />
           新建笔记
         </Button>
 
-        {/* Upload: one note per .md file, into the folder currently open. */}
+        {/* Upload: every file goes up as it is - a .md becomes a note, a picture
+            stays a picture. The dialog picks the folder first, and the picker
+            that follows is opened against that choice. No accept filter: the
+            tree lists every file, so the picker does too. */}
         <input
           ref={uploadRef}
           type="file"
           multiple
-          accept=".md,.markdown,.txt,text/markdown"
           className="hidden"
           onChange={(e) => {
             const chosen = Array.from(e.target.files ?? []);
-            if (chosen.length > 0) void uploadNotes(chosen, activeFolder ?? undefined);
+            if (chosen.length > 0) void uploadFiles(chosen, uploadTarget.current);
             if (uploadRef.current) uploadRef.current.value = '';
           }}
         />
-        <Tooltip label="上传笔记（.md）">
+        <Tooltip label="上传文件">
           <Button
             variant="outline"
             size="icon"
             className="h-10 w-10"
             disabled={!canWrite}
-            onClick={() => uploadRef.current?.click()}
+            onClick={() => setDialog({ kind: 'upload', folder: activeFolder ?? '' })}
           >
             <Upload className="h-4 w-4" />
           </Button>
@@ -301,32 +288,27 @@ export function NotesPanel() {
         </div>
       ) : null}
 
-
       {/* Search + filters */}
       <div className="space-y-2 border-b border-[var(--line)] px-3 pb-2.5 pt-2.5">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--faint)]" />
           <input
-            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={scopePlaceholder}
-            className="focus-ring h-9 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] pl-8 pr-[4.5rem] text-[13px] text-[var(--text)] outline-none transition-all placeholder:text-[var(--faint)] focus:border-[var(--accent)]"
+            aria-label="搜索笔记"
+            className="focus-ring h-9 w-full rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_55%,transparent)] pl-8 pr-10 text-[13px] text-[var(--text)] outline-none transition-all placeholder:text-[var(--faint)] focus:border-[var(--accent)]"
           />
           {query ? (
             <button
               type="button"
               onClick={() => setQuery('')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-[var(--faint)] transition-colors hover:text-[var(--danger)]"
+              className="absolute right-9 top-1/2 -translate-y-1/2 rounded-md p-0.5 text-[var(--faint)] transition-colors hover:text-[var(--danger)]"
               aria-label="清空搜索"
             >
               <X className="h-3.5 w-3.5" />
             </button>
-          ) : (
-            <kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded-md border border-[var(--line)] px-1.5 py-0.5 text-[10px] text-[var(--faint)]">
-              /
-            </kbd>
-          )}
+          ) : null}
 
           {/* Where the search looks, and which notes it considers. Folded away
               by default: most searches want the defaults, but a search aimed at
@@ -336,7 +318,9 @@ export function NotesPanel() {
             side="top"
             // The offsets have to sit on the wrapper: it is the positioned
             // element, so an absolutely placed child would resolve against it.
-            className="absolute right-9 top-1/2 -translate-y-1/2"
+            // The "/" hint this used to make room for is gone, so the control is
+            // the rightmost one again - and the clear button sits just inside it.
+            className="absolute right-2 top-1/2 -translate-y-1/2"
           >
             <button
               type="button"
@@ -426,6 +410,7 @@ export function NotesPanel() {
               value={sort}
               onChange={(e) => setSort(e.target.value as SortKey)}
               aria-label="排序方式"
+              data-testid="sort-key"
               containerClassName="w-[104px]"
               className="h-[30px] rounded-lg border-[var(--line)] bg-transparent pl-2 pr-7 text-[11.5px] text-[var(--muted)]"
             >
@@ -435,27 +420,30 @@ export function NotesPanel() {
                 </option>
               ))}
             </Select>
-            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--line)] p-0.5">
-              {(
-                [
-                  { mode: 'tree' as const, label: '目录树（文件夹与笔记）', Icon: TreeIcon },
-                  { mode: 'list' as const, label: '卡片列表', Icon: CardsIcon },
-                  { mode: 'grid' as const, label: '网格视图', Icon: LayoutGrid },
-                ] as const
-              ).map(({ mode, label, Icon }) => (
-                <Tooltip key={mode} label={label} side="top">
+            {/* Which way the sort runs. Two buttons rather than one toggle, so
+                the direction in force is readable at a glance instead of having
+                to be worked out from an icon that could mean either. */}
+            <div
+              role="group"
+              aria-label="排序方向"
+              className="flex items-center gap-0.5 rounded-lg border border-[var(--line)] p-0.5"
+            >
+              {ORDERS.map(({ value, label, hint, Icon }) => (
+                <Tooltip key={value} label={hint} side="top">
                   <button
                     type="button"
-                    onClick={() => setView(mode)}
+                    onClick={() => setSortOrder(value)}
+                    aria-label={label}
+                    aria-pressed={sortOrder === value}
+                    data-testid={'sort-order-' + value}
                     className={cn(
                       'focus-ring relative flex h-6 w-6 items-center justify-center rounded-md transition-colors',
-                      view === mode ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
+                      sortOrder === value ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--muted)]',
                     )}
-                    aria-pressed={view === mode}
                   >
-                    {view === mode ? (
+                    {sortOrder === value ? (
                       <motion.span
-                        layoutId="view-toggle"
+                        layoutId="sort-order"
                         className="absolute inset-0 rounded-md bg-[var(--accent-soft)]"
                         transition={{ type: 'spring', stiffness: 420, damping: 32 }}
                       />
@@ -486,10 +474,12 @@ export function NotesPanel() {
         ) : null}
       </div>
 
-      {/* Notes */}
+      {/* One rendering, because there is one arrangement: the tree notes
+          actually live in. Selecting a folder marks it and seeds the next
+          "new note" - it never hides the rest of the tree. */}
       <div className="scroll-area min-h-0 flex-1 overflow-y-auto px-3 py-3">
         {loadingNotes && notes.length === 0 ? (
-          <div className={cn('gap-2', view === 'grid' ? 'grid grid-cols-2' : 'flex flex-col')}>
+          <div className="flex flex-col gap-2">
             {Array.from({ length: 7 }).map((_, index) => (
               <div key={index} className="rounded-2xl border border-[var(--line)] p-3">
                 <Skeleton className="mb-2 h-3.5 w-3/5" />
@@ -504,11 +494,11 @@ export function NotesPanel() {
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState
-            hasQuery={Boolean(query) || Boolean(activeTag) || favoriteOnly || activeFolder !== null}
+            hasQuery={Boolean(query) || Boolean(activeTag) || favoriteOnly}
             canCreate={canWrite}
-            onCreate={() => void createNote()}
+            onCreate={() => setDialog({ kind: 'newNote', value: '', folder: activeFolder ?? '' })}
           />
-        ) : view === 'tree' ? (
+        ) : (
           <NoteTree
             folders={folders}
             notes={filtered}
@@ -516,13 +506,13 @@ export function NotesPanel() {
             activeId={activeId}
             canWrite={canWrite}
             actions={{
-              onSelectFolder: (path) => setActiveFolder(activeFolder === path ? null : path),
               onSelectNote: (id) => void selectNote(id),
               // Asks for the name rather than inventing one: a folder called
               // 新文件夹 that has to be renamed straight away is a step wasted.
               onCreateChild: (path) => setDialog({ kind: 'newFolder', parent: path, value: '新文件夹' }),
               onRenameFolder: (path) =>
                 setDialog({ kind: 'renameFolder', path, value: path.split('/').pop() ?? path }),
+              onMoveFolder: (path) => setDialog({ kind: 'moveFolder', path, value: '' }),
               onDeleteFolder: (path) => void deleteFolder(path),
               onRenameNote: (id) => {
                 const note = notes.find((n) => n.id === id);
@@ -535,36 +525,60 @@ export function NotesPanel() {
               onDeleteNote: (id) => void deleteNote(id),
               onTogglePin: (id) => void togglePinned(id),
               onToggleFavorite: (id) => void toggleFavorite(id),
+              onMoveSelection: () => setDialog({ kind: 'moveSelection', value: '', count: selection.length }),
+              // A drag that ends on a folder has already answered the only
+              // question a move asks, so neither of these opens a dialog.
+              // Both answer with the move they started, so the tree knows
+              // whether the rows it was carrying actually went anywhere.
+              onQuickMove: (id, folder) => quickMove(id, folder),
+              onQuickMoveSelection: (folder) => moveSelection(folder),
+              // A download needs no question in front of it: the files are
+              // already named, and the browser does the saving.
+              onDownloadSelection: () => void downloadSelection(),
+              // The batch delete carries its own undo, so it does not need a
+              // second question in front of it.
+              onDeleteSelection: () => void deleteSelection(),
             }}
           />
-        ) : (
-          <div className="space-y-4">
-            {pinned.length ? (
-              <Section title="置顶" count={pinned.length}>
-                <NoteGrid notes={pinned} view={view} activeId={activeId} onSelect={selectNote} canWrite={canWrite} />
-              </Section>
-            ) : null}
-            {rest.length ? (
-              <Section title={pinned.length ? '其他' : ''} count={rest.length}>
-                <NoteGrid notes={rest} view={view} activeId={activeId} onSelect={selectNote} canWrite={canWrite} />
-              </Section>
-            ) : null}
-          </div>
         )}
 
         <PromptDialog
           state={dialog}
           folders={folders.map((f) => f.path)}
           onClose={() => setDialog(null)}
-          onConfirm={(value) => {
-            if (!dialog) return;
-            if (dialog.kind === 'newFolder') {
-              void createFolder(dialog.parent ? `${dialog.parent}/${value}` : value);
-            }
-            if (dialog.kind === 'renameFolder') void renameFolder(dialog.path, value);
-            if (dialog.kind === 'renameNote') void renameNote(dialog.id, value);
-            if (dialog.kind === 'moveNote') void moveNote(dialog.id, value);
+          onConfirm={(value, folder) => {
+            const current = dialog;
+            if (!current) return;
             setDialog(null);
+            switch (current.kind) {
+              case 'newFolder':
+                void createFolder(current.parent ? `${current.parent}/${value}` : value);
+                break;
+              case 'renameFolder':
+                void renameFolder(current.path, value);
+                break;
+              case 'renameNote':
+                void renameNote(current.id, value);
+                break;
+              case 'newNote':
+                // An empty title is a real choice: the note is called 未命名笔记.
+                void createNote({ title: value.trim() || undefined, folder });
+                break;
+              case 'upload':
+                // The dialog has said where; now comes the picker.
+                uploadTarget.current = folder;
+                uploadRef.current?.click();
+                break;
+              case 'moveNote':
+                void moveNote(current.id, folder);
+                break;
+              case 'moveFolder':
+                void moveFolder(current.path, folder);
+                break;
+              case 'moveSelection':
+                void moveSelection(folder);
+                break;
+            }
           }}
         />
       </div>
@@ -576,26 +590,6 @@ export function NotesPanel() {
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
-  return (
-    <section>
-      {title ? (
-        <div className="mb-2 flex items-center gap-2 px-1">
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--faint)]">{title}</span>
-          <span className="text-[10.5px] text-[var(--faint)]">{count}</span>
-        </div>
-      ) : null}
-      {children}
-    </section>
-  );
-}
-
-/**
- * The inline prompts for renaming and moving.
- *
- * One small dialog rather than three, since they differ only in their label and
- * whether the value is typed or picked from the folder list.
- */
 /** A small on/off pill, used for the search scope and the filters. */
 function Chip({
   active,
@@ -626,212 +620,173 @@ function Chip({
   );
 }
 
+/**
+ * What each prompt is called, what it explains, and which controls it shows.
+ *
+ * Kept in one table so a prompt cannot half-exist: every kind is described, and
+ * a new one cannot be added without saying what it asks for.
+ */
+interface DialogInfo {
+  title: string;
+  /** The line under the title: where a folder goes, or where a note is going. */
+  hint: string;
+  /** The free-text answer, when the dialog asks for one. */
+  field?: { label: string; aria: string; required: boolean; placeholder?: string };
+  /** Whether the dialog picks a destination folder. */
+  picker?: boolean;
+  /** A folder that may not be the destination - one cannot move into itself. */
+  exclude?: string;
+}
+
+function dialogInfo(state: NonNullable<PromptState>): DialogInfo {
+  switch (state.kind) {
+    case 'newFolder':
+      return {
+        title: '新建文件夹',
+        hint: state.parent ? `在 ${state.parent} 下` : '在根目录下',
+        field: { label: '文件夹名称', aria: '文件夹名称', required: true, placeholder: '新文件夹' },
+      };
+    case 'renameFolder':
+      return {
+        title: '重命名文件夹',
+        hint: state.path,
+        field: { label: '文件夹名称', aria: '文件夹名称', required: true },
+      };
+    case 'renameNote':
+      return {
+        title: '重命名笔记',
+        hint: '留空则取消',
+        field: { label: '笔记标题', aria: '笔记标题', required: true },
+      };
+    case 'newNote':
+      return {
+        title: '新建笔记',
+        hint: '选择目标目录，空选项表示根目录',
+        field: { label: '标题', aria: '笔记标题', required: false, placeholder: '未命名笔记' },
+        picker: true,
+      };
+    case 'upload':
+      return { title: '上传文件', hint: '选择目标目录，空选项表示根目录', picker: true };
+    case 'moveNote':
+      return { title: '移动笔记', hint: '选择目标目录，空选项表示根目录', picker: true };
+    case 'moveFolder':
+      return {
+        title: '移动文件夹',
+        hint: `选择目标目录，空选项表示根目录 · 不能移动到 ${state.path} 自身或其子目录`,
+        picker: true,
+        exclude: state.path,
+      };
+    case 'moveSelection':
+      return {
+        title: '批量移动',
+        hint: `将移动 ${state.count} 项 · 选择目标目录，空选项表示根目录`,
+        picker: true,
+      };
+  }
+}
+
+/** Where a dialog's folder dropdown starts. */
+function initialFolder(state: NonNullable<PromptState>): string {
+  if (state.kind === 'newNote' || state.kind === 'upload') return state.folder;
+  if (state.kind === 'moveNote' || state.kind === 'moveFolder') return state.value;
+  return '';
+}
+
+/**
+ * The inline prompts for naming, moving and uploading.
+ *
+ * One small dialog rather than eight, since they differ only in their wording
+ * and in whether the answer is typed or picked from the folder list.
+ */
 export function PromptDialog({
   state,
   folders,
   onClose,
   onConfirm,
 }: {
-  state:
-    | { kind: 'newFolder'; parent: string; value: string }
-    | { kind: 'renameFolder'; path: string; value: string }
-    | { kind: 'renameNote'; id: string; value: string }
-    | { kind: 'moveNote'; id: string; value: string }
-    | null;
+  state: PromptState;
   folders: string[];
   onClose: () => void;
-  onConfirm: (value: string) => void;
+  /** The typed answer, and the folder the dropdown points at. */
+  onConfirm: (value: string, folder: string) => void;
 }) {
   const [value, setValue] = useState('');
+  const [folder, setFolder] = useState('');
 
   useEffect(() => {
-    setValue(state?.value ?? '');
+    setValue(state && 'value' in state ? state.value : '');
+    setFolder(state ? initialFolder(state) : '');
   }, [state]);
 
   if (!state) return null;
 
-  const title =
-    state.kind === 'newFolder'
-      ? '新建文件夹'
-      : state.kind === 'renameFolder'
-        ? '重命名文件夹'
-        : state.kind === 'renameNote'
-          ? '重命名笔记'
-          : '移动笔记';
-  const hint =
-    state.kind === 'newFolder'
-      ? state.parent
-        ? `在 ${state.parent} 下`
-        : '在根目录下'
-      : state.kind === 'renameFolder'
-        ? state.path
-        : state.kind === 'moveNote'
-          ? '选择目标文件夹，空选项表示根目录'
-          : '留空则取消';
+  const info = dialogInfo(state);
+  // A folder cannot be moved into itself or into what is already below it, so
+  // those are left out rather than offered and then refused.
+  const options = info.exclude
+    ? folders.filter((path) => path !== info.exclude && !path.startsWith(`${info.exclude}/`))
+    : folders;
+  const ready = !info.field?.required || value.trim().length > 0;
 
   return (
     <Modal
       open
       onClose={onClose}
-      title={title}
-      subtitle={hint}
+      title={<span data-testid="dialog-title">{info.title}</span>}
+      subtitle={info.hint}
       width="max-w-md"
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose}>
             取消
           </Button>
-          <Button variant="primary" size="sm" onClick={() => onConfirm(value)} disabled={state.kind !== 'moveNote' && !value.trim()}>
+          <Button
+            variant="primary"
+            size="sm"
+            data-testid="dialog-confirm"
+            disabled={!ready}
+            onClick={() => onConfirm(value, folder)}
+          >
             确定
           </Button>
         </div>
       }
     >
-      {state.kind === 'moveNote' ? (
-        <Select value={value} onChange={(e) => setValue(e.target.value)} aria-label="目标文件夹">
-          <option value="">根目录</option>
-          {folders.map((folder) => (
-            <option key={folder} value={folder}>
-              {folder}
-            </option>
-          ))}
-        </Select>
-      ) : (
-        <Input
-          value={value}
-          autoFocus
-          aria-label={title}
-          onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && value.trim()) onConfirm(value);
-          }}
-        />
-      )}
-    </Modal>
-  );
-}
-
-function NoteGrid({
-  notes,
-  view,
-  activeId,
-  onSelect,
-  canWrite,
-}: {
-  notes: NoteSummary[];
-  /** The two card modes; the tree is its own component. */
-  view: 'list' | 'grid';
-  activeId: string | null;
-  onSelect: (id: string) => void | Promise<void>;
-  canWrite: boolean;
-}) {
-  return (
-    <motion.div layout className={cn('gap-2', view === 'grid' ? 'grid grid-cols-2' : 'flex flex-col')}>
-      <AnimatePresence initial={false} mode="popLayout">
-        {notes.map((note, index) => (
-          <NoteCard
-            key={note.id}
-            note={note}
-            view={view}
-            active={note.id === activeId}
-            index={index}
-            canWrite={canWrite}
-            onSelect={() => void onSelect(note.id)}
-          />
-        ))}
-      </AnimatePresence>
-    </motion.div>
-  );
-}
-
-function NoteCard({
-  note,
-  view,
-  active,
-  index,
-  canWrite,
-  onSelect,
-}: {
-  note: NoteSummary;
-  view: 'list' | 'grid';
-  active: boolean;
-  index: number;
-  canWrite: boolean;
-  onSelect: () => void;
-}) {
-  const togglePinned = useAppStore((s) => s.togglePinned);
-  const toggleFavorite = useAppStore((s) => s.toggleFavorite);
-
-  return (
-    <motion.article
-      layout
-      initial={{ opacity: 0, y: 12, scale: 0.98 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.96, transition: { duration: 0.15 } }}
-      transition={{ type: 'spring', stiffness: 360, damping: 32, delay: Math.min(index * 0.022, 0.22) }}
-      onClick={onSelect}
-      className={cn(
-        'card-hover group relative cursor-pointer overflow-hidden rounded-2xl border p-3',
-        active
-          ? 'border-[color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]'
-          : 'border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)]',
-        view === 'grid' && 'min-h-[124px]',
-      )}
-    >
-      {note.color ? <span className="absolute inset-y-2 left-0 w-0.5 rounded-full" style={{ background: note.color }} /> : null}
-
-      <div className="mb-1.5 flex items-start gap-2">
-        <h3 className="line-clamp-2 flex-1 text-[13.5px] font-semibold leading-snug tracking-tight text-[var(--text)]">
-          {note.title || '未命名笔记'}
-        </h3>
-        {canWrite ? (
-          <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void togglePinned(note.id);
+      <div className="space-y-4">
+        {info.field ? (
+          <Field label={info.field.label}>
+            <Input
+              value={value}
+              autoFocus
+              aria-label={info.field.aria}
+              data-testid="dialog-input"
+              placeholder={info.field.placeholder}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && ready) onConfirm(value, folder);
               }}
-              className={cn(
-                'focus-ring rounded-md p-1 transition-colors',
-                note.pinned ? 'text-[var(--accent)]' : 'text-[var(--faint)] hover:text-[var(--accent)]',
-              )}
-              aria-label="置顶"
-            >
-              <Pin className={cn('h-3 w-3', note.pinned && 'fill-current')} />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void toggleFavorite(note.id);
-              }}
-              className={cn(
-                'focus-ring rounded-md p-1 transition-colors',
-                note.favorite ? 'text-[var(--warn)]' : 'text-[var(--faint)] hover:text-[var(--warn)]',
-              )}
-              aria-label="收藏"
-            >
-              <Star className={cn('h-3 w-3', note.favorite && 'fill-current')} />
-            </button>
-          </div>
+            />
+          </Field>
         ) : null}
-        {note.pinned ? <Pin className="h-3 w-3 shrink-0 fill-current text-[var(--accent)] group-hover:hidden" /> : null}
+        {info.picker ? (
+          <Field label="目标目录">
+            <Select
+              value={folder}
+              aria-label="目标目录"
+              data-testid="dialog-folder-select"
+              onChange={(e) => setFolder(e.target.value)}
+            >
+              <option value="">根目录</option>
+              {options.map((path) => (
+                <option key={path} value={path}>
+                  {path}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : null}
       </div>
-
-      <p className={cn('text-[11.5px] leading-relaxed text-[var(--muted)]', view === 'grid' ? 'line-clamp-3' : 'line-clamp-2')}>
-        {note.excerpt || '空白笔记'}
-      </p>
-
-      <div className="mt-2.5 flex items-center gap-1.5">
-        {note.tags.slice(0, 2).map((tag) => (
-          <span key={tag} className="rounded-full bg-[color-mix(in_srgb,var(--text)_7%,transparent)] px-1.5 py-0.5 text-[10px] text-[var(--faint)]">
-            #{tag}
-          </span>
-        ))}
-        <span className="ml-auto text-[10.5px] text-[var(--faint)]">{relativeTime(note.updated)}</span>
-      </div>
-    </motion.article>
+    </Modal>
   );
 }
 
