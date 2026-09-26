@@ -14,6 +14,7 @@
 import { JSDOM } from 'jsdom';
 // Type only: erased at compile time, so it cannot run before the globals below.
 import type { CropRect } from './src/lib/wallpaper';
+import type { NoteSummary } from './src/lib/types';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'https://notes.example.com/',
@@ -132,6 +133,7 @@ const CONTENT = [
 
 const note = {
   id: 'nav1',
+  kind: 'note' as const,
   title: '导航测试',
   tags: [],
   pinned: false,
@@ -1101,6 +1103,114 @@ console.log('\nlive scene wallpaper (jsdom)');
 
 /* --- the redesigned note list --------------------------------------------- */
 const { NotesPanel } = await import('./src/components/NoteList');
+const { useHotkeys } = await import('./src/hooks/useHotkeys');
+const { EditorView } = await import('@codemirror/view');
+
+/** A note summary as the server would send it, for the panel sections below. */
+const summaryNote = (
+  id: string,
+  title: string,
+  folder: string,
+  extra: Partial<NoteSummary> = {},
+): NoteSummary => ({
+  id,
+  // Every entry the server lists says what it is; a markdown note unless the
+  // fixture asks for a picture or some other file.
+  kind: 'note',
+  title,
+  tags: [],
+  pinned: false,
+  favorite: false,
+  color: null,
+  folder,
+  path: folder ? `${folder}/${id}.md` : `${id}.md`,
+  created: new Date().toISOString(),
+  updated: new Date().toISOString(),
+  excerpt: '正文内容',
+  wordCount: 4,
+  size: 10,
+  hasFrontMatter: true,
+  ...extra,
+});
+
+/** Write permission, which most of the panel's verbs are behind. */
+const WRITABLE = {
+  driver: 'openlist',
+  root: '/public/Notes',
+  writable: true,
+  permissions: { write: true, rename: true, move: true, remove: true },
+};
+
+/**
+ * Mounts the panel and keeps it mounted.
+ *
+ * The tree's menus and its long press need a tree that is still there when the
+ * second event arrives. The renderOnce helper below unmounts before it hands
+ * back the markup, which is enough for reading but not for clicking.
+ */
+async function mountPanel() {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(NotesPanel));
+  });
+  await flush();
+  return {
+    host,
+    async unmount() {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+    },
+  };
+}
+
+/** A right-click, the way a browser delivers one. */
+async function rightClick(target: Element, at = { x: 40, y: 60 }) {
+  const event = new w.MouseEvent('contextmenu', {
+    bubbles: true,
+    cancelable: true,
+    clientX: at.x,
+    clientY: at.y,
+  });
+  await act(async () => {
+    target.dispatchEvent(event);
+  });
+  await flush();
+  return event;
+}
+
+/** The ids of the items on the menu that is open, in the order they are drawn. */
+const openMenuItems = () =>
+  Array.from(document.querySelectorAll('[data-menu-item]')).map((item) => item.getAttribute('data-menu-item'));
+
+/** What those items say, shortcut included. */
+const openMenuLabels = () =>
+  Array.from(document.querySelectorAll('[data-menu-item]')).map((item) => item.textContent ?? '');
+
+/**
+ * Waits for an exit animation to finish.
+ *
+ * The menus, the dialogs and the app's two front doors are all wrapped in
+ * AnimatePresence, and jsdom runs no animation frames of its own: the markup
+ * lingers until a few timers have gone by. Asking the DOM straight after a close
+ * would only ever see the copy that is on its way out.
+ */
+async function settled(ms = 500) {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  });
+}
+
+/** Escape is how the app's menus close. */
+async function closeMenu() {
+  await act(async () => {
+    w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+  await settled();
+}
 
 console.log('\nnote list (jsdom)');
 {
@@ -1121,31 +1231,14 @@ console.log('\nnote list (jsdom)');
   };
 
   const hold = appStore.getState();
-  const note = (id: string, title: string, folder: string, extra: Record<string, unknown> = {}) => ({
-    id,
-    title,
-    tags: [],
-    pinned: false,
-    favorite: false,
-    color: null,
-    folder,
-    path: folder ? `${folder}/${id}.md` : `${id}.md`,
-    created: new Date().toISOString(),
-    updated: new Date().toISOString(),
-    excerpt: '正文内容',
-    wordCount: 4,
-    size: 10,
-    hasFrontMatter: true,
-    ...extra,
-  });
 
   appStore.setState({
     notes: [
-      note('a', '根目录笔记', ''),
-      note('b', '项目笔记', 'proj'),
-      note('c', '子目录笔记', 'proj/deep'),
-      note('d', '收藏笔记', 'proj', { favorite: true }),
-      note('e', '置顶笔记', '', { pinned: true }),
+      summaryNote('a', '根目录笔记', ''),
+      summaryNote('b', '项目笔记', 'proj'),
+      summaryNote('c', '子目录笔记', 'proj/deep'),
+      summaryNote('d', '收藏笔记', 'proj', { favorite: true }),
+      summaryNote('e', '置顶笔记', '', { pinned: true }),
     ],
     folders: [
       { path: 'proj', name: 'proj', count: 2, depth: 0 },
@@ -1157,7 +1250,6 @@ console.log('\nnote list (jsdom)');
     favoriteOnly: false,
     pinnedOnly: false,
     searchScope: { title: true, content: true, tags: true },
-    view: 'tree',
     expandedFolders: [],
     loadingNotes: false,
     notesError: null,
@@ -1169,13 +1261,19 @@ console.log('\nnote list (jsdom)');
   check('and the notes at the root', tree.includes('根目录笔记'), true);
   // A collapsed folder hides its contents; that is the point of a tree.
   check('a collapsed folder keeps its notes out of sight', tree.includes('项目笔记'), false);
-  check('with a control to make a subfolder', tree.includes('新建子文件夹'), true);
-  check('and to rename a folder', tree.includes('重命名文件夹'), true);
-  check('and to delete one, saying it can be recovered', tree.includes('移入回收站，可恢复'), true);
-  check('notes can be renamed', tree.includes('重命名笔记'), true);
-  check('moved', tree.includes('移动到文件夹'), true);
+  // Every verb used to live on a toolbar that appeared under the pointer, where
+  // it covered the title it belonged to. They are on the right-click menu now,
+  // so a row nobody has right-clicked shows none of them. (The menus themselves
+  // are asserted further down, on a tree that is still mounted.)
+  check(
+    'no verb is left lying on a row',
+    ['新建子文件夹', '新建顶层文件夹', '重命名文件夹', '移入回收站，可恢复', '重命名笔记', '移动到文件夹', '取消收藏'].filter(
+      (label) => tree.includes(label),
+    ),
+    [],
+  );
   // Required even here: state is not a property of how the list is arranged.
-  check('and pinned or favourited from the tree too', tree.includes('取消置顶') || tree.includes('置顶'), true);
+  check('and a pinned note is marked in the tree', /lucide-pin/.test(tree), true);
 
   // Selecting a folder elsewhere has to make it reachable, so the path down to
   // it unfolds on its own.
@@ -1183,16 +1281,18 @@ console.log('\nnote list (jsdom)');
   const opened = await renderOnce(React.createElement(NotesPanel));
   check('opening a folder shows its notes', opened.includes('项目笔记'), true);
   check('and its nested folders', opened.includes('deep'), true);
-  check('a favourited note offers to unfavourite it', opened.includes('取消收藏'), true);
+  check('and a favourite is marked in the tree', /lucide-star/.test(opened), true);
   appStore.setState({ activeFolder: null });
 
   // The three actions the design asks for, in order.
-  check('the panel offers exactly the three primary actions', ['新建笔记', '上传笔记（.md）', '回收站'].every((label) => tree.includes(label)), true);
+  check('the panel offers exactly the three primary actions', ['新建笔记', '上传文件', '回收站'].every((label) => tree.includes(label)), true);
 
   // The expander has to be clickable: the label area around it is
   // pointer-events-none, and without this a folder could only ever open.
   check('the folder expander can actually be clicked', /focus-ring pointer-events-auto[^"]*"[^>]*aria-label="展开"/.test(tree) || (tree.includes('pointer-events-auto') && tree.includes('aria-label="展开"')), true);
-  check('a folder can be made at the root', tree.includes('在根目录新建文件夹'), true);
+  // The row that made a folder at the root is gone: that is something a
+  // top-level folder's own menu offers, beside the folder it will sit next to.
+  check('and no standalone row for making one at the root', tree.includes('在根目录新建文件夹'), false);
 
   // Clicking a folder opens it rather than filtering to it - asserted through
   // the absence of the filter chip, which selecting a folder used to raise.
@@ -1252,10 +1352,1282 @@ console.log('\nnote list (jsdom)');
   const focused = await renderOnce(React.createElement(NotesPanel));
   check('selecting a folder in the tree keeps the rest of the tree', focused.includes('根目录笔记'), true);
   check('while still marking it', focused.includes('proj'), true);
-  appStore.setState({ activeFolder: null, view: 'list' });
-  const cards = await renderOnce(React.createElement(NotesPanel));
-  check('the card modes still narrow to the folder', cards.includes('项目笔记'), true);
+  appStore.setState(hold);
+}
 
+/* --- the tree's own menus, and holding a row to pick it -------------------- */
+console.log('\nthe tree\'s own menus (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [
+      summaryNote('a', '根目录笔记', ''),
+      summaryNote('b', '项目笔记', 'proj'),
+      summaryNote('c', '子目录笔记', 'proj/deep'),
+      summaryNote('d', '收藏笔记', 'proj', { favorite: true }),
+      summaryNote('e', '置顶笔记', '', { pinned: true }),
+      // The tree lists every file in the folder, not only the markdown ones.
+      summaryNote('p', '风景.png', '', { kind: 'image', size: 2048, excerpt: '' }),
+      summaryNote('z', '档案.zip', 'proj', { kind: 'file', size: 512, excerpt: '' }),
+    ],
+    folders: [
+      { path: 'proj', name: 'proj', count: 3, depth: 0 },
+      { path: 'proj/deep', name: 'deep', count: 1, depth: 1 },
+    ],
+    expandedFolders: ['proj'],
+    activeFolder: null,
+    activeId: null,
+    query: '',
+    selection: [],
+    loadingNotes: false,
+    notesError: null,
+  } as never);
+
+  // The batch verbs are the store's own calls, recorded rather than performed:
+  // what a menu item does is which call it makes, and with what.
+  const batchCalls: string[] = [];
+  appStore.setState({
+    downloadSelection: async () => {
+      batchCalls.push('download');
+    },
+    deleteSelection: async () => {
+      batchCalls.push('delete');
+    },
+    moveSelection: async (folder: string) => {
+      batchCalls.push('move → ' + folder);
+    },
+  } as never);
+
+  const panel = await mountPanel();
+  const row = (key: string) => panel.host.querySelector('[data-tree-row="' + key + '"]');
+  /** The lucide names on a row's own glyph, which is what says what it holds. */
+  const iconNames = (key: string) =>
+    (row(key)?.querySelector('svg')?.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((name) => name.startsWith('lucide-'));
+
+  check('the panel renders a tree', Boolean(panel.host.querySelector('[data-note-tree]')), true);
+  check('with a row for every folder', Boolean(row('folder:proj')) && Boolean(row('folder:proj/deep')), true);
+  check('and one for every note on screen', Boolean(row('note:a')) && Boolean(row('note:b')), true);
+  check('nothing is picked to start with', panel.host.querySelectorAll('[data-selected="true"]').length, 0);
+
+  // A picture and any other file are rows too, and the glyph says which is which.
+  check('a picture is a row of its own', iconNames('note:p'), ['lucide-image']);
+  check('a note keeps the note glyph', iconNames('note:a'), ['lucide-file-text']);
+  check('and any other file has its own', iconNames('note:z'), ['lucide-file']);
+  // What a file's bytes say about it is how big it is, not when it changed.
+  check('a picture carries its size', (row('note:p')?.textContent ?? '').includes('2.0 KB'), true);
+  check('and a note carries when it changed', (row('note:a')?.textContent ?? '').includes('刚刚'), true);
+
+  // A note's own verbs. Right-clicking used to open the browser's menu, which
+  // offers to reload the page or save an image - neither means anything here.
+  const noteEvent = await rightClick(row('note:a') as Element);
+  check('right-clicking a note is the app\'s business', noteEvent.defaultPrevented, true);
+  check(
+    'and the menu names what was clicked',
+    (document.querySelector('[data-context-menu]')?.textContent ?? '').includes('根目录笔记'),
+    true,
+  );
+  // Opened over a note, the menu has to stay readable: it is drawn opaque rather
+  // than as glass, which let the page underneath show through it.
+  const menuClass = document.querySelector('[data-context-menu]')?.className ?? '';
+  check('the menu is drawn opaque', menuClass.includes('bg-[var(--menu-bg)]'), true);
+  check('against a border that holds it apart from the page', menuClass.includes('border-[var(--line-strong)]'), true);
+  check('and is not glass any more', menuClass.includes('glass'), false);
+  check('opening is on it', openMenuItems().includes('note-open'), true);
+  check('renaming too', openMenuItems().includes('note-rename'), true);
+  check('and moving it to another folder', openMenuItems().includes('note-move'), true);
+  check('and pinning it', openMenuItems().includes('note-pin'), true);
+  check('and favouriting it', openMenuItems().includes('note-favorite'), true);
+  check(
+    'and deleting it, saying where it goes',
+    openMenuItems().includes('note-delete') && openMenuLabels().some((label) => label.includes('移入回收站')),
+    true,
+  );
+  await closeMenu();
+  check('Escape puts the menu away', Boolean(document.querySelector('[data-context-menu]')), false);
+  check('leaving nothing behind', openMenuItems(), []);
+
+  // A folder's verbs, and the one that is only offered where it makes sense.
+  await rightClick(row('folder:proj') as Element);
+  check('a folder can gain a subfolder', openMenuItems().includes('folder-new-child'), true);
+  check('and, being at the top level, a sibling', openMenuItems().includes('folder-new-root'), true);
+  check('it can be renamed', openMenuItems().includes('folder-rename'), true);
+  check('moved', openMenuItems().includes('folder-move'), true);
+  check(
+    'or thrown away, saying it can be recovered',
+    openMenuItems().includes('folder-delete') && openMenuLabels().some((label) => label.includes('可恢复')),
+    true,
+  );
+  await closeMenu();
+
+  await rightClick(row('folder:proj/deep') as Element);
+  check(
+    'a folder that is already nested is not offered a top-level sibling',
+    openMenuItems().includes('folder-new-root'),
+    false,
+  );
+  check('though it can still gain a child', openMenuItems().includes('folder-new-child'), true);
+  await closeMenu();
+
+  await rightClick(row('note:d') as Element);
+  check(
+    'a note that is already a favourite offers to stop being one',
+    openMenuLabels().some((label) => label.includes('取消收藏')),
+    true,
+  );
+  await closeMenu();
+
+  // A picture shares the outer verbs - it lives in a folder and is renamed the
+  // same way - but it is downloaded rather than pinned, and the server keeps no
+  // such fields for it anyway.
+  await rightClick(row('note:p') as Element);
+  check('a picture can be downloaded', openMenuItems().includes('note-download'), true);
+  check('renamed', openMenuItems().includes('note-rename'), true);
+  check('and moved', openMenuItems().includes('note-move'), true);
+  check('but not pinned', openMenuItems().includes('note-pin'), false);
+  check('nor favourited', openMenuItems().includes('note-favorite'), false);
+  await closeMenu();
+
+  // The space around the rows belongs to the tree. Making a folder at the top
+  // level is the one verb that needs no row to hang off, so it lives here.
+  const blank = await rightClick(panel.host.querySelector('[data-note-tree]') as Element);
+  check('a right-click on blank space is the tree\'s own', blank.defaultPrevented, true);
+  check('offering a folder at the top level', openMenuItems().includes('tree-new-root-folder'), true);
+  check('and nothing else', openMenuItems().length, 1);
+  await closeMenu();
+
+  // Holding a row still for 300ms opens the picking: the row is in it and says
+  // so. It is the wait that decides - moving before then is the other gesture,
+  // the drag.
+  const pressed = row('note:a') as Element;
+  // The bar that used to sit above the rows is gone: a picking is shown by the
+  // rows themselves, and its verbs are on the menu.
+  const toolbar = () => panel.host.querySelector('[data-selection-toolbar]');
+  await act(async () => {
+    pressed.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 12, clientY: 12 }));
+  });
+  check('a press on its own picks nothing', appStore.getState().selection.length, 0);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 520));
+  });
+  check('holding it still opens the picking', appStore.getState().selection, [{ kind: 'note', id: 'a' }]);
+  check('which the row says it is held for', pressed.getAttribute('data-armed'), 'true');
+  check('and the row is marked as picked', pressed.getAttribute('data-selected'), 'true');
+  check('with no batch bar anywhere', Boolean(toolbar()), false);
+
+  // Letting go keeps it.
+  await act(async () => {
+    pressed.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
+  });
+  await flush();
+  check('letting go keeps it picked', appStore.getState().selection, [{ kind: 'note', id: 'a' }]);
+  check('which the row says', pressed.getAttribute('data-selected'), 'true');
+  check('and the holding is over', pressed.getAttribute('data-armed'), null);
+  // The browser still sends a click when the finger comes up. That click is not
+  // the user asking to open anything, and it must not count as one.
+  await act(async () => {
+    pressed.querySelector('button')?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('the click that ends the hold opens nothing', appStore.getState().activeId, null);
+  check('and picks nothing else', appStore.getState().selection.length, 1);
+
+  // A second row is picked by clicking it: while something is picked, a click
+  // adds that row instead of opening it.
+  await act(async () => {
+    row('note:b')?.querySelector('button')?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('clicking another row adds it', appStore.getState().selection, [
+    { kind: 'note', id: 'a' },
+    { kind: 'note', id: 'b' },
+  ]);
+  check('and that row says so', row('note:b')?.getAttribute('data-selected'), 'true');
+  check('and the picking holds both', appStore.getState().selection.length, 2);
+  check('without opening it', appStore.getState().activeId, null);
+
+  // The click this press leaves behind is thrown away wherever it lands: the bar
+  // has pushed the rows down, so it can end up on the container instead.
+  await act(async () => {
+    panel.host.querySelector('[data-note-tree]')?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('and the click it leaves behind changes nothing', appStore.getState().selection.length, 2);
+  check('with still no batch bar', Boolean(toolbar()), false);
+
+  // A picked row carries the batch block as well as its own verbs, so a
+  // right-click never hides what that row alone can do. Every entry says how
+  // many rows are in hand, since nothing else on screen does.
+  await rightClick(pressed);
+  check('a picked row offers to download the lot', openMenuItems().includes('selection-download'), true);
+  check('and the batch move', openMenuItems().includes('selection-move'), true);
+  check('the batch delete', openMenuItems().includes('selection-delete'), true);
+  check('and a way out of picking', openMenuItems().includes('selection-clear'), true);
+  check('without hiding what that row alone can do', openMenuItems().includes('note-open'), true);
+  check(
+    'each naming how many are in hand',
+    ['下载 2 项', '移动 2 项', '删除 2 项'].every((label) => openMenuLabels().some((text) => text.includes(label))),
+    true,
+  );
+  // Downloading needs no question in front of it: the files are already named.
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="selection-download"]')?.click();
+  });
+  await flush();
+  check('downloading the lot is the store call it means', batchCalls, ['download']);
+
+  await rightClick(pressed);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="selection-delete"]')?.click();
+  });
+  await flush();
+  check('deleting the lot is its own call', batchCalls, ['download', 'delete']);
+
+  // Moving asks where first, and answering is the call.
+  await rightClick(pressed);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="selection-move"]')?.click();
+  });
+  await flush();
+  check('moving the lot asks where first', document.querySelector('[data-testid="dialog-title"]')?.textContent, '批量移动');
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]')?.click();
+  });
+  await flush();
+  check('and answering is the move call', batchCalls, ['download', 'delete', 'move → ']);
+
+  // 取消选择 is on the menu too.
+  await rightClick(pressed);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="selection-clear"]')?.click();
+  });
+  await flush();
+  check('clearing the picking empties it', appStore.getState().selection.length, 0);
+  check('and the row stops saying it is picked', pressed.getAttribute('data-selected'), null);
+
+  // Ctrl (or ⌘) is the shortcut that skips the hold: one click, no waiting, and
+  // still no opening.
+  const ctrlClick = async (key: string) => {
+    const button = row(key)?.querySelector('button');
+    await act(async () => {
+      button?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
+    });
+    await flush();
+  };
+  await ctrlClick('note:e');
+  check('ctrl-clicking a row picks it', appStore.getState().selection, [{ kind: 'note', id: 'e' }]);
+  check('without opening it', appStore.getState().activeId, null);
+  check('and the row says so', row('note:e')?.getAttribute('data-selected'), 'true');
+  check('and still no batch bar', Boolean(panel.host.querySelector('[data-selection-toolbar]')), false);
+  await ctrlClick('note:e');
+  check('ctrl-clicking it again puts it back', appStore.getState().selection, []);
+  check('and nothing is left over when it goes', Boolean(panel.host.querySelector('[data-selection-toolbar]')), false);
+
+  await panel.unmount();
+  appStore.setState(hold);
+}
+
+/* --- holding a row, carrying it, and letting it go ------------------------- */
+console.log('\nholding a row and moving it by hand (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [
+      summaryNote('a', '根目录笔记', ''),
+      summaryNote('b', '项目笔记', 'proj'),
+      summaryNote('p', '风景.png', '', { kind: 'image', size: 2048, excerpt: '' }),
+      summaryNote('z', '档案.zip', 'proj', { kind: 'file', size: 512, excerpt: '' }),
+    ],
+    folders: [
+      { path: 'proj', name: 'proj', count: 2, depth: 0 },
+      { path: 'proj/deep', name: 'deep', count: 0, depth: 1 },
+      { path: 'archive', name: 'archive', count: 0, depth: 0 },
+    ],
+    expandedFolders: ['proj'],
+    activeFolder: null,
+    activeId: null,
+    query: '',
+    selection: [],
+    loadingNotes: false,
+    notesError: null,
+  } as never);
+
+  // jsdom has no elementFromPoint of its own, so the drag is told what is under
+  // the pointer; whatever this environment had is put back afterwards.
+  const realElementFromPoint = typeof document.elementFromPoint === 'function' ? document.elementFromPoint : null;
+
+  // Where a drop goes is a store call, and which call it is is the thing worth
+  // asserting - so the three of them are recorded rather than performed.
+  const moved: string[] = [];
+  appStore.setState({
+    moveNote: async (id: string, folder: string) => {
+      moved.push('note ' + id + ' → ' + folder);
+    },
+    moveFolder: async (path: string, folder: string) => {
+      moved.push('folder ' + path + ' → ' + folder);
+    },
+    moveSelection: async (folder: string) => {
+      moved.push('selection → ' + folder);
+    },
+  } as never);
+
+  const panel = await mountPanel();
+  const row = (key: string) => panel.host.querySelector('[data-tree-row="' + key + '"]');
+  const tree = panel.host.querySelector('[data-note-tree]') as Element;
+  // The batch bar was removed: a picking is shown by its rows, and there is
+  // nothing above them to find.
+  const toolbar = () => panel.host.querySelector('[data-selection-toolbar]');
+  // The offer is a badge at the top of the tree rather than part of the bar: it
+  // has to be readable while a drag is in the air, which is before anything is
+  // picked at all.
+  const hint = () => panel.host.querySelector('[data-drop-hint]');
+  const hintValue = () => hint()?.getAttribute('data-drop-hint') ?? null;
+
+  const press = async (key: string, at = { x: 20, y: 20 }) => {
+    await act(async () => {
+      row(key)?.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: at.x, clientY: at.y }));
+    });
+  };
+  const moveTo = async (x: number, y: number) => {
+    await act(async () => {
+      w.dispatchEvent(new w.MouseEvent('pointermove', { bubbles: true, clientX: x, clientY: y }));
+    });
+    await flush();
+  };
+  const release = async () => {
+    await act(async () => {
+      w.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true }));
+    });
+    await flush();
+  };
+  /** The click a browser sends as a press ends; the tree throws it away. */
+  const closingClick = async () => {
+    await act(async () => {
+      tree.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await flush();
+  };
+  const forget = async () => {
+    await act(async () => {
+      appStore.getState().clearSelection();
+    });
+    await flush();
+  };
+  const holdFor = async (ms: number) => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  };
+  /** The card that follows the pointer while something is carried. */
+  const ghost = () => document.querySelector('[data-drag-ghost]');
+
+  // The empty space below the last row is the tree's too. jsdom has no layout to
+  // measure it with, so the class that makes it reachable is what can be seen.
+  check('the tree fills the space under its rows', tree.className.includes('min-h-full'), true);
+
+  // A press let go almost where it started is a click, and a click is still a
+  // click: nothing is picked, nothing is carried, and the note opens.
+  moved.length = 0;
+  await press('note:a');
+  await moveTo(23, 22);
+  await release();
+  check('a press let go where it started picks nothing', appStore.getState().selection, []);
+  check('and carries no card', Boolean(ghost()), false);
+  check('and moves nothing', moved, []);
+  await act(async () => {
+    row('note:a')?.querySelector('button')?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('so the click opens the note', appStore.getState().activeId, 'a');
+  await act(async () => {
+    appStore.setState({ activeId: null, activeNote: null, loadingNote: false });
+  });
+
+  // The same for a folder: a tap opens it.
+  await press('folder:archive');
+  await release();
+  await act(async () => {
+    row('folder:archive')?.querySelector('button')?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('and a tap on a folder opens it', appStore.getState().expandedFolders.includes('archive'), true);
+  await act(async () => {
+    appStore.setState({ expandedFolders: ['proj'] });
+  });
+
+  // Held still instead: that is the picking, and it opens on its own.
+  moved.length = 0;
+  await press('note:a');
+  await holdFor(320);
+  check('holding a row still opens the picking', appStore.getState().selection, [{ kind: 'note', id: 'a' }]);
+  check('with the row saying it is held', row('note:a')?.getAttribute('data-armed'), 'true');
+  check('and marked as picked', row('note:a')?.getAttribute('data-selected'), 'true');
+  check('with no bar anywhere', Boolean(toolbar()), false);
+  await release();
+  check('letting go keeps it picked', appStore.getState().selection.length, 1);
+  await closingClick();
+  check('and the click it leaves behind does not clear it', appStore.getState().selection.length, 1);
+  check('nor opens the note', appStore.getState().activeId, null);
+  check('and nothing was moved', moved, []);
+  await forget();
+
+  // Moving while a row is held is the drag, and it starts at once: no waiting, no
+  // picking, and a card under the pointer carrying what travels.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:proj');
+  await press('note:a');
+  await moveTo(20, 200);
+  check('carrying the row raises a card', Boolean(ghost()), true);
+  check('saying which row it carries', (ghost()?.textContent ?? '').includes('根目录笔记'), true);
+  check('a folder under the pointer says it will take it', row('folder:proj')?.getAttribute('data-drop-target'), 'true');
+  check('and the badge names it', hintValue(), 'proj');
+  check('in words', (hint()?.textContent ?? '').includes('松开移动到 proj'), true);
+  check('from the top of the tree rather than the bar', tree.contains(hint()), true);
+  check('taking no height of its own', Boolean(hint()?.parentElement?.className.includes('h-0')), true);
+  check('and no row is marked as picked', panel.host.querySelectorAll('[data-selected="true"]').length, 0);
+  check('nor anything picked in the store', appStore.getState().selection, []);
+  await release();
+  check('letting go moves the note there', moved, ['note a → proj']);
+  check('once', moved.length, 1);
+  check('and the offer goes with the press', hintValue(), null);
+  check('leaving nothing picked', appStore.getState().selection, []);
+  check('and no bar behind', Boolean(toolbar()), false);
+  await settled();
+  check('and the card is gone', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // The same for a picture - the tree calls it a note row, and so does the move.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:archive');
+  await press('note:p');
+  await moveTo(60, 300);
+  check('a picture can be carried too', hintValue(), 'archive');
+  await release();
+  check('and is moved through the note call', moved, ['note p → archive']);
+  await settled();
+  check('with the card gone', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // A drag that finds no destination carries nothing anywhere, and picks nothing
+  // either: it is a drag that ended nowhere.
+  moved.length = 0;
+  document.elementFromPoint = () => row('note:b');
+  await press('note:a');
+  await moveTo(40, 20);
+  check('a note is not a destination', hintValue(), null);
+  check('and no row claims the drop', row('note:b')?.getAttribute('data-drop-target'), null);
+  check('though the card is up', Boolean(ghost()), true);
+  check('and nothing is picked', appStore.getState().selection, []);
+  await release();
+  check('so letting go moves nothing', moved, []);
+  check('and picks nothing either', appStore.getState().selection, []);
+  check('with no bar', Boolean(toolbar()), false);
+  await settled();
+  check('and the card goes', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // Cancelling a drag is not releasing it: a pointer that goes away moves
+  // nothing and takes the card with it.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:proj');
+  await press('note:a');
+  await moveTo(20, 200);
+  check('a card is up before the cancel', Boolean(ghost()), true);
+  await act(async () => {
+    w.dispatchEvent(new w.MouseEvent('pointercancel', { bubbles: true }));
+  });
+  await flush();
+  check('cancelling moves nothing', moved, []);
+  check('and picks nothing', appStore.getState().selection, []);
+  await settled();
+  check('and the card goes with it', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // Holding first and carrying on from there: the picking was already open, so
+  // what travels is what it holds - and it is given up once the row has moved.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:archive');
+  await press('note:a');
+  await holdFor(320);
+  check('the hold opened the picking', appStore.getState().selection.length, 1);
+  await moveTo(60, 300);
+  check('and carrying on from it drags the row', Boolean(ghost()), true);
+  await release();
+  check('which is moved', moved, ['note a → archive']);
+  check('with the picking given up', appStore.getState().selection, []);
+  check('and no bar anywhere', Boolean(toolbar()), false);
+  await settled();
+  await closingClick();
+  await forget();
+
+  // Several rows in hand: the drag has already answered which of them it is, so
+  // the batch call is the one that moves them.
+  moved.length = 0;
+  await act(async () => {
+    appStore.setState({
+      selection: [
+        { kind: 'note', id: 'a' },
+        { kind: 'note', id: 'b' },
+      ],
+    });
+  });
+  document.elementFromPoint = () => row('folder:archive');
+  await press('note:a');
+  await moveTo(60, 300);
+  check('a drag from a picking carries all of it', (ghost()?.textContent ?? '').includes('2 项'), true);
+  check('and the badge names the folder for all of them', hintValue(), 'archive');
+  await release();
+  check('so the batch call is the one that runs', moved, ['selection → archive']);
+  check('and the picking is given up with the move', appStore.getState().selection, []);
+  check('and no bar is left over', Boolean(toolbar()), false);
+  await settled();
+  check('and so does the card', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // A folder travels by its path, through the folder call - that is what keeps
+  // its contents together.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:archive');
+  await press('folder:proj');
+  await moveTo(60, 300);
+  check('a folder can be carried as well', hintValue(), 'archive');
+  await release();
+  check('and moves through the folder call', moved, ['folder proj → archive']);
+  await closingClick();
+  await forget();
+
+  // A folder cannot be dropped on itself, inside itself, or where it already is:
+  // those are not places, and the tree offers none of them.
+  moved.length = 0;
+  document.elementFromPoint = () => row('folder:proj');
+  await press('folder:proj');
+  await moveTo(60, 300);
+  check('a folder cannot be dropped on itself', hintValue(), null);
+  document.elementFromPoint = () => row('folder:proj/deep');
+  await moveTo(70, 320);
+  check('nor inside its own child', hintValue(), null);
+  document.elementFromPoint = () => tree;
+  await moveTo(80, 340);
+  check('nor into the folder it already lives in', hintValue(), null);
+  await release();
+  check('and nothing moved', moved, []);
+  await closingClick();
+  await forget();
+
+  // The empty space below the rows is the notes root: a row dropped there is
+  // moved out of its folder rather than into another one.
+  moved.length = 0;
+  document.elementFromPoint = () => tree;
+  await press('note:b');
+  await moveTo(60, 400);
+  check('below the last row is the root', hintValue(), 'root');
+  check('which the badge spells out', (hint()?.textContent ?? '').includes('根目录'), true);
+  await release();
+  check('so it moves to the root', moved, ['note b → ']);
+  check('and nothing is left picked', appStore.getState().selection, []);
+  await settled();
+  await closingClick();
+
+  if (realElementFromPoint) document.elementFromPoint = realElementFromPoint;
+  else delete (document as unknown as { elementFromPoint?: unknown }).elementFromPoint;
+  await panel.unmount();
+  appStore.setState(hold);
+}
+
+/* --- the menu's surface is declared, not guessed --------------------------- */
+console.log('\nthe menu background (styles.css)');
+{
+  // jsdom never applies the stylesheet, so what the menu is made of is read from
+  // the two places that decide it: the class on the element, asserted above while
+  // a menu was open, and the variable that class names.
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+
+  check('the light theme gives the menu a surface of its own', /--menu-bg:\s*#ffffff/i.test(css), true);
+  check(
+    'and the dark theme one deeper than the panel it drops over',
+    /\.dark\s*\{[^}]*--menu-bg:\s*#070c19/i.test(css),
+    true,
+  );
+  // Nothing see-through: text from the page behind it is unreadable through glass.
+  check('neither of them is translucent', /--menu-bg:\s*(?:transparent|color-mix|rgba)/i.test(css), false);
+}
+
+/* --- the order the tree is drawn in --------------------------------------- */
+console.log('\nsorting the panel (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [summaryNote('s1', 'Alpha', 'proj'), summaryNote('s2', 'Beta', 'proj'), summaryNote('s3', 'Gamma', '')],
+    folders: [{ path: 'proj', name: 'proj', count: 2, depth: 0 }],
+    expandedFolders: ['proj'],
+    activeFolder: null,
+    activeId: null,
+    query: '',
+    selection: [],
+    sort: 'title',
+    sortOrder: 'asc',
+    loadingNotes: false,
+    notesError: null,
+  } as never);
+
+  const panel = await mountPanel();
+  const sortKey = panel.host.querySelector<HTMLSelectElement>('[data-testid="sort-key"]');
+  const asc = () => panel.host.querySelector('[data-testid="sort-order-asc"]');
+  const desc = () => panel.host.querySelector('[data-testid="sort-order-desc"]');
+  const order = () =>
+    Array.from(panel.host.querySelectorAll('[data-tree-row]')).map((item) => item.getAttribute('data-tree-row'));
+
+  check('the sort is a labelled picker', sortKey?.getAttribute('aria-label'), '排序方式');
+  check('defaulting to the title', sortKey?.value, 'title');
+  check('which it calls 标题', sortKey?.selectedOptions[0]?.textContent, '标题');
+  check('and running upwards by default', asc()?.getAttribute('aria-pressed'), 'true');
+  check('with the other direction unpressed', desc()?.getAttribute('aria-pressed'), 'false');
+  // Folders first, then the notes inside them - the order the tree is for.
+  check('the tree is in title order', order(), ['folder:proj', 'note:s1', 'note:s2', 'note:s3']);
+
+  await act(async () => {
+    desc()?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  check('choosing the other direction reaches the store', appStore.getState().sortOrder, 'desc');
+  check('and turns the notes around', order(), ['folder:proj', 'note:s2', 'note:s1', 'note:s3']);
+  check('showing which direction is on', desc()?.getAttribute('aria-pressed'), 'true');
+  check('and which is not', asc()?.getAttribute('aria-pressed'), 'false');
+
+  await panel.unmount();
+  appStore.setState(hold);
+}
+
+/* --- the panel's own controls --------------------------------------------- */
+console.log('\nthe panel\'s controls (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [summaryNote('a', '根目录笔记', ''), summaryNote('b', '项目笔记', 'proj')],
+    folders: [
+      { path: 'proj', name: 'proj', count: 1, depth: 0 },
+      { path: 'proj/deep', name: 'deep', count: 0, depth: 1 },
+    ],
+    expandedFolders: [],
+    activeFolder: null,
+    activeId: null,
+    query: '',
+    selection: [],
+    loadingNotes: false,
+    notesError: null,
+  } as never);
+
+  // The app's shortcuts sit above the panel; the "/" that used to jump into the
+  // search box lived there, so they are installed here too.
+  const WithHotkeys = () => {
+    useHotkeys();
+    return React.createElement(NotesPanel);
+  };
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(WithHotkeys));
+  });
+  await flush();
+
+  const search = host.querySelector<HTMLInputElement>('input[aria-label="搜索笔记"]');
+  check('the search box is there', Boolean(search), true);
+  check('with no keyboard hint promising a shortcut', host.querySelector('kbd'), null);
+  (document.activeElement as HTMLElement | null)?.blur();
+  await act(async () => {
+    w.dispatchEvent(new w.KeyboardEvent('keydown', { key: '/', bubbles: true }));
+  });
+  check('pressing / does not focus the search box', document.activeElement === search, false);
+  check('and leaves the focus where it was', document.activeElement?.tagName ?? 'none', 'BODY');
+
+  const button = (label: string) =>
+    Array.from(host.querySelectorAll('button')).find((item) => item.textContent?.trim() === label);
+  const cancel = () =>
+    document.querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]')?.previousElementSibling as
+      | HTMLButtonElement
+      | null;
+
+  // Making a note asks where it goes first: the folder is a choice, not
+  // something inferred from whatever was clicked last.
+  await act(async () => {
+    button('新建笔记')?.click();
+  });
+  await flush();
+  check('making a note asks where it goes', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+  check('with a title to give it', Boolean(document.querySelector('[data-testid="dialog-input"]')), true);
+  const picker = document.querySelector<HTMLSelectElement>('[data-testid="dialog-folder-select"]');
+  check('and a destination dropdown', picker?.getAttribute('aria-label'), '目标目录');
+  check('whose first choice is the root', picker?.options[0]?.textContent, '根目录');
+  check(
+    'listing every folder there is',
+    Array.from(picker?.options ?? []).map((option) => option.value),
+    ['', 'proj', 'proj/deep'],
+  );
+  check('and a way to confirm it', Boolean(document.querySelector('[data-testid="dialog-confirm"]')), true);
+  await act(async () => {
+    cancel()?.click();
+  });
+  await flush();
+  check('cancelling puts it away', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
+
+  await act(async () => {
+    host.querySelector<HTMLButtonElement>('button[aria-label="上传文件"]')?.click();
+  });
+  await flush();
+  check('uploading asks the same question', document.querySelector('[data-testid="dialog-title"]')?.textContent, '上传文件');
+  check('with the same destination dropdown', Boolean(document.querySelector('[data-testid="dialog-folder-select"]')), true);
+  check(
+    'and no title field, since the files carry their own names',
+    Boolean(document.querySelector('[data-testid="dialog-input"]')),
+    false,
+  );
+  // Any file is accepted: a picture is as much a part of the folder as a note.
+  check('and the picker does not narrow the choice', host.querySelector('input[type="file"]')?.hasAttribute('accept'), false);
+  await act(async () => {
+    cancel()?.click();
+  });
+  await flush();
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  appStore.setState(hold);
+}
+
+/* --- the editor's own menu, and when it writes ---------------------------- */
+console.log('\nthe editor\'s own menu (jsdom)');
+{
+  const hold = appStore.getState();
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [note],
+    activeId: note.id,
+    activeNote: note,
+    lastSaved: null,
+    dirty: false,
+    editorMode: 'split',
+    metaOpen: true,
+    saving: false,
+  } as never);
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(Editor));
+  });
+  await flush();
+
+  // The markdown toolbar that used to sit above the note is gone: the verbs it
+  // carried are on the right-click menu, which is not in the DOM until asked.
+  check('no toolbar is left above the editor', host.querySelectorAll('[data-menu-item]').length, 0);
+  check(
+    'and none of its buttons either',
+    ['加粗', '斜体', '删除线', '引用', '无序列表', '有序列表', '插入链接'].filter((label) =>
+      host.innerHTML.includes('aria-label="' + label + '"'),
+    ),
+    [],
+  );
+
+  const content = host.querySelector('.cm-content');
+  check('the note body is an editor in the DOM', Boolean(content), true);
+  const menuEvent = await rightClick(content as Element);
+  check('right-clicking the note replaces the browser menu', menuEvent.defaultPrevented, true);
+  check('undoing is on it', openMenuItems().includes('undo'), true);
+  check('so is copying', openMenuItems().includes('copy'), true);
+  check('and selecting everything', openMenuItems().includes('select-all'), true);
+  check(
+    'and the formatting the toolbar used to carry',
+    openMenuItems().includes('bold') && openMenuItems().includes('link'),
+    true,
+  );
+  check('named in words a reader knows', openMenuLabels().some((label) => label.includes('加粗')), true);
+
+  // Copying is the item that has to survive a browser with no clipboard API.
+  const errors: unknown[] = [];
+  const onError = (event: Event) => errors.push((event as ErrorEvent).message ?? 'error');
+  w.addEventListener('error', onError);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="copy"]')?.click();
+  });
+  await settled();
+  check('copying closes the menu', Boolean(document.querySelector('[data-context-menu]')), false);
+
+  // Selecting everything runs against the live editor, which its own DOM knows
+  // how to find.
+  const view = EditorView.findFromDOM(host.querySelector('.cm-editor') as HTMLElement);
+  check('the editor view can be found from its DOM', Boolean(view), true);
+  await rightClick(content as Element);
+  await act(async () => {
+    document.querySelector<HTMLButtonElement>('[data-menu-item="select-all"]')?.click();
+  });
+  await flush();
+  w.removeEventListener('error', onError);
+  check('selecting everything selects the whole note', view?.state.selection.main.to === view?.state.doc.length, true);
+  check('and nothing threw on the way', errors, []);
+
+  // Typing a title is a local edit. The field losing focus is the only writer,
+  // which is what stops a reply landing on top of the words being typed.
+  const realFetch = globalThis.fetch;
+  const writes: string[] = [];
+  globalThis.fetch = (async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+    const method = (init.method ?? 'GET').toUpperCase();
+    if (method !== 'PUT') throw new Error('no server here');
+    writes.push(String(init.body ?? ''));
+    const patch = JSON.parse(String(init.body ?? '{}')) as { title?: string };
+    const title = patch.title ?? note.title;
+    // A title is the file's name, so the server answers with the new path.
+    return new Response(
+      JSON.stringify({ note: { ...note, title, path: '/' + title + '.md', updated: new Date().toISOString() } }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }) as typeof fetch;
+  try {
+    const title = host.querySelector<HTMLInputElement>('input[aria-label="笔记标题"]');
+    check('the title is a field of its own', title?.value, note.title);
+    const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      setter?.call(title, '更名后的标题');
+      title?.dispatchEvent(new w.Event('input', { bubbles: true }));
+    });
+    await flush();
+    check('typing reaches the note', appStore.getState().activeNote?.title, '更名后的标题');
+    check('and marks it unsaved', appStore.getState().dirty, true);
+    check('but writes nothing yet', writes.length, 0);
+
+    await act(async () => {
+      title?.dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
+    });
+    await flush();
+    check('leaving the field saves once', writes.length, 1);
+    check('with the title that was typed', writes[0]?.includes('更名后的标题'), true);
+    check('and the note is clean again', appStore.getState().dirty, false);
+    check(
+      'the address follows the renamed file',
+      decodeURIComponent(w.location.pathname),
+      '/manager/public/Notes/更名后的标题.md',
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  appStore.setState(hold);
+}
+
+/* --- what the editor does with the other kinds ---------------------------- */
+console.log('\nthe editor and files that are not notes (jsdom)');
+{
+  const hold = appStore.getState();
+
+  /** Opens one file as the editor's subject and keeps the pane mounted. */
+  const openFile = async (file: Record<string, unknown>) => {
+    appStore.setState({
+      capabilities: WRITABLE,
+      notes: [file],
+      activeId: file.id,
+      activeNote: file,
+      lastSaved: null,
+      dirty: false,
+      editorMode: 'split',
+      metaOpen: true,
+      saving: false,
+    } as never);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(Editor));
+    });
+    await flush();
+    return {
+      host,
+      async unmount() {
+        await act(async () => {
+          root.unmount();
+        });
+        host.remove();
+      },
+    };
+  };
+
+  // A picture is looked at: no text editor, no three-state switch, no metadata
+  // bar and no outline - a control that cannot do anything is worse than none.
+  const pictureView = await openFile({
+    ...note,
+    id: 'pic1',
+    kind: 'image',
+    title: '风景.png',
+    path: '/风景.png',
+    content: '',
+    size: 2048,
+  });
+  check('a picture is not opened as text', pictureView.host.querySelector('.cm-content'), null);
+  check(
+    'and has no three-state switch',
+    pictureView.host.querySelectorAll('[aria-label="编辑"], [aria-label="分栏"], [aria-label="预览"]').length,
+    0,
+  );
+  check('nor the metadata bar', pictureView.host.innerHTML.includes('添加标签'), false);
+  check('nor an outline', pictureView.host.querySelector('.outline-panel'), null);
+  const shown = pictureView.host.querySelector('img');
+  check(
+    'what is shown is the picture itself',
+    shown?.getAttribute('src'),
+    '/api/notes/file?path=' + encodeURIComponent('/风景.png'),
+  );
+  check('named as the file is', shown?.getAttribute('alt'), '风景.png');
+  // The outer verbs are the same for every kind: it is still a file with a name.
+  check('though it can still be renamed', Boolean(pictureView.host.querySelector('input[aria-label="笔记标题"]')), true);
+  check('and downloaded', Boolean(pictureView.host.querySelector('button[aria-label="下载文件"]')), true);
+  await pictureView.unmount();
+
+  // Anything else is only ever downloaded.
+  const fileView = await openFile({
+    ...note,
+    id: 'zip1',
+    kind: 'file',
+    title: '档案.zip',
+    path: '/档案.zip',
+    content: '',
+    size: 4096,
+  });
+  check('another format is not opened as text either', fileView.host.querySelector('.cm-content'), null);
+  check('and says so', fileView.host.innerHTML.includes('暂不支持预览这种格式'), true);
+  check(
+    'offering the file itself instead',
+    Array.from(fileView.host.querySelectorAll('button')).some((button) => button.textContent?.trim() === '下载文件'),
+    true,
+  );
+  check(
+    'with no modes',
+    fileView.host.querySelectorAll('[aria-label="编辑"], [aria-label="分栏"], [aria-label="预览"]').length,
+    0,
+  );
+  await fileView.unmount();
+
+  appStore.setState(hold);
+}
+
+/* --- the pictures a note refers to ---------------------------------------- */
+console.log('\nimages inside a note (jsdom)');
+{
+  const { resolveImages, resolveImagePath, normaliseStoragePath, isImageUrl, trimUrlTail, renderMarkdown } =
+    await import('./src/lib/markdown');
+  const { Preview } = await import('./src/components/Preview');
+
+  // A reference that names its own store is left alone: those are other servers
+  // and inline pictures, not files in this one.
+  check('an https picture is left as it is', resolveImagePath('https://cdn.example.com/a.png', '/docs/note.md'), null);
+  check('so is a protocol-relative one', resolveImagePath('//cdn.example.com/a.png', '/docs/note.md'), null);
+  check('and a data: one', resolveImagePath('data:image/png;base64,AAAA', '/docs/note.md'), null);
+  check('and a blob: one', resolveImagePath('blob:https://x/y', '/docs/note.md'), null);
+  check('and an empty reference means nothing', resolveImagePath('  ', '/docs/note.md'), null);
+
+  // A leading slash is already a path from the notes root.
+  check('a rooted path is a storage path', resolveImagePath('/img/a.png', '/docs/note.md'), '/img/a.png');
+  // Everything else is read against the folder the note itself lives in.
+  check('a sibling folder is read from the note', resolveImagePath('img/a.png', '/docs/note.md'), '/docs/img/a.png');
+  check('a ./ is the same thing', resolveImagePath('./img/a.png', '/docs/note.md'), '/docs/img/a.png');
+  check('a ../ climbs out of it', resolveImagePath('../img/a.png', '/docs/note.md'), '/img/a.png');
+  check('and one too many has nowhere to go', resolveImagePath('../../img/a.png', '/docs/note.md'), '/img/a.png');
+  check(
+    'a query and a hash are not part of the name',
+    resolveImagePath('img/a.png?v=2#top', '/docs/note.md'),
+    '/docs/img/a.png',
+  );
+  check('a note at the root reads from the root', resolveImagePath('img/a.png', '/note.md'), '/img/a.png');
+  // marked hands the src over percent-encoded, and the server decodes the path
+  // once - so it has to be decoded here, or a Chinese name is looked for under
+  // its own escapes and comes back 404.
+  check(
+    'a reference the renderer encoded is decoded again',
+    resolveImagePath('./img/%E9%A3%8E%E6%99%AF.png', '/docs/note.md'),
+    '/docs/img/风景.png',
+  );
+  check(
+    'and a space in a name survives the round trip',
+    resolveImagePath('img/my%20photo.png', '/docs/note.md'),
+    '/docs/img/my photo.png',
+  );
+  // A lone percent is a character in a file name, not a broken escape.
+  check(
+    'a percent that is not an escape is kept as written',
+    resolveImagePath('img/a%ZZb.png', '/docs/note.md'),
+    '/docs/img/a%ZZb.png',
+  );
+
+  check('folding is text handling', normaliseStoragePath('/a//b/./c/../d'), '/a/b/d');
+  check('backslashes are separators too', normaliseStoragePath('\\a\\b'), '/a/b');
+  check('and above the root there is nothing to climb', normaliseStoragePath('..'), '/');
+
+  // The rewrite itself, on elements rather than on strings.
+  const container = document.createElement('div');
+  container.innerHTML = '<img src="img/a.png"><img src="https://cdn.example.com/b.png">';
+  resolveImages(container, '/docs/note.md');
+  const [local, remote] = Array.from(container.querySelectorAll('img'));
+  check(
+    'a picture beside the note is asked of the server',
+    local.getAttribute('src'),
+    '/api/notes/file?path=' + encodeURIComponent('/docs/img/a.png'),
+  );
+  check('and the reference it was written with is kept', local.dataset.originalSrc, 'img/a.png');
+  check('it loads when it is reached', local.getAttribute('loading'), 'lazy');
+  check('and never overflows the pane', local.classList.contains('max-w-full'), true);
+  check('while a remote one is untouched', remote.getAttribute('src'), 'https://cdn.example.com/b.png');
+  // The same element shown for another note resolves from that note, not from
+  // what the first pass produced - which is why the original is remembered.
+  resolveImages(container, '/other/note.md');
+  check(
+    'and resolves again from the note it is shown in',
+    local.getAttribute('src'),
+    '/api/notes/file?path=' + encodeURIComponent('/other/img/a.png'),
+  );
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      React.createElement(Preview, {
+        // The name in the markdown is Chinese and the note is not at the root:
+        // `marked` writes the src percent-encoded, so the resolver has to decode
+        // it once before the server (which decodes the query parameter once)
+        // can find the file.
+        content: '![风景](./img/风景.png)\n\n![远程](https://cdn.example.com/b.png)\n',
+        notePath: '/docs/note.md',
+      }),
+    );
+  });
+  await flush();
+  const images = Array.from(host.querySelectorAll<HTMLImageElement>('.markdown-body img'));
+  check(
+    'a rendered note asks the server for the picture beside it',
+    images[0]?.getAttribute('src'),
+    '/api/notes/file?path=' + encodeURIComponent('/docs/img/风景.png'),
+  );
+  check('and leaves an outside link alone', images[1]?.getAttribute('src'), 'https://cdn.example.com/b.png');
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+
+  // Whether an address ends in a picture, whatever is stuck on the end of it.
+  check('a png is a picture', isImageUrl('https://cdn.example.com/a.png'), true);
+  check('in any case', isImageUrl('https://cdn.example.com/A.JPEG'), true);
+  check('with a query on it', isImageUrl('https://cdn.example.com/a.webp?w=800'), true);
+  check('and with a fragment', isImageUrl('https://cdn.example.com/a.svg#icon'), true);
+  check('a text file is not', isImageUrl('https://cdn.example.com/a.txt'), false);
+  check('nor is a page', isImageUrl('https://cdn.example.com/a'), false);
+
+  // The punctuation that followed the address in the text is not part of it.
+  check(
+    'a pasted payload loses its quote and brace',
+    trimUrlTail('https://cdn.example.com/a.png%22%7D'),
+    'https://cdn.example.com/a.png',
+  );
+  check('and a sentence-ending comma', trimUrlTail('https://cdn.example.com/a.png,'), 'https://cdn.example.com/a.png');
+  check('and a closing bracket', trimUrlTail('https://cdn.example.com/a.jpg)'), 'https://cdn.example.com/a.jpg');
+  check('while a percent that is not an escape stays', trimUrlTail('https://cdn.example.com/a%ZZ.png'), 'https://cdn.example.com/a%ZZ.png');
+
+  // A note that only names a picture still shows it: the address arrives pasted
+  // out of a payload, marked turns it into a link and swallows the closing quote
+  // and brace into the href.
+  const pasted = document.createElement('div');
+  pasted.innerHTML = renderMarkdown('{"url":"https://cdn.example.com/a.png"}');
+  const link = pasted.querySelector('a[href]');
+  check('the renderer made a link of the address', Boolean(link), true);
+  check('with the tail of the payload stuck to it', (link?.getAttribute('href') ?? '').includes('%22%7D'), true);
+  resolveImages(pasted, '/docs/note.md');
+  check('the link is corrected to the address', link?.getAttribute('href'), 'https://cdn.example.com/a.png');
+  const shownUnder = link?.nextElementSibling as HTMLImageElement | null;
+  check('and the picture is drawn under it', shownUnder?.tagName, 'IMG');
+  check('pointing at the address', shownUnder?.getAttribute('src'), 'https://cdn.example.com/a.png');
+  check('named after the file', shownUnder?.getAttribute('alt'), 'a.png');
+
+  // Every picture the panel draws carries the same three things.
+  const drawn = Array.from(pasted.querySelectorAll('img'));
+  check('every picture loads only when it is reached', drawn.every((image) => image.getAttribute('loading') === 'lazy'), true);
+  check(
+    'and asks for no referrer, which some hosts require',
+    drawn.every((image) => image.getAttribute('referrerpolicy') === 'no-referrer'),
+    true,
+  );
+  check(
+    'and never overflows the pane',
+    drawn.every((image) => image.classList.contains('max-w-full') && image.classList.contains('h-auto')),
+    true,
+  );
+
+  // An address written as plain text - a payload the renderer did not link - is
+  // shown beside the text, which stays where it is.
+  const bare = document.createElement('div');
+  bare.appendChild(document.createTextNode('看图 https://cdn.example.com/c.png 就是它'));
+  resolveImages(bare, '');
+  check('an address that is only text is shown beside it', bare.querySelectorAll('img').length, 1);
+  check('pointing where the text says', bare.querySelector('img')?.getAttribute('src'), 'https://cdn.example.com/c.png');
+  check('and the text is still there', (bare.textContent ?? '').includes('看图 https://cdn.example.com/c.png 就是它'), true);
+  resolveImages(bare, '');
+  check('and running it again does not draw it twice', bare.querySelectorAll('img').length, 1);
+
+  // Two addresses in one line: one picture each, in the order they were written,
+  // with the words between them still there.
+  const pair = document.createElement('div');
+  pair.appendChild(
+    document.createTextNode('先 https://cdn.example.com/one.png 后 https://cdn.example.com/two.jpg 完'),
+  );
+  resolveImages(pair, '');
+  check(
+    'two addresses in one line are both shown, in order',
+    Array.from(pair.querySelectorAll('img')).map((image) => image.getAttribute('src')),
+    ['https://cdn.example.com/one.png', 'https://cdn.example.com/two.jpg'],
+  );
+  check(
+    'and the words around them are still there',
+    (pair.textContent ?? '').includes('先 https://cdn.example.com/one.png 后 https://cdn.example.com/two.jpg 完'),
+    true,
+  );
+  // A second pass - even for another note - leaves a page that already has its
+  // pictures exactly as it was.
+  const once = pair.innerHTML;
+  resolveImages(pair, '');
+  check('running it again changes nothing at all', pair.innerHTML, once);
+  resolveImages(pair, '/other/note.md');
+  check('nor does running it for another note', pair.innerHTML, once);
+
+  // The same for the addresses inside a code sample: the sample is left exactly
+  // as written, and what it names is drawn under the block.
+  const sample = document.createElement('div');
+  sample.innerHTML = renderMarkdown(
+    '\u0060\u0060\u0060\nhttps://cdn.example.com/a.png\nhttps://cdn.example.com/a.png\nhttps://cdn.example.com/b.jpg\n\u0060\u0060\u0060\n',
+  );
+  resolveImages(sample, '/docs/note.md');
+  const block = sample.querySelector('pre');
+  check('a code sample keeps its text', (block?.textContent ?? '').includes('https://cdn.example.com/a.png'), true);
+  check('and says it has been looked at', block?.getAttribute('data-image-preview'), 'true');
+  const holder = sample.querySelector('.code-image-preview');
+  check('with the pictures under the block, one per address', holder?.querySelectorAll('img').length, 2);
+  check('right after it', block?.nextElementSibling === holder, true);
+  check(
+    'each pointing at the address the code names',
+    Array.from(holder?.querySelectorAll('img') ?? []).map((image) => image.getAttribute('src')),
+    ['https://cdn.example.com/a.png', 'https://cdn.example.com/b.jpg'],
+  );
+  const sampleImages = sample.querySelectorAll('img').length;
+  resolveImages(sample, '/docs/note.md');
+  check('and running that again adds nothing', sample.querySelectorAll('img').length, sampleImages);
+
+  // A sample full of addresses draws a wall of them, but not an endless one.
+  const many = document.createElement('div');
+  const addresses = Array.from({ length: 14 }, (_value, index) => 'https://cdn.example.com/' + index + '.png');
+  many.innerHTML = renderMarkdown('\u0060\u0060\u0060\n' + addresses.join('\n') + '\n\u0060\u0060\u0060\n');
+  resolveImages(many, '');
+  check('a block full of addresses draws twelve at most', many.querySelectorAll('.code-image-preview img').length, 12);
+}
+
+/* --- deep links under /manager -------------------------------------------- */
+console.log('\ndeep links (jsdom)');
+{
+  const { homeUrl, isManagerPath, noteUrl, readLocation, replaceLocation } = await import('./src/lib/url');
+
+  check('the panel root is /manager/', noteUrl(null), '/manager/');
+  check('a note is addressed by its storage path', noteUrl('/public/Notes/a.md'), '/manager/public/Notes/a.md');
+  check('and an anchor rides along', noteUrl('/public/Notes/a.md', 'x'), '/manager/public/Notes/a.md#x');
+  check('the front page is not the panel', homeUrl(), '/');
+  check('so it is not a panel address', isManagerPath('/'), false);
+  check('nor is an address outside the panel', isManagerPath('/public/Notes/a.md'), false);
+  check('while the panel root is', isManagerPath('/manager'), true);
+  check('and a note inside it', isManagerPath('/manager/public/Notes/a.md'), true);
+
+  // What is written and what is read back have to agree, or a shared link opens
+  // the wrong note - or nothing at all.
+  w.history.replaceState(null, '', '/manager/public/Notes/a.md#h');
+  check('an address reads back as the note it names', readLocation(), { path: '/public/Notes/a.md', anchor: 'h' });
+  w.history.replaceState(null, '', '/');
+  check('the front page names no note', readLocation(), { path: '', anchor: '' });
+  w.history.replaceState(null, '', '/manager/');
+  check('and neither does the panel root', readLocation(), { path: '', anchor: '' });
+  replaceLocation('/public/Notes/a.md', 'h');
+  check('writing an address round-trips', w.location.pathname + w.location.hash, '/manager/public/Notes/a.md#h');
+}
+
+/* --- the way in from the front page --------------------------------------- */
+console.log('\nthe front page (jsdom)');
+{
+  const App = (await import('./src/App')).default;
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  // No server is reachable here: the question is what the page looks like
+  // before anybody has signed in.
+  globalThis.fetch = (async () => {
+    throw new Error('no server here');
+  }) as typeof fetch;
+  appStore.setState({
+    booted: true,
+    user: { sid: 's', id: 'u', username: 'u', displayName: 'u', role: 'admin', provider: 'local', createdAt: 0, expiresAt: 0 },
+    notes: [note],
+    activeId: null,
+    activeNote: null,
+    query: '',
+    activeTag: null,
+    favoriteOnly: false,
+    pinnedOnly: false,
+    expandedFolders: [],
+    loadingNotes: false,
+    notesError: null,
+  } as never);
+  w.history.replaceState(null, '', '/');
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(App));
+  });
+  await flush();
+
+  const entry = host.querySelector<HTMLAnchorElement>('[data-panel-entry]');
+  check('the front page carries one way in', Boolean(entry), true);
+  check('named for what it opens', entry?.getAttribute('aria-label'), '管理面板登录入口');
+  check('pointing at the panel address', entry?.getAttribute('href'), '/manager/');
+  // Deliberately blank: nothing of the panel is behind it.
+  check(
+    'and nothing of the panel is on it',
+    host.innerHTML.includes('新建笔记') || host.innerHTML.includes('搜索笔记'),
+    false,
+  );
+  check('nor the sign-in card', host.innerHTML.includes('登录工作台'), false);
+
+  await act(async () => {
+    entry?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  // The front page hands over through a "wait" transition: the panel is only
+  // rendered once the page on its way out has finished leaving.
+  await settled();
+  check('clicking it moves the address into the panel', w.location.pathname, '/manager/');
+  check('and the panel is what follows', Boolean(host.querySelector('[data-note-tree]')), true);
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  globalThis.fetch = realFetch;
   appStore.setState(hold);
 }
 
@@ -1302,12 +2674,22 @@ console.log('\ntooltip placement (jsdom)');
 
   // The control the fix was for, and the general rule behind it.
   const { NotesPanel: Panel } = await import('./src/components/NoteList');
+  const panelHold = appStore.getState();
+  appStore.setState({ query: '' });
   const panel = await renderTip(React.createElement(Panel));
-  check('the search-scope control carries its placement', panel.includes('absolute right-9'), true);
+  // The scope control is the rightmost thing in the search box again: the "/"
+  // hint it used to make room for is gone.
+  check('the search-scope control carries its placement', panel.includes('absolute right-2'), true);
+  appStore.setState({ query: '风景' });
+  const searching = await renderTip(React.createElement(Panel));
+  // The clear button sits just inside it, where a second control belongs.
+  check('and the clear button sits inside it', searching.includes('absolute right-9'), true);
+  appStore.setState(panelHold);
   // Nothing anywhere may hold two position classes: whichever Tailwind emits
   // last wins, and that is not the one the author asked for.
-  const doubled = panel.match(/class="[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*"/g) ?? [];
-  check('and no element carries two position classes at once', doubled, []);
+  const positionClasses = (html: string): string[] =>
+    html.match(/class="[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*\b(?:relative|absolute|fixed|sticky)\b[^"]*"/g) ?? [];
+  check('and no element carries two position classes at once', positionClasses(panel).concat(positionClasses(searching)), []);
 }
 
 /* --- asking for a name before making a folder ------------------------------ */

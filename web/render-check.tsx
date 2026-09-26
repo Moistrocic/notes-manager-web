@@ -11,6 +11,7 @@ import type { Note, SessionUser, StorageStatus, SystemStatus } from './src/lib/t
 
 const note: Note = {
   id: 'render-check',
+  kind: 'note',
   title: '渲染检查笔记',
   tags: ['check', '渲染'],
   pinned: true,
@@ -27,6 +28,34 @@ const note: Note = {
   deletedAt: null,
   originFolder: null,
   content: '# 标题\n\n- 项目一\n- 项目二\n\n```js\nconst a = 1;\n```\n',
+};
+
+/** A picture: the editor shows it rather than editing it. */
+const picture: Note = {
+  ...note,
+  id: 'render-picture',
+  kind: 'image',
+  title: '风景.png',
+  pinned: false,
+  favorite: false,
+  path: '/风景.png',
+  excerpt: '',
+  size: 2048,
+  content: '',
+};
+
+/** Any other file: there is nothing to show, so it is offered as a download. */
+const archive: Note = {
+  ...note,
+  id: 'render-file',
+  kind: 'file',
+  title: '档案.zip',
+  pinned: false,
+  favorite: false,
+  path: '/档案.zip',
+  excerpt: '',
+  size: 4096,
+  content: '',
 };
 
 const user: SessionUser = {
@@ -69,6 +98,8 @@ interface Scenario {
   expect: string[];
   /** Markup that must NOT be present (panes that were hidden). */
   absent?: string[];
+  /** Address the scenario is rendered at. The panel lives under /manager. */
+  pathname?: string;
 }
 
 const providers = {
@@ -88,6 +119,15 @@ const capabilities = {
 };
 
 const scenarios: Scenario[] = [
+  {
+    // The site's front page is deliberately blank: what it carries is the way
+    // into the panel, and nothing of the panel itself.
+    name: 'front page: blank, with the way into the panel',
+    pathname: '/',
+    state: { booted: true, user: null },
+    expect: ['data-panel-entry', '管理面板登录入口', 'href="/manager/"'],
+    absent: ['新建笔记', '搜索笔记、标签'],
+  },
   {
     name: 'boot / splash',
     state: { booted: false, user: null },
@@ -162,6 +202,46 @@ const scenarios: Scenario[] = [
     expect: ['只读', '没有写入权限', '渲染检查笔记'],
   },
   {
+    name: 'workspace: a picture is looked at, not edited',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [picture],
+      stats: { notes: 1, tags: 0, folders: 0, words: 0, updatedAt: picture.updated },
+      capabilities,
+      activeId: picture.id,
+      activeNote: picture,
+      editorMode: 'split',
+      metaOpen: true,
+      sidebarOpen: true,
+    },
+    // No editor, no modes, no outline: the picture itself, served by path
+    // through whichever storage driver is active.
+    expect: ['alt="风景.png"', 'src="/api/notes/file?path=' + encodeURIComponent('/风景.png') + '"'],
+    absent: ['cm-content', 'aria-label="编辑"', 'aria-label="分栏"', 'aria-label="预览"', '添加标签', 'outline-panel'],
+  },
+  {
+    name: 'workspace: another format is offered, not shown',
+    state: {
+      booted: true,
+      user,
+      status,
+      providers,
+      notes: [archive],
+      stats: { notes: 1, tags: 0, folders: 0, words: 0, updatedAt: archive.updated },
+      capabilities,
+      activeId: archive.id,
+      activeNote: archive,
+      editorMode: 'edit',
+      metaOpen: true,
+      sidebarOpen: true,
+    },
+    expect: ['暂不支持预览这种格式', '档案.zip'],
+    absent: ['cm-content', 'aria-label="编辑"', '添加标签', 'outline-panel'],
+  },
+  {
     name: 'workspace: outline hidden leaves no pane behind',
     state: {
       booted: true,
@@ -217,7 +297,9 @@ const scenarios: Scenario[] = [
       sidebarOpen: false,
       focusMode: false,
     },
-    expect: ['显示列表', '你好'],
+    // The way back is the grip on the left edge now; it names itself rather than
+    // showing a label, so the name is what the markup carries.
+    expect: ['data-panel-handle', '显示笔记列表', '你好'],
   },
   {
     name: 'command palette + dialogs',
@@ -237,8 +319,37 @@ const scenarios: Scenario[] = [
 // the state we just set (this is a test-only shim).
 appStore.getInitialState = () => appStore.getState();
 
+/**
+ * Which of the app's two front doors is on screen is decided by the address.
+ *
+ * Node has no address, and `entered` starts as
+ * `isManagerPath(window.location.pathname)` - false without a window - so every
+ * scenario below would render the blank front page instead of the panel. This is
+ * the smallest thing that can answer the question: a pathname, the two
+ * measurements the first render reads, and the media query the panel's layout
+ * asks about.
+ */
+const address = { pathname: '/manager/' };
+(globalThis as unknown as { window: unknown }).window = {
+  location: address,
+  innerWidth: 1440,
+  innerHeight: 900,
+  // framer-motion subscribes to the window while a motion element renders.
+  addEventListener: () => undefined,
+  removeEventListener: () => undefined,
+  dispatchEvent: () => false,
+  matchMedia: () => ({
+    matches: true,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    addListener: () => undefined,
+    removeListener: () => undefined,
+  }),
+};
+
 let failed = 0;
 for (const scenario of scenarios) {
+  address.pathname = scenario.pathname ?? '/manager/';
   appStore.setState(scenario.state as never);
   try {
     const html = renderToString(<App />);
