@@ -2347,6 +2347,36 @@ console.log('\nthe editor and files that are not notes (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- a heading written as a link, in the outline --------------------------- */
+console.log('\na linked heading in the outline (jsdom)');
+{
+  const { extractHeadings, normaliseHeading } = await import('./src/lib/outline');
+  const { renderMarkdown } = await import('./src/lib/markdown');
+
+  // Reported from a note taken off a problem set: the outline listed the whole
+  // `[003. …](https://…)` source instead of the section's name.
+  const source =
+    '# [003. 无重复字符的最长子串](https://leetcode.cn/problems/longest-substring-without-repeating-characters/description/)\n\n正文\n';
+  const rendered = document.createElement('div');
+  rendered.innerHTML = renderMarkdown(source);
+  const heading = rendered.querySelector('h1');
+  const outlined = extractHeadings(source)[0];
+  check('the outline shows the label of a linked heading', outlined.text, '003. 无重复字符的最长子串');
+  check('and the page shows the same words', heading?.textContent, outlined.text);
+  // The preview scrolls by matching those two texts, so an outline entry only
+  // lands while they agree (`Preview.reveal` -> `normaliseHeading`).
+  check(
+    'which is what the preview matches on when that entry is clicked',
+    normaliseHeading(heading?.textContent ?? ''),
+    normaliseHeading(outlined.text),
+  );
+  check(
+    'and the heading is still a link on the page',
+    rendered.querySelector('a')?.getAttribute('href'),
+    'https://leetcode.cn/problems/longest-substring-without-repeating-characters/description/',
+  );
+}
+
 /* --- keeping two panes level, the arithmetic ------------------------------- */
 console.log('\nkeeping two panes level (pure)');
 {

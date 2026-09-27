@@ -202,7 +202,23 @@ export function Preview({ content, notePath = '', imageUrl, className, onOpenLin
         if (headings.length === 0) return false;
 
         const wanted = normaliseHeading(text);
-        const matches = (element: HTMLElement) => normaliseHeading(element.textContent ?? '') === wanted;
+        // What the heading *reads as* on the page, which is not always its
+        // textContent: an image contributes no text node, so a heading written
+        // `### ![示意图](x.png) 图片标题` reads as "示意图 图片标题" to a person
+        // and as "图片标题" to textContent - and the outline, which shows the
+        // alt text, would never find it.
+        const readsAs = (element: Element): string => {
+          let out = '';
+          element.childNodes.forEach((node) => {
+            if (node.nodeType === 3) out += node.textContent ?? '';
+            else if (node.nodeType === 1) {
+              const child = node as Element;
+              out += child.tagName === 'IMG' ? child.getAttribute('alt') ?? '' : readsAs(child);
+            }
+          });
+          return out;
+        };
+        const matches = (element: HTMLElement) => normaliseHeading(readsAs(element)) === wanted;
         let target = headings[index];
         if (!target || !matches(target)) {
           target =
