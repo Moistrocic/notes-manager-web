@@ -32,6 +32,7 @@ const { OpenListClient } = await import(distUrl('integrations', 'openlist', 'cli
 const { OpenListStorageDriver } = await import(distUrl('storage', 'openlist.js'));
 const { NotesRepository } = await import(distUrl('notes', 'repository.js'));
 const { notesRoutes } = await import(distUrl('http', 'routes', 'notes.js'));
+const { blogRoutes } = await import(distUrl('http', 'routes', 'blog.js'));
 
 let failed = 0;
 let passed = 0;
@@ -71,20 +72,27 @@ try {
     guest: false,
     permissions: { write: true, rename: true, move: true, remove: true },
   };
+  // What the app's settings say while this run happens. The guest switch is
+  // only ever consulted by the panel; the blog reads its own flag.
+  const siteSettings = { blog: { enabled: true }, guest: { enabled: true } };
+  // A request with no cookie at all, for the public pages.
+  let anonymous = false;
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.session = session;
+    req.session = anonymous ? null : session;
     next();
   });
   app.use('/api/notes', notesRoutes({ notes }));
+  app.use('/api/blog', blogRoutes({ notes, settings: { effective: () => structuredClone(siteSettings) } }));
 
   server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
   const base = 'http://127.0.0.1:' + server.address().port + '/api/notes';
+  const blogBase = 'http://127.0.0.1:' + server.address().port + '/api/blog';
 
-  const call = async (method, url, body) => {
-    const response = await fetch(base + url, {
+  const callAt = async (root, method, url, body) => {
+    const response = await fetch(root + url, {
       method,
       headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -97,6 +105,15 @@ try {
       payload = { raw: text };
     }
     return { status: response.status, payload };
+  };
+  const call = (method, url, body) => callAt(base, method, url, body);
+  const blogCall = (method, url, body) => callAt(blogBase, method, url, body);
+
+  // A response whose body is the bytes themselves, not JSON.
+  const blogBytes = async (url) => {
+    const response = await fetch(blogBase + url);
+    const body = Buffer.from(await response.arrayBuffer());
+    return { status: response.status, type: response.headers.get('content-type'), body: [...body] };
   };
 
   const sent = (p) => fake.requests.filter((request) => request.path === p);
@@ -312,6 +329,47 @@ try {
   check('and the second kept its own bytes', [...bytesOf(renamedOne)], [...png2]);
   check('the manifest holds both rows', JSON.parse(fake.read('/notes/.trash-files.json')).length, 2);
   check('neither original is left behind', [fake.has('/notes/目标/重名.png'), fake.has('/notes/重名.png')], [false, false]);
+
+  /* ---- the blog does not care about guest browsing ---------------------- */
+  // The switch is off and the request carries no session at all: the panel
+  // needs an account, the site's front page is for everyone.
+  const published = await call('PUT', '/' + created.payload.note.id, {
+    blog: true,
+    content: '![图](./照片.png)\n\n正文\n',
+  });
+  check('a note can be published with a picture in it', [published.status, published.payload.note.blog, typeof published.payload.note.blogAt], [200, true, 'string']);
+
+  siteSettings.guest.enabled = false;
+  anonymous = true;
+  try {
+    const publicIndex = await blogCall('GET', '');
+    check('an anonymous reader still gets the cards with guest browsing off', [
+      publicIndex.status,
+      publicIndex.payload.enabled,
+      publicIndex.payload.posts.map((post) => post.id),
+    ], [200, true, [created.payload.note.id]]);
+    const publicPost = await blogCall('GET', '/post?path=' + encodeURIComponent(published.payload.note.path));
+    check('and still reads the post', [publicPost.status, publicPost.payload.post.content.trim()], [200, '![图](./照片.png)\n\n正文']);
+    const publicFile = await blogBytes('/file?path=' + encodeURIComponent('/目标/照片.png'));
+    check('and still gets the picture it refers to', [publicFile.status, publicFile.body], [200, [...png]]);
+    const anonymousWrite = await call('PUT', '/' + created.payload.note.id, { title: '不允许' });
+    check('while the panel still wants an account', [anonymousWrite.status, anonymousWrite.payload.error.code], [401, 'unauthenticated']);
+  } finally {
+    anonymous = false;
+  }
+
+  /* ---- a root that cannot be read is not an empty library --------------- */
+  // The reader used to get a silent empty blog here: the folder simply did not
+  // answer, and "no answer" was turned into "no notes".
+  fs.rmSync(fakePath('/notes'), { recursive: true, force: true });
+  notes.clearCaches();
+  const brokenBlog = await blogCall('GET', '');
+  check('a root that cannot be read is an error, not an empty blog', [brokenBlog.status, brokenBlog.payload.error.code], [404, 'openlist_root_missing']);
+  check('and the message names the root it could not read', brokenBlog.payload.error.message.includes('/notes'), true);
+  const brokenPanel = await call('GET', '');
+  check('the panel says the same thing instead of looking empty', [brokenPanel.status, brokenPanel.payload.error.code], [404, 'openlist_root_missing']);
+  const missingSub = await driver.list('/没有这个子目录').then((entries) => entries, (err) => err.code);
+  check('a folder that is missing is still just empty', missingSub, []);
 } finally {
   if (server) {
     const closed = new Promise((resolve) => server.close(resolve));

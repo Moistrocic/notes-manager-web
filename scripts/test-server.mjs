@@ -424,19 +424,20 @@ console.log('note rename + folder move');
     guest: false,
     permissions: { write: true, rename: true, move: true, remove: true },
   };
+  // What the app's settings say while this run happens. The blog reads its own
+  // flag; the guest switch is the panel's, and the blog never asks for it.
+  const siteSettings = { blog: { enabled: false }, guest: { enabled: true } };
+  const blogFlag = siteSettings.blog;
+  // A request with no cookie at all, for the public pages.
+  let anonymous = false;
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.session = session;
+    req.session = anonymous ? null : session;
     next();
   });
   app.use('/api/notes', notesRoutes({ notes }));
-  // The blog is a setting, so the fixture flips it the way the panel does.
-  const blogFlag = { enabled: false };
-  app.use(
-    '/api/blog',
-    blogRoutes({ notes, settings: { effective: () => ({ blog: { enabled: blogFlag.enabled } }) } }),
-  );
+  app.use('/api/blog', blogRoutes({ notes, settings: { effective: () => structuredClone(siteSettings) } }));
 
   const server = app.listen(0, '127.0.0.1');
   await new Promise((resolve) => server.once('listening', resolve));
@@ -1022,6 +1023,38 @@ console.log('note rename + folder move');
     session.guest = false;
     check('a guest can read the publish list', guestList.status, 200);
     check('but cannot clear publish information', [guestForget.status, guestForget.payload.error.code], [403, 'guest_readonly']);
+
+    /* ---- the blog does not depend on the guest switch -------------------- */
+    // The switch is off and the request carries no session at all: the panel
+    // needs an account, the site's front page is for everyone.
+    siteSettings.guest.enabled = false;
+    anonymous = true;
+    try {
+      const publicIndex = await blogCall('GET', '');
+      const publicIds = publicIndex.payload.posts.map((post) => post.id);
+      check('an anonymous reader still gets the cards with guest browsing off', [
+        publicIndex.status,
+        publicIndex.payload.enabled,
+        publicIds.includes(firstBlog.payload.note.id),
+        publicIds.includes(article.payload.note.id),
+      ], [200, true, true, true]);
+      const publicPost = await blogCall('GET', '/post?path=' + encodeURIComponent(articlePost.payload.note.path));
+      check('and still reads a post', [publicPost.status, publicPost.payload.post.title], [200, '带图的文章']);
+      const publicFile = await blogBytes('/file?path=' + encodeURIComponent(blogImage.payload.note.path));
+      check('and still gets the picture it refers to', [publicFile.status, publicFile.body], [200, [...png]]);
+      const anonymousWrite = await call('PUT', '/' + draft.payload.note.id, { title: '不允许' });
+      check('while writing still needs an account', [anonymousWrite.status, anonymousWrite.payload.error.code], [401, 'unauthenticated']);
+    } finally {
+      anonymous = false;
+      siteSettings.guest.enabled = true;
+    }
+
+    // Turning the switch off does not change what a *session* may do either: a
+    // guest is refused a write exactly as before.
+    session.guest = true;
+    const guestWrite = await call('DELETE', '/' + draft.payload.note.id);
+    session.guest = false;
+    check('and a guest session is still read-only', [guestWrite.status, guestWrite.payload.error.code], [403, 'guest_readonly']);
   } finally {
     const closed = new Promise((resolve) => server.close(resolve));
     server.closeAllConnections?.();
@@ -1126,6 +1159,121 @@ console.log('blog settings');
         [adminPayload.settings.blog, adminPayload.effective.blog],
         [{ enabled: true }, { enabled: true }],
       );
+    } finally {
+      const closed = new Promise((resolve) => server.close(resolve));
+      server.closeAllConnections?.();
+      await closed;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Storage resolution when OpenList is down                                    */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('storage resolution');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-resolve-'));
+  // A port nothing can be listening on, so the probe fails at once and without
+  // the test depending on the network (or on how long a timeout takes).
+  const deadUrl = 'http://127.0.0.1:1';
+  /** The smallest settings object StorageManager actually reads. */
+  const settingsFor = (driver, openlist = {}) => ({
+    effective: () => ({
+      storage: {
+        driver,
+        openlist: { url: '', token: '', root: '/notes', perUser: false, timeoutMs: 500, ...openlist },
+        local: { root: dir },
+      },
+    }),
+  });
+  const outcome = (promise) =>
+    promise.then(
+      (resolved) => `resolved:${resolved.kind}`,
+      (err) => [err.status, err.code],
+    );
+
+  try {
+    const autoDown = new StorageManager(settingsFor('auto', { url: deadUrl }), dir);
+    check(
+      'auto mode refuses instead of falling back to the local disk',
+      await autoDown.resolve(null).then(
+        (resolved) => `resolved:${resolved.kind}`,
+        (err) => [err.status, err.code, err.message.includes(deadUrl)],
+      ),
+      [503, 'openlist_unreachable', true],
+    );
+    const autoStatus = await autoDown.status();
+    check(
+      'and the status says the notes are unavailable and why',
+      [autoStatus.degraded, autoStatus.detail.includes('requests are refused'), autoStatus.detail.includes(deadUrl)],
+      [true, true, true],
+    );
+
+    const autoUnset = new StorageManager(settingsFor('auto'), dir);
+    check('auto mode with nothing configured uses the local disk for real', await outcome(autoUnset.resolve(null)), 'resolved:local');
+    check('and that is not a degraded state', (await autoUnset.status()).degraded, false);
+
+    const localMode = new StorageManager(settingsFor('local', { url: deadUrl }), dir);
+    check('an explicit local driver never probes OpenList', await outcome(localMode.resolve(null)), 'resolved:local');
+
+    const openlistDown = new StorageManager(settingsFor('openlist', { url: deadUrl }), dir);
+    check('an explicit OpenList driver is still a 503 when it is down', await outcome(openlistDown.resolve(null)), [503, 'openlist_unreachable']);
+
+    const openlistUnset = new StorageManager(settingsFor('openlist'), dir);
+    check('and still one when no URL is configured at all', await outcome(openlistUnset.resolve(null)), [503, 'openlist_unreachable']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The blog when its storage is down                                           */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('blog against a storage that is down');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-down-'));
+  try {
+    // The case the user hit: auto mode, OpenList configured but not answering -
+    // and a note that was published while it was down. The blog reads OpenList,
+    // so the only honest answer is "the storage is down", not "no posts".
+    const storage = new StorageManager(
+      {
+        effective: () => ({
+          storage: {
+            driver: 'auto',
+            openlist: { url: 'http://127.0.0.1:1', token: '', root: '/notes', perUser: false, timeoutMs: 500 },
+            local: { root: dir },
+          },
+        }),
+      },
+      dir,
+    );
+    const notes = new NotesRepository(storage);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.session = null;
+      next();
+    });
+    app.use('/api/blog', blogRoutes({ notes, settings: { effective: () => ({ blog: { enabled: true } }) } }));
+
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/blog`);
+      const payload = await response.json();
+      check(
+        'a blog whose storage is down says so instead of showing no posts',
+        [response.status, payload.error.code, /Cannot reach OpenList/.test(payload.error.message)],
+        [503, 'openlist_unreachable', true],
+      );
+      check('and it is never a 200 with an empty list', [response.status === 200, Array.isArray(payload.posts)], [false, false]);
     } finally {
       const closed = new Promise((resolve) => server.close(resolve));
       server.closeAllConnections?.();
