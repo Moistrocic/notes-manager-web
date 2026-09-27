@@ -1,4 +1,4 @@
-import { OpenListClient } from '../integrations/openlist/client.js';
+import { OpenListClient, OpenListError } from '../integrations/openlist/client.js';
 import type { SessionUser } from '../auth/sessions.js';
 import type { SettingsStore } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -99,6 +99,8 @@ export class StorageManager {
    * so a changed token is asked about again.
    */
   private basePathCache = new Map<string, { base: string; at: number }>();
+  /** The same, for OpenList's own guest account (the public blog reads as it). */
+  private guestBaseCache: { base: string; at: number } | null = null;
 
   constructor(private readonly settings: SettingsStore, private readonly dataDir: string) {}
 
@@ -138,6 +140,42 @@ export class StorageManager {
     // The token may be a different one now, and its account may be jailed to a
     // different place.
     this.basePathCache.clear();
+    this.guestBaseCache = null;
+  }
+
+  /**
+   * The base path OpenList's guest account is limited to.
+   *
+   * Asked for anonymously (`/api/me` with no token answers with the guest user),
+   * because that is exactly who the reader is. When guests are switched off
+   * OpenList answers 401 "Guest user is disabled, login please", and that has to
+   * reach the reader as something they can act on rather than as an empty site.
+   */
+  private async guestBasePath(client: OpenListClient): Promise<string> {
+    if (this.guestBaseCache && Date.now() - this.guestBaseCache.at < BASE_PATH_TTL_MS) {
+      return this.guestBaseCache.base;
+    }
+    let base = '/';
+    try {
+      const me = await client.me();
+      base = normalisePath(me?.base_path ?? '/', '/');
+    } catch (err) {
+      if (err instanceof OpenListError && (err.status === 401 || err.code === 401)) {
+        throw new StorageError(
+          'OpenList 没有开启访客访问（guest 被禁用），博客读不到已发布的笔记。' +
+            '请在 OpenList 设置里允许访客访问，或把存储改为本地。' +
+            `(OpenList rejected the guest read: ${err.message})`,
+          403,
+          'openlist_guest_disabled',
+        );
+      }
+      // Anything else (an old build, a blip) behaves as before this existed: the
+      // configured root is used as written, and the request reports what it could
+      // not read.
+      log.debug(`could not read the guest base path, assuming "/": ${(err as Error).message}`);
+    }
+    this.guestBaseCache = { base, at: Date.now() };
+    return base;
   }
 
   /**
@@ -160,6 +198,33 @@ export class StorageManager {
     }
     this.basePathCache.set(token, { base, at: Date.now() });
     return base;
+  }
+
+  /**
+   * Refuses a request whose OpenList is configured but not answering.
+   *
+   * Returns normally only when nothing is configured at all - and then the local
+   * disk *is* the storage rather than a fallback to it. Shared by the session
+   * resolver and the guest one: neither may quietly read a different tree.
+   */
+  private refuseWhenDown(mode: 'auto' | 'openlist' | 'local', probe: ProbeResult): void {
+    if (mode === 'openlist' && !probe.configured) {
+      throw new StorageError(
+        'No OpenList URL configured. Set one in Settings or switch the storage driver to "local".',
+        503,
+        'openlist_unreachable',
+      );
+    }
+    if (probe.configured) {
+      throw new StorageError(
+        `Cannot reach OpenList at ${probe.url}: the notes are not available. They are not on the local disk ` +
+          'either - that is a different tree, and writing to it would leave notes the app stops looking for the ' +
+          'moment OpenList is back. Start OpenList, fix the URL, or switch the storage driver to "local". ' +
+          '（OpenList 连不上：为避免把笔记写进本地副本，本次请求已拒绝；请启动 OpenList、修正地址，或把存储改为「本地」）',
+        503,
+        'openlist_unreachable',
+      );
+    }
   }
 
   /** Resolves the storage backend for one request (OpenList token depends on the user). */
@@ -186,31 +251,13 @@ export class StorageManager {
 
     const probe = await this.probeOpenList();
     if (!probe.reachable) {
-      if (mode === 'openlist' && !probe.configured) {
-        throw new StorageError(
-          'No OpenList URL configured. Set one in Settings or switch the storage driver to "local".',
-          503,
-          'openlist_unreachable',
-        );
-      }
-      if (probe.configured) {
-        // "auto" used to fall back to the local disk here, and that is a trap the
-        // hard way: the local tree is *not* a copy of the OpenList one, so a note
-        // written while OpenList is down - published to the blog, most visibly -
-        // disappears from the panel and the blog the moment OpenList answers
-        // again, because both of them then read OpenList. Refusing is the honest
-        // answer, and it is the only one that cannot lose a note.
-        throw new StorageError(
-          `Cannot reach OpenList at ${probe.url}: the notes are not available. They are not on the local disk ` +
-            'either - that is a different tree, and writing to it would leave notes the app stops looking for the ' +
-            'moment OpenList is back. Start OpenList, fix the URL, or switch the storage driver to "local". ' +
-            '（OpenList 连不上：为避免把笔记写进本地副本，本次请求已拒绝；请启动 OpenList、修正地址，或把存储改为「本地」）',
-          503,
-          'openlist_unreachable',
-        );
-      }
-      // Nothing is configured at all, so the local disk *is* the storage rather
-      // than a fallback to it.
+      // "auto" used to fall back to the local disk here, and that is a trap the
+      // hard way: the local tree is *not* a copy of the OpenList one, so a note
+      // written while OpenList is down - published to the blog, most visibly -
+      // disappears from the panel and the blog the moment OpenList answers again,
+      // because both of them then read OpenList. Refusing is the only answer that
+      // cannot lose a note.
+      this.refuseWhenDown(mode, probe);
       return useLocal('OpenList is not configured yet - using the local disk', false);
     }
 
@@ -262,6 +309,71 @@ export class StorageManager {
       detail: token
         ? `OpenList account: ${user?.provider === 'openlist' ? user.username : 'service token'}`
         : 'OpenList guest access (read-only unless the folder is public)',
+    };
+  }
+
+  /**
+   * Resolves storage for a reader with no account at all: OpenList's own guest.
+   *
+   * The public blog is read by people who have no account here, and OpenList has
+   * a real guest user for exactly that (`GetGuest()`: its own base path, its own
+   * permissions). A request without a token *is* that user as far as OpenList is
+   * concerned, so the blog reads with no token rather than with the service
+   * token - the two accounts can see different folders, and it is the guest's
+   * view that a visitor gets.
+   *
+   * The panel never comes through here: it keeps resolving with its session (and
+   * the service token as the fallback).
+   */
+  async resolveGuest(): Promise<ResolvedStorage> {
+    const effective = this.settings.effective();
+    const { driver: mode, openlist, local } = effective.storage;
+
+    if (mode === 'local') {
+      // The local disk has no accounts to read as.
+      return {
+        driver: new LocalStorageDriver(local.root),
+        kind: 'local',
+        displayRoot: local.root,
+        degraded: false,
+        detail: 'Local storage selected',
+      };
+    }
+
+    const probe = await this.probeOpenList();
+    if (!probe.reachable) {
+      this.refuseWhenDown(mode, probe);
+      return {
+        driver: new LocalStorageDriver(local.root),
+        kind: 'local',
+        displayRoot: local.root,
+        degraded: false,
+        detail: 'OpenList is not configured yet - using the local disk',
+      };
+    }
+
+    // No token: OpenList treats that as its guest account, which is who the
+    // reader is.
+    const client = new OpenListClient({ baseUrl: openlist.url, timeoutMs: openlist.timeoutMs });
+    const basePath = await this.guestBasePath(client);
+    const resolved = resolveRootForAccount(openlist.root, basePath);
+    if (!resolved.accessible) {
+      throw new StorageError(
+        `No access to ${openlist.root}: ${resolved.reason}. ` +
+          'Change OPENLIST_ROOT, or let the OpenList guest account reach it. ' +
+          `(访客账号被限制在 ${basePath}，无法访问 ${openlist.root})`,
+        403,
+        'openlist_forbidden',
+      );
+    }
+
+    log.debug(`openlist root: configured ${openlist.root}, guest base ${basePath}, requesting ${resolved.path}`);
+    return {
+      driver: new OpenListStorageDriver(client, resolved.path),
+      kind: 'openlist',
+      displayRoot: openlist.root,
+      degraded: false,
+      detail: 'OpenList guest access (the blog reads as the guest account)',
     };
   }
 

@@ -17,15 +17,22 @@ export const BLOG_TITLE = '笔记';
  *
  * It answers for the site's own notes rather than for whoever is looking - a
  * blog that changed with the visitor would not be a blog - so the storage is
- * resolved without a user. Nothing here writes, and a note only leaves the
- * folder once its front matter says `blog: true`.
+ * resolved as OpenList's *guest*: the reader has no account here, and the guest
+ * is the account OpenList has for exactly that. Reading as the service token
+ * instead would show the blog what *that* account can see, which is a different
+ * folder and a different answer.
+ *
+ * Nothing here writes, and a note only leaves the folder once its front matter
+ * says `blog: true`.
  */
 export function blogRoutes(services: Services): Router {
   const router = Router();
   const enabled = () => services.settings.effective().blog.enabled;
 
-  // The public reader is nobody in particular.
+  // The public reader is nobody in particular, and says so explicitly: these
+  // reads go to OpenList as its guest, never as the panel's session or token.
   const reader = null;
+  const asGuest = { asGuest: true } as const;
 
   const refuse = (res: Response, code: string, message: string): void => {
     res.status(404).json({ error: { message, code } });
@@ -40,7 +47,7 @@ export function blogRoutes(services: Services): Router {
         res.json({ enabled: false, title: BLOG_TITLE, posts: [] });
         return;
       }
-      res.json({ enabled: true, title: BLOG_TITLE, posts: await services.notes.blogPosts(reader) });
+      res.json({ enabled: true, title: BLOG_TITLE, posts: await services.notes.blogPosts(reader, asGuest) });
     }),
   );
 
@@ -51,7 +58,7 @@ export function blogRoutes(services: Services): Router {
         refuse(res, 'blog_disabled', '博客还没有开启');
         return;
       }
-      const post = await services.notes.publishedPost(reader, String(req.query.path ?? ''));
+      const post = await services.notes.publishedPost(reader, String(req.query.path ?? ''), asGuest);
       if (!post) {
         refuse(res, 'post_not_found', '这篇笔记不在博客上');
         return;
@@ -67,7 +74,7 @@ export function blogRoutes(services: Services): Router {
         refuse(res, 'blog_disabled', '博客还没有开启');
         return;
       }
-      const file = await services.notes.publishedFile(reader, String(req.query.path ?? ''));
+      const file = await services.notes.publishedFile(reader, String(req.query.path ?? ''), asGuest);
       if (!file) {
         refuse(res, 'file_not_published', '这个文件不在博客上');
         return;

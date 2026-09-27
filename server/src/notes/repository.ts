@@ -104,6 +104,18 @@ export interface NotePatch {
   blogSummary?: string | null;
 }
 
+/**
+ * How a read reaches storage.
+ *
+ * `asGuest` asks OpenList for its own guest account instead of using the session
+ * (or the service token): the public blog is read by people who have no account
+ * here, and the guest is a real account with its own base path and permissions.
+ * The panel never sets it - it always reads as whoever is signed in.
+ */
+export interface ReadOptions {
+  asGuest?: boolean;
+}
+
 /** One row of the publish manager: a note the publish dialog has been used on. */
 export interface PublishEntry {
   id: string;
@@ -509,8 +521,10 @@ export class NotesRepository {
   }
 
   /** Lists every entry of the active storage backend (newest first, content included). */
-  async list(user: SessionUser | null | undefined): Promise<Note[]> {
-    const storage = await this.storageManager.resolve(user);
+  async list(user: SessionUser | null | undefined, options: ReadOptions = {}): Promise<Note[]> {
+    const storage = options.asGuest
+      ? await this.storageManager.resolveGuest()
+      : await this.storageManager.resolve(user);
     const ns = this.namespace(storage, user);
     const scan = await this.scan(storage, ns);
     // Only notes are read. A picture is summarised straight from the listing,
@@ -554,8 +568,11 @@ export class NotesRepository {
   async readBinary(
     user: SessionUser | null | undefined,
     storagePath: string,
+    options: ReadOptions = {},
   ): Promise<{ path: string; data: Uint8Array }> {
-    const storage = await this.storageManager.resolve(user);
+    const storage = options.asGuest
+      ? await this.storageManager.resolveGuest()
+      : await this.storageManager.resolve(user);
     const normalised = normalisePath(String(storagePath ?? ''));
     if (normalised === '/' || normalised.split('/').some((segment) => segment.startsWith('.'))) {
       throw new StorageError('Invalid path', 400, 'invalid_path');
@@ -1578,8 +1595,8 @@ export class NotesRepository {
    * Only notes: a picture has no front matter to hold the mark, so nothing else
    * can ever be in this list.
    */
-  async blogPosts(user: SessionUser | null | undefined): Promise<BlogPostSummary[]> {
-    const notes = await this.list(user);
+  async blogPosts(user: SessionUser | null | undefined, options: ReadOptions = {}): Promise<BlogPostSummary[]> {
+    const notes = await this.list(user, options);
     return notes
       .filter((note) => note.kind === 'note' && note.blog)
       .map((note) => this.toBlogSummary(note))
@@ -1587,10 +1604,14 @@ export class NotesRepository {
   }
 
   /** One published note with its body, or null when there is no such post. */
-  async publishedPost(user: SessionUser | null | undefined, storagePath: string): Promise<BlogPost | null> {
+  async publishedPost(
+    user: SessionUser | null | undefined,
+    storagePath: string,
+    options: ReadOptions = {},
+  ): Promise<BlogPost | null> {
     const path = normalisePath(String(storagePath ?? ''));
     if (path === '/') return null;
-    const notes = await this.list(user);
+    const notes = await this.list(user, options);
     const found = notes.find((note) => note.path === path && note.kind === 'note' && note.blog);
     return found ? { ...this.toBlogSummary(found), content: found.content } : null;
   }
@@ -1606,16 +1627,17 @@ export class NotesRepository {
   async publishedFile(
     user: SessionUser | null | undefined,
     storagePath: string,
+    options: ReadOptions = {},
   ): Promise<{ path: string; data: Uint8Array } | null> {
     const path = normalisePath(String(storagePath ?? ''));
     if (path === '/' || path.split('/').some((segment) => segment.startsWith('.'))) return null;
-    const notes = await this.list(user);
+    const notes = await this.list(user, options);
     const allowed = notes
       .filter((note) => note.kind === 'note' && note.blog)
       .some((post) => post.path === path || referencedPaths(post.content, post.path).includes(path));
     if (!allowed) return null;
     // readBinary re-checks the path, so nothing here can reach outside the root.
-    return this.readBinary(user, path);
+    return this.readBinary(user, path, options);
   }
 
   /**
