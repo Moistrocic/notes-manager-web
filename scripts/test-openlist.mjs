@@ -30,6 +30,7 @@ if (!fs.existsSync(path.join(DIST, 'storage', 'openlist.js'))) {
 const express = (await import('express')).default;
 const { OpenListClient } = await import(distUrl('integrations', 'openlist', 'client.js'));
 const { OpenListStorageDriver } = await import(distUrl('storage', 'openlist.js'));
+const { StorageManager } = await import(distUrl('storage', 'manager.js'));
 const { NotesRepository } = await import(distUrl('notes', 'repository.js'));
 const { notesRoutes } = await import(distUrl('http', 'routes', 'notes.js'));
 const { blogRoutes } = await import(distUrl('http', 'routes', 'blog.js'));
@@ -356,6 +357,137 @@ try {
     check('while the panel still wants an account', [anonymousWrite.status, anonymousWrite.payload.error.code], [401, 'unauthenticated']);
   } finally {
     anonymous = false;
+  }
+
+  /* ---- a token account jailed to a base path ---------------------------- */
+  // OpenList joins every request path onto the account's own base path
+  // (user.JoinPath -> JoinBasePath), and the public blog reads with the *service
+  // token*. So an absolute OPENLIST_ROOT of /public/Notes has to be asked for as
+  // /Notes: asking for /public/Notes makes OpenList look in /public/public/Notes
+  // and answer "object not found" - which is what the user saw on the blog.
+  const jailRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-openlist-jail-'));
+  const jail = await startFakeOpenList({ root: jailRoot, basePath: '/public' });
+  let jailServer;
+  try {
+    const jailSettings = (root, token = 'jail-token') => ({
+      effective: () => ({
+        storage: {
+          driver: 'openlist',
+          openlist: { url: jail.url, token, root, perUser: false, timeoutMs: 2000 },
+          local: { root: jailRoot },
+        },
+      }),
+    });
+
+    // The notes really are in <fake root>/public/Notes - the account sees them
+    // as /Notes.
+    fs.mkdirSync(path.join(jailRoot, 'public', 'Notes'), { recursive: true });
+    fs.writeFileSync(
+      path.join(jailRoot, 'public', 'Notes', '越狱笔记.md'),
+      '---\nid: jailed\nblog: true\nblogAt: "2024-01-01T00:00:00.000Z"\n---\n\n正文\n',
+      'utf8',
+    );
+
+    const jailStorage = new StorageManager(jailSettings('/public/Notes'), jailRoot);
+    const jailNotes = new NotesRepository(jailStorage);
+    const jailApp = express();
+    jailApp.use(express.json());
+    // The panel half of the report: a local administrator session, which has no
+    // OpenList base path of its own and reads with the service token.
+    jailApp.use((req, _res, next) => {
+      req.session = {
+        username: 'admin',
+        provider: 'local',
+        role: 'admin',
+        guest: false,
+        permissions: { write: true, rename: true, move: true, remove: true },
+      };
+      next();
+    });
+    jailApp.use('/api/notes', notesRoutes({ notes: jailNotes }));
+    jailApp.use('/api/blog', blogRoutes({ notes: jailNotes, settings: { effective: () => ({ blog: { enabled: true } }) } }));
+    jailServer = jailApp.listen(0, '127.0.0.1');
+    await new Promise((resolve) => jailServer.once('listening', resolve));
+    const jailOrigin = 'http://127.0.0.1:' + jailServer.address().port;
+
+    // Read defensively: a regression here answers with an error payload, and a
+    // clean FAIL says far more than a TypeError half way down the file.
+    const jailFetch = async (url) => {
+      const response = await fetch(jailOrigin + url);
+      return { status: response.status, payload: await response.json() };
+    };
+
+    const jailList = await jailFetch('/api/notes');
+    check('a jailed account can read a root inside its own jail', [jailList.status, (jailList.payload.notes ?? []).map((note) => note.path)], [200, ['/越狱笔记.md']]);
+    const listPaths = jail.requests.filter((request) => request.path === '/api/fs/list').map((request) => request.body.path);
+    check('and the path it asked for had the base path stripped', listPaths.includes('/Notes'), true);
+    check('never the absolute root, which OpenList would join twice', listPaths.includes('/public/Notes'), false);
+
+    const jailBlog = await jailFetch('/api/blog');
+    check('the blog lists the card read with the jailed token', [jailBlog.status, jailBlog.payload.enabled, (jailBlog.payload.posts ?? []).map((post) => post.title)], [200, true, ['越狱笔记']]);
+    const jailPost = await jailFetch('/api/blog/post?path=' + encodeURIComponent('/越狱笔记.md'));
+    check('and serves the post itself', [jailPost.status, jailPost.payload.post?.title, jailPost.payload.post?.content.trim()], [200, '越狱笔记', '正文']);
+
+    // A session that signed in through OpenList carries its own base path - that
+    // is why the panel worked before this existed - and it still wins.
+    const openlistUser = { username: 'tester', provider: 'openlist', openlistToken: 'jail-token', openlistBasePath: '/public' };
+    check('a session that knows its own base path resolves the same way', (await jailStorage.resolve(openlistUser)).driver.root, '/Notes');
+
+    // Asked once per token, not once per request.
+    jail.reset();
+    const cachedStorage = new StorageManager(jailSettings('/public/Notes'), jailRoot);
+    await cachedStorage.resolve(null);
+    await cachedStorage.resolve(null);
+    check('the account is asked for its base path once', jail.requests.filter((request) => request.path === '/api/me').length, 1);
+    await new StorageManager(jailSettings('/public/Notes', 'another-token'), jailRoot).resolve(null);
+    check('and a different token is asked about again', jail.requests.filter((request) => request.path === '/api/me').length, 2);
+
+    // A root the account cannot see is still refused.
+    check(
+      'a root outside the account base path is still refused',
+      await new StorageManager(jailSettings('/other'), jailRoot).resolve(null).then(
+        () => 'resolved',
+        (err) => [err.status, err.code],
+      ),
+      [403, 'openlist_forbidden'],
+    );
+
+    // An account that cannot be asked (an old build, a token that cannot read
+    // itself) falls back to "/" - what the app assumed before this existed - and
+    // that is not a new failure.
+    const muteJail = await startFakeOpenList({ root: jailRoot, basePath: '/public', meUnauthorized: true });
+    try {
+      const muteStorage = new StorageManager(
+        {
+          effective: () => ({
+            storage: {
+              driver: 'openlist',
+              openlist: { url: muteJail.url, token: 'jail-token', root: '/public/Notes', perUser: false, timeoutMs: 2000 },
+              local: { root: jailRoot },
+            },
+          }),
+        },
+        jailRoot,
+      );
+      check(
+        'an account that cannot be asked falls back to the absolute root, without failing',
+        await muteStorage.resolve(null).then(
+          (resolved) => resolved.driver.root,
+          (err) => `rejected:${err.code}`,
+        ),
+        '/public/Notes',
+      );
+    } finally {
+      await muteJail.close();
+    }
+  } finally {
+    if (jailServer) {
+      const closed = new Promise((resolve) => jailServer.close(resolve));
+      jailServer.closeAllConnections?.();
+      await closed;
+    }
+    await jail.close();
+    fs.rmSync(jailRoot, { recursive: true, force: true });
   }
 
   /* ---- a root that cannot be read is not an empty library --------------- */

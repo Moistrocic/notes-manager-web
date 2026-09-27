@@ -15,6 +15,10 @@
  *    answers "Successfully created N move task(s)" before anything has moved
  *    ("Create all tasks immediately without any synchronous validation"). That
  *    is the behaviour the app has to cope with, so it is the default here.
+ *  - every request path is joined onto the account's own base path
+ *    (`user.JoinPath` -> `utils.JoinBasePath`: `stdpath.Join(base, reqPath)`).
+ *    With `basePath: "/public"` this is an account jailed to `/public`, and
+ *    `/api/me` reports that - which is how a client is supposed to find out.
  *
  * Errors follow OpenList's convention: HTTP 200 with `{ code, message }`
  * (server/common/common.go ErrorResp), except 401, which is a real 401.
@@ -43,9 +47,23 @@ const fail = (res, code, message) => send(res, { code, message }, code === 401 ?
  * @param {boolean} [options.asyncMove] true: `/api/fs/move` schedules the work
  * @param {number} [options.moveDelayMs] how long the scheduled move waits
  * @param {number} [options.port]   0 lets the OS pick one
+ * @param {string} [options.basePath] the account's base path; "/" (the default)
+ *   means every request path is used as written
+ * @param {boolean} [options.meUnauthorized] make `/api/me` answer 401, the way an
+ *   old build (or a token that cannot read itself) would
  */
-export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 700, port = 0 } = {}) {
+export async function startFakeOpenList({
+  root,
+  asyncMove = true,
+  moveDelayMs = 700,
+  port = 0,
+  basePath = '/',
+  meUnauthorized = false,
+} = {}) {
   fs.mkdirSync(root, { recursive: true });
+  const accountBase = basePath && basePath !== '' ? basePath : '/';
+  /** What the account does with a request path: join it onto its base path. */
+  const userPath = (p) => path.posix.join(accountBase, String(p ?? '/'));
   /** Every request, in order: method, path, JSON body, upload headers. */
   const requests = [];
   /** Moves the background task actually performed, with the moment it did. */
@@ -98,7 +116,9 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
     if (url.pathname === '/api/public/settings') return ok(res, { site_title: 'Fake OpenList', version: 'v4.2.6' });
     if (url.pathname === '/api/public/init_status') return ok(res, { initialized: true });
     if (url.pathname.startsWith('/d/') || url.pathname.startsWith('/p/')) {
-      const target = local(decodeURIComponent(url.pathname.slice(3)));
+      // A download link names the file the way the account asked for it, so the
+      // base path applies here too.
+      const target = local(userPath(decodeURIComponent(url.pathname.slice(3))));
       if (!fs.existsSync(target)) {
         res.writeHead(404).end('not found');
         return;
@@ -111,22 +131,30 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
     if (!req.headers.authorization) return fail(res, 401, 'not logged in');
 
     switch (url.pathname) {
+      case '/api/me': {
+        // What the client needs to strip its absolute root down to this
+        // account's own view of it.
+        if (meUnauthorized) return fail(res, 401, 'not logged in');
+        return ok(res, { id: 1, username: 'tester', base_path: accountBase, role: 0, permission: 0 });
+      }
       case '/api/fs/list': {
-        const target = local(json?.path);
+        const target = local(userPath(json?.path));
         if (!fs.existsSync(target) || !fs.statSync(target).isDirectory()) return fail(res, 500, 'object not found');
         const content = fs.readdirSync(target).map((name) => entryFor(path.join(target, name), name));
         return ok(res, { content, total: content.length, write: true, provider: 'local' });
       }
       case '/api/fs/get': {
-        const target = local(json?.path);
+        const target = local(userPath(json?.path));
         if (!fs.existsSync(target)) return fail(res, 500, 'object not found');
         return ok(res, {
           ...entryFor(target, path.basename(target)),
+          // The link is handed back the way the account sees the file; the
+          // download route joins the base path on again.
           raw_url: '/d/' + encodeURIComponent(json.path),
         });
       }
       case '/api/fs/mkdir': {
-        const target = local(json?.path);
+        const target = local(userPath(json?.path));
         // op.MakeDir checks first: an existing folder is not an error, a file
         // in the way is, and missing parents are created on the way down.
         if (fs.existsSync(target)) {
@@ -137,7 +165,7 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
         return ok(res);
       }
       case '/api/fs/put': {
-        const target = local(req.headers['file-path'] ? decodeURIComponent(String(req.headers['file-path'])) : '/');
+        const target = local(userPath(req.headers['file-path'] ? decodeURIComponent(String(req.headers['file-path'])) : '/'));
         const overwrite = String(req.headers.overwrite ?? 'true') !== 'false';
         if (!overwrite && fs.existsSync(target)) return fail(res, 403, 'file exists');
         // PutDirectly ends in os.Create: a missing parent folder fails.
@@ -147,7 +175,7 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
       }
       case '/api/fs/remove': {
         for (const name of json?.names ?? []) {
-          const target = local(path.posix.join(json.dir ?? '/', name));
+          const target = local(userPath(path.posix.join(json.dir ?? '/', name)));
           if (!fs.existsSync(target)) continue;
           // A non-empty folder needs the recursive task flag on the real
           // server; the app never removes one, so neither does this.
@@ -159,7 +187,7 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
         return ok(res);
       }
       case '/api/fs/rename': {
-        const source = local(json?.path);
+        const source = local(userPath(json?.path));
         const name = String(json?.name ?? '');
         if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return fail(res, 403, 'relative path');
         if (!fs.existsSync(source)) return fail(res, 500, 'object not found');
@@ -178,13 +206,13 @@ export async function startFakeOpenList({ root, asyncMove = true, moveDelayMs = 
         // created (fsmanage.go FsMove) - the move itself is not.
         if (!json?.overwrite) {
           for (const name of names) {
-            if (exists(path.posix.join(dstDir, name))) return fail(res, 403, `file [${name}] exists`);
+            if (exists(userPath(path.posix.join(dstDir, name)))) return fail(res, 403, `file [${name}] exists`);
           }
         }
         const doMove = () => {
           for (const name of names) {
-            const source = local(path.posix.join(srcDir, name));
-            const destination = local(path.posix.join(dstDir, name));
+            const source = local(userPath(path.posix.join(srcDir, name)));
+            const destination = local(userPath(path.posix.join(dstDir, name)));
             if (!fs.existsSync(source)) continue;
             fs.mkdirSync(path.dirname(destination), { recursive: true });
             fs.renameSync(source, destination);
