@@ -1165,8 +1165,20 @@ console.log('blog settings');
 {
   // There is no OpenList to move anything on, so the request the driver builds
   // is asserted directly: a move is "the entry, from its parent, to the target".
+  // The driver then waits for the result (OpenList only schedules a move), so
+  // the double carries the entry over at once and answers for the backend.
   const calls = [];
-  const client = { move: async (srcDir, dstDir, names) => calls.push([srcDir, dstDir, names]) };
+  const present = new Set(['/notes/a/b.md', '/notes/a/b']);
+  const client = {
+    move: async (srcDir, dstDir, names) => {
+      calls.push([srcDir, dstDir, names]);
+      for (const name of names) {
+        present.delete(`${srcDir}/${name}`);
+        present.add(`${dstDir}/${name}`);
+      }
+    },
+    exists: async (target) => present.has(target),
+  };
   const openlist = new OpenListStorageDriver(client, '/notes');
   await openlist.move('/a/b.md', '/c');
   await openlist.move('/a/b', '/');
