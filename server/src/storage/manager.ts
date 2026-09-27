@@ -51,6 +51,8 @@ export interface StorageStatus {
 }
 
 const PROBE_TTL_MS = 8000;
+/** How long an account's base path is remembered before it is asked for again. */
+const BASE_PATH_TTL_MS = 5 * 60 * 1000;
 
 function sanitizeSegment(value: string): string {
   const cleaned = value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim();
@@ -85,6 +87,18 @@ export function resolveRootForAccount(
 
 export class StorageManager {
   private probeCache: { key: string; at: number; result: ProbeResult } | null = null;
+  /**
+   * What the account behind a token is limited to, per token.
+   *
+   * OpenList joins every request path onto the account's own base path
+   * (`user.JoinPath` -> `JoinBasePath`), so an absolute `OPENLIST_ROOT` such as
+   * `/public/Notes` has to be asked for as `/Notes` *for that account* -
+   * otherwise OpenList looks for `/public/public/Notes`. A session that signed
+   * in through OpenList carries its base path; a service token does not, so the
+   * account is asked once (`/api/me`) and remembered here, keyed by the token
+   * so a changed token is asked about again.
+   */
+  private basePathCache = new Map<string, { base: string; at: number }>();
 
   constructor(private readonly settings: SettingsStore, private readonly dataDir: string) {}
 
@@ -121,6 +135,31 @@ export class StorageManager {
 
   invalidateProbe(): void {
     this.probeCache = null;
+    // The token may be a different one now, and its account may be jailed to a
+    // different place.
+    this.basePathCache.clear();
+  }
+
+  /**
+   * The base path the account behind `token` is limited to, asked for once.
+   *
+   * Not being able to find out is not a new failure: the answer is `/`, which is
+   * what the app assumed before this existed, and the request then reports the
+   * path it could not read. Old OpenList builds and revoked tokens both end up
+   * here, so this never throws.
+   */
+  private async accountBasePath(client: OpenListClient, token: string): Promise<string> {
+    const cached = this.basePathCache.get(token);
+    if (cached && Date.now() - cached.at < BASE_PATH_TTL_MS) return cached.base;
+    let base = '/';
+    try {
+      const me = await client.me();
+      base = normalisePath(me?.base_path ?? '/', '/');
+    } catch (err) {
+      log.debug(`could not read the token account's base path, assuming "/": ${(err as Error).message}`);
+    }
+    this.basePathCache.set(token, { base, at: Date.now() });
+    return base;
   }
 
   /** Resolves the storage backend for one request (OpenList token depends on the user). */
@@ -190,7 +229,19 @@ export class StorageManager {
       absoluteRoot = normalisePath(`${absoluteRoot}/${sanitizeSegment(user.username)}`);
     }
 
-    const resolved = resolveRootForAccount(absoluteRoot, user?.openlistBasePath);
+    // Whose account is this request sent as, and what is that account limited to?
+    // A session that signed in through OpenList knows. A service token does not,
+    // so its account is asked - and the public blog reads with exactly that
+    // token, which is how an absolute root used to be sent to a jailed account
+    // as-is and come back "object not found".
+    const basePath =
+      user?.provider === 'openlist'
+        ? user.openlistBasePath
+        : token
+          ? await this.accountBasePath(client, token)
+          : '/';
+
+    const resolved = resolveRootForAccount(absoluteRoot, basePath);
     if (!resolved.accessible) {
       throw new StorageError(
         `No access to ${absoluteRoot}: ${resolved.reason}. ` +
