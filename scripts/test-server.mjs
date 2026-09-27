@@ -414,8 +414,12 @@ console.log('note rename + folder move');
   // through the same handlers, body parsing and error mapping the server uses.
   const root = mkdtempSync(path.join(os.tmpdir(), 'nm-move-'));
   const driver = new LocalStorageDriver(root);
+  const localStorage = async () => ({ driver, kind: 'local', displayRoot: root, degraded: false, detail: 'test' });
   const notes = new NotesRepository({
-    resolve: async () => ({ driver, kind: 'local', displayRoot: root, degraded: false, detail: 'test' }),
+    resolve: localStorage,
+    // The blog reads as OpenList's guest; on a local disk that is the same read,
+    // and the public pages must keep working without one.
+    resolveGuest: localStorage,
   });
   const session = {
     username: 'admin',

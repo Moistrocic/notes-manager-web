@@ -63,8 +63,12 @@ try {
   // server really uses.
   const client = new OpenListClient({ baseUrl: fake.url, token: 'test-token' });
   const driver = new OpenListStorageDriver(client, '/notes');
+  // The blog reads as OpenList's guest: no token at all, which is the account
+  // OpenList answers anonymous requests with.
+  const guestDriver = new OpenListStorageDriver(new OpenListClient({ baseUrl: fake.url }), '/notes');
   const notes = new NotesRepository({
     resolve: async () => ({ driver, kind: 'openlist', displayRoot: '/notes', degraded: false, detail: 'test' }),
+    resolveGuest: async () => ({ driver: guestDriver, kind: 'openlist', displayRoot: '/notes', degraded: false, detail: 'test' }),
   });
   const session = {
     username: 'admin',
@@ -347,7 +351,7 @@ try {
     check('an anonymous reader still gets the cards with guest browsing off', [
       publicIndex.status,
       publicIndex.payload.enabled,
-      publicIndex.payload.posts.map((post) => post.id),
+      (publicIndex.payload.posts ?? []).map((post) => post.id),
     ], [200, true, [created.payload.note.id]]);
     const publicPost = await blogCall('GET', '/post?path=' + encodeURIComponent(published.payload.note.path));
     check('and still reads the post', [publicPost.status, publicPost.payload.post.content.trim()], [200, '![图](./照片.png)\n\n正文']);
@@ -366,7 +370,9 @@ try {
   // /Notes: asking for /public/Notes makes OpenList look in /public/public/Notes
   // and answer "object not found" - which is what the user saw on the blog.
   const jailRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-openlist-jail-'));
-  const jail = await startFakeOpenList({ root: jailRoot, basePath: '/public' });
+  // Both accounts are jailed to /public here: the token's (the panel) and
+  // OpenList's guest (the blog, which reads without a token).
+  const jail = await startFakeOpenList({ root: jailRoot, basePath: '/public', guestBasePath: '/public' });
   let jailServer;
   try {
     const jailSettings = (root, token = 'jail-token') => ({
@@ -424,7 +430,9 @@ try {
     check('never the absolute root, which OpenList would join twice', listPaths.includes('/public/Notes'), false);
 
     const jailBlog = await jailFetch('/api/blog');
-    check('the blog lists the card read with the jailed token', [jailBlog.status, jailBlog.payload.enabled, (jailBlog.payload.posts ?? []).map((post) => post.title)], [200, true, ['越狱笔记']]);
+    check('the blog lists the card read as the jailed guest', [jailBlog.status, jailBlog.payload.enabled, (jailBlog.payload.posts ?? []).map((post) => post.title)], [200, true, ['越狱笔记']]);
+    const guestListPaths = jail.requests.filter((request) => request.path === '/api/fs/list' && !request.authorized).map((request) => request.body.path);
+    check('and the guest read had the base path stripped too', [guestListPaths.includes('/Notes'), guestListPaths.includes('/public/Notes')], [true, false]);
     const jailPost = await jailFetch('/api/blog/post?path=' + encodeURIComponent('/越狱笔记.md'));
     check('and serves the post itself', [jailPost.status, jailPost.payload.post?.title, jailPost.payload.post?.content.trim()], [200, '越狱笔记', '正文']);
 
@@ -488,6 +496,136 @@ try {
     }
     await jail.close();
     fs.rmSync(jailRoot, { recursive: true, force: true });
+  }
+
+  /* ---- the blog reads as the guest, not as the service token ------------ */
+  // The user's case: the service token's account cannot see the notes, but
+  // OpenList's guest can. The blog asks as the guest, so it still has cards -
+  // while the panel, which does use the token, sees nothing (and says so by
+  // being empty rather than by lying about the blog).
+  const guestRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nm-openlist-guest-'));
+  // The token account is limited to /private (it cannot even reach the notes),
+  // while OpenList's guest can see /public - where the notes are.
+  const guestFake = await startFakeOpenList({ root: guestRoot, basePath: '/private', guestBasePath: '/public' });
+  let guestServer;
+  try {
+    fs.mkdirSync(path.join(guestRoot, 'public', 'Notes'), { recursive: true });
+    fs.writeFileSync(
+      path.join(guestRoot, 'public', 'Notes', '访客可见.md'),
+      '---\nid: guestpost\nblog: true\nblogAt: "2024-02-02T00:00:00.000Z"\n---\n\n访客正文\n',
+      'utf8',
+    );
+
+    /** One app over one fake: real StorageManager, real routes. */
+    const buildApp = async (fake) => {
+      const storage = new StorageManager(
+        {
+          effective: () => ({
+            storage: {
+              driver: 'openlist',
+              openlist: { url: fake.url, token: 'service-token', root: '/public/Notes', perUser: false, timeoutMs: 2000 },
+              local: { root: guestRoot },
+            },
+          }),
+        },
+        guestRoot,
+      );
+      const repo = new NotesRepository(storage);
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.session = {
+          username: 'admin',
+          provider: 'local',
+          role: 'admin',
+          guest: false,
+          permissions: { write: true, rename: true, move: true, remove: true },
+        };
+        next();
+      });
+      app.use('/api/notes', notesRoutes({ notes: repo }));
+      app.use(
+        '/api/blog',
+        blogRoutes({
+          notes: repo,
+          // The panel switch is off throughout: the blog never asks about it.
+          settings: { effective: () => ({ blog: { enabled: true }, guest: { enabled: false } }) },
+        }),
+      );
+      const server = app.listen(0, '127.0.0.1');
+      await new Promise((resolve) => server.once('listening', resolve));
+      const origin = 'http://127.0.0.1:' + server.address().port;
+      return {
+        getJson: async (url) => {
+          const response = await fetch(origin + url);
+          return { status: response.status, payload: await response.json() };
+        },
+        close: () =>
+          new Promise((resolve) => {
+            server.closeAllConnections?.();
+            server.close(resolve);
+          }),
+      };
+    };
+
+    const app = await buildApp(guestFake);
+    try {
+      const panel = await app.getJson('/api/notes');
+      check('the panel cannot use that root with the token account', [panel.status, panel.payload.error?.code], [403, 'openlist_forbidden']);
+      const blog = await app.getJson('/api/blog');
+      check('the blog still has the card, because it reads as the guest', [blog.status, (blog.payload.posts ?? []).map((post) => post.title)], [200, ['访客可见']]);
+      const post = await app.getJson('/api/blog/post?path=' + encodeURIComponent('/访客可见.md'));
+      check('and serves the post', [post.status, post.payload.post?.content.trim()], [200, '访客正文']);
+
+      // Who asked as whom: the panel's lookup carried the token, the blog's did
+      // not - and only the guest ever got to list a folder.
+      const meCalls = guestFake.requests.filter((request) => request.path === '/api/me');
+      check('the panel asked as the token account', meCalls.some((request) => request.authorized), true);
+      check('and the blog asked as the guest, with no token at all', meCalls.some((request) => !request.authorized), true);
+      const listCalls = guestFake.requests.filter((request) => request.path === '/api/fs/list');
+      check('only the guest ever got to list anything', listCalls.every((request) => !request.authorized), true);
+    } finally {
+      await app.close();
+    }
+
+    // The other way round: the token can see the notes and the guest cannot.
+    // Then the blog genuinely cannot read them, and the error has to say why.
+    const blindGuestFake = await startFakeOpenList({ root: guestRoot, basePath: '/public', guestBasePath: '/private' });
+    const blindApp = await buildApp(blindGuestFake);
+    try {
+      const panel = await blindApp.getJson('/api/notes');
+      check('the panel reads the notes with its token', [panel.status, (panel.payload.notes ?? []).map((note) => note.path)], [200, ['/访客可见.md']]);
+      const blog = await blindApp.getJson('/api/blog');
+      check('while the blog reports that the guest cannot see them', [blog.status, blog.payload.error?.code], [403, 'openlist_forbidden']);
+      check('with a message about the guest account', /访客/.test(blog.payload.error?.message ?? ''), true);
+    } finally {
+      await blindApp.close();
+      await blindGuestFake.close();
+    }
+
+    // Guests switched off on the OpenList side: the blog has to say so, and the
+    // panel (which has a token) keeps working.
+    const disabledFake = await startFakeOpenList({ root: guestRoot, basePath: '/', guestBasePath: '/public', guestDisabled: true });
+    const disabledApp = await buildApp(disabledFake);
+    try {
+      const blocked = await disabledApp.getJson('/api/blog');
+      check('a guest-disabled OpenList is reported on the blog, not hidden', [blocked.status, blocked.payload.error?.code], [403, 'openlist_guest_disabled']);
+      const message = blocked.payload.error?.message ?? '';
+      check('with a message that points at the OpenList setting', [/访客/.test(message), /Guest user is disabled/.test(message)], [true, true]);
+      const panelStill = await disabledApp.getJson('/api/notes');
+      check('while the panel, which has a token, still works', panelStill.status, 200);
+    } finally {
+      await disabledApp.close();
+      await disabledFake.close();
+    }
+  } finally {
+    if (guestServer) {
+      const closed = new Promise((resolve) => guestServer.close(resolve));
+      guestServer.closeAllConnections?.();
+      await closed;
+    }
+    await guestFake.close();
+    fs.rmSync(guestRoot, { recursive: true, force: true });
   }
 
   /* ---- a root that cannot be read is not an empty library --------------- */
