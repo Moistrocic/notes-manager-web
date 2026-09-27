@@ -103,7 +103,24 @@ export class OpenListStorageDriver implements StorageDriver {
           created: entry.created ? Date.parse(entry.created) || undefined : undefined,
         }));
     } catch (err) {
-      if (err instanceof OpenListError && TEXT_FALLBACK_HINT.test(err.message)) return [];
+      if (err instanceof OpenListError && TEXT_FALLBACK_HINT.test(err.message)) {
+        // A folder that is not there is empty as far as the tree is concerned:
+        // a scan walks folders that may have been removed underneath it, and an
+        // empty answer keeps the rest of the tree usable.
+        //
+        // The root is not one of those folders. If the configured root cannot be
+        // read, nothing in the library is visible, and answering "empty" turns a
+        // wrong OPENLIST_ROOT - or a token belonging to a different account -
+        // into an empty panel and a blog that silently has no posts. Say so.
+        if (normalisePath(dir) !== '/') return [];
+        throw new StorageError(
+          `OpenList 里读不到 ${target}：目录不存在，或当前账号没有权限看到它。` +
+            '请检查设置里的 OPENLIST_ROOT 与 OpenList API 令牌是否指向同一个账号能看到的目录。' +
+            `(Cannot list ${target}: ${err.message})`,
+          err.isAuthError ? 403 : 404,
+          'openlist_root_missing',
+        );
+      }
       this.wrap(err, 'list', target);
     }
   }

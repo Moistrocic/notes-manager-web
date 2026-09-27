@@ -384,6 +384,17 @@ export class NotesRepository {
       }
     }
 
+    // A leftover queue means the walk stopped at the folder limit rather than at
+    // the end of the tree, so notes deeper down or further along are missing
+    // from this scan. Say so: "my note is not in the panel" is otherwise
+    // indistinguishable from "the note is not there".
+    if (queue.length > 0) {
+      log.warn(
+        `folder scan stopped at the ${MAX_DIRS_PER_SCAN}-folder limit (visited ${visited}, ${queue.length} folders left): ` +
+          'notes in those folders, or deeper than the walk goes, are missing from this listing',
+      );
+    }
+
     const result: ScanResult = { at: Date.now(), files, idToPath: new Map() };
     this.scans.set(ns, result);
     return result;
