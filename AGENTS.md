@@ -34,7 +34,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 要改的东西 | 去处 |
 | --- | --- |
 | 笔记/文件的后端行为：扫描、读写、改名、移动、回收站、统计 | `server/src/notes/repository.ts` + `server/src/http/routes/notes.ts` |
-| 存储能力（本地与 OpenList 各实现一次） | `server/src/storage/*.ts` + `server/src/integrations/openlist/client.ts` |
+| 存储能力（本地与 OpenList 各实现一次） | `server/src/storage/*.ts` + `server/src/integrations/openlist/client.ts`；OpenList 的假后端与端到端断言在 `scripts/fake-openlist.mjs` / `scripts/test-openlist.mjs` |
 | 前端全局状态（只有一个 store） | `web/src/store/useAppStore.ts` |
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
@@ -49,6 +49,15 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 
 - **非笔记文件没有 front matter**：它的 `id` 由路径派生，改名 / 移动 / 进回收站都会变。
   前端要跟随接口返回的 `id`（store 已有先例），服务端删除接口会把回收站里的新 `id` 一并返回。
+- **OpenList 的 `move` 是异步任务，`rename` 与 `put` 是同步的**：`/api/fs/move` 把任务排进队列
+  就回 200（fsmanage.go：*Create all tasks immediately without any synchronous validation*），
+  「搬完了」必须自己轮询确认（driver 已做：目标出现且源消失，超时报 504 `openlist_move_pending`）。
+  另外笔记改名必须走 `rename`：**绝不能「写新文件 + 删旧文件」**——在 OpenList 上写就是上传，
+  文件会换一个身份，旧文件删不掉时两份并存，用户看到的就是「改了名还是旧名字」。
+- **改 OpenList 相关行为前先读本仓库 `openlist/` 下的 Go 源码**：`server/handles/fsmanage.go`
+  （FsRename / FsMove / FsCopy 的真实语义）与 `fsup.go`（PutDirectly 要求父目录存在）。
+  `scripts/fake-openlist.mjs` 就是照它写的，改行为要连假后端一起改，否则测试会替一个
+  不存在的服务背书。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
 - **同步滚动按源码行，行号来自 lexer 各 token 的 `raw` 换行累计**：`sourceBlocks` 数的是
