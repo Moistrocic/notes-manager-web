@@ -3,6 +3,24 @@ import type { StorageDriver, StorageEntry, WriteOptions } from './types.js';
 import { StorageError, baseName, joinPath, normalisePath, parentPath } from './types.js';
 
 const TEXT_FALLBACK_HINT = /not found|object not found/i;
+/**
+ * How long a background move is waited for, and how often it is checked.
+ *
+ * OpenList answers `/api/fs/move` before the move happens, so the only way to
+ * know it finished is to watch for it. 20s is generous for a rename inside one
+ * storage; a move that is genuinely still queueing is reported rather than
+ * assumed to have worked.
+ */
+const MOVE_POLL_MS = 300;
+const MOVE_TIMEOUT_MS = 20_000;
+
+/** How a background move is waited for. */
+export interface MoveWaitOptions {
+  /** How often the result is checked, in milliseconds. */
+  pollMs?: number;
+  /** How long to keep checking before giving up, in milliseconds. */
+  timeoutMs?: number;
+}
 
 /**
  * Stores notes inside an OpenList directory.
@@ -15,6 +33,10 @@ export class OpenListStorageDriver implements StorageDriver {
   readonly label: string;
   readonly root: string;
   private readonly rootPath: string;
+  // Annotated: a readonly field keeps the literal type of its initialiser,
+  // which would make the constructor's override impossible.
+  private readonly movePollMs: number = MOVE_POLL_MS;
+  private readonly moveTimeoutMs: number = MOVE_TIMEOUT_MS;
   private lastWriteFlag: boolean | null = null;
 
   /** Reported by OpenList with every listing. */
@@ -26,10 +48,14 @@ export class OpenListStorageDriver implements StorageDriver {
     private readonly client: OpenListClient,
     openlistRoot: string,
     label?: string,
+    moveWait: MoveWaitOptions = {},
   ) {
     this.rootPath = normalisePath(openlistRoot, '/');
     this.root = this.rootPath;
     this.label = label ?? `OpenList (${client.baseUrl}${this.rootPath === '/' ? '' : this.rootPath})`;
+    // A slow storage can need longer than the default; a test can need shorter.
+    if (moveWait.pollMs && moveWait.pollMs > 0) this.movePollMs = moveWait.pollMs;
+    if (moveWait.timeoutMs && moveWait.timeoutMs > 0) this.moveTimeoutMs = moveWait.timeoutMs;
   }
 
   /** Absolute path inside OpenList for a driver-relative storage path. */
@@ -168,6 +194,18 @@ export class OpenListStorageDriver implements StorageDriver {
     }
   }
 
+  /**
+   * Moves an entry into another directory, and waits for it to arrive.
+   *
+   * `/api/fs/move` only *schedules* the work: FsMove creates a task and answers
+   * "Successfully created N move task(s)" before anything has moved
+   * (openlist/server/handles/fsmanage.go: "Create all tasks immediately without
+   * any synchronous validation"). `rename` and `put` are synchronous, this one
+   * is not - so the next request would read a tree where the file is still in
+   * the old folder, and the interface would show a move that has not happened.
+   * The task is therefore waited for, and a timeout is reported as a failure
+   * rather than as success.
+   */
   async move(source: string, targetDir: string): Promise<void> {
     const remote = this.toRemote(source);
     const destination = this.toRemote(targetDir);
@@ -177,6 +215,35 @@ export class OpenListStorageDriver implements StorageDriver {
       await this.client.move(parentPath(remote), destination, [baseName(remote)]);
     } catch (err) {
       this.wrap(err, 'move', remote);
+    }
+    await this.waitForMove(remote, joinPath(destination, baseName(remote)));
+  }
+
+  /**
+   * Waits until the move is visible at both ends.
+   *
+   * Both, not either: a destination that exists while the source is still there
+   * is a copy in progress (or an older file of the same name), and the note
+   * would be listed twice. A move inside one directory can never satisfy that,
+   * so it is not waited for at all.
+   */
+  private async waitForMove(source: string, destination: string): Promise<void> {
+    if (source === destination) return;
+    const deadline = Date.now() + this.moveTimeoutMs;
+    for (;;) {
+      const [atDestination, atSource] = await Promise.all([
+        this.client.exists(destination).catch(() => false),
+        this.client.exists(source).catch(() => false),
+      ]);
+      if (atDestination && !atSource) return;
+      if (Date.now() >= deadline) {
+        throw new StorageError(
+          `OpenList 仍在后台搬运 ${source} → ${destination}，文件还没有到位，请稍后重试`,
+          504,
+          'openlist_move_pending',
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, this.movePollMs));
     }
   }
 
