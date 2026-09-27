@@ -233,7 +233,10 @@ export function SettingsDialog() {
           <div className="grid gap-2 sm:grid-cols-3">
             {(
               [
-                { value: 'auto', label: '自动（推荐）', desc: 'OpenList 在线时用它，否则回落本地磁盘', icon: Wand2 },
+                // No falling back to the local disk any more: it is a different
+                // tree, and a note written there disappears from the panel and
+                // from the blog the moment OpenList answers again.
+                { value: 'auto', label: '自动（推荐）', desc: 'OpenList 在线时用它，连不上就报错（不会写到本地）', icon: Wand2 },
                 { value: 'openlist', label: '仅 OpenList', desc: '强制使用 OpenList，不可用时直接报错', icon: Cloud },
                 { value: 'local', label: '仅本地', desc: '笔记保存在服务器本地目录', icon: HardDrive },
               ] as const

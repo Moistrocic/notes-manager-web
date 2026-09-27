@@ -520,7 +520,11 @@ function EmptyWorkspace() {
         </h2>
         <p className="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-[var(--muted)]">
           从左侧选择一篇笔记，或创建新的笔记。内容会实时保存到
-          {status?.storage.driver === 'openlist' ? ' OpenList 目录。' : ' 服务器本地目录。'}
+          {status?.storage.degraded
+            ? ' OpenList 目录（现在连不上，保存会失败）。'
+            : status?.storage.driver === 'openlist'
+              ? ' OpenList 目录。'
+              : ' 服务器本地目录。'}
         </p>
 
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2">

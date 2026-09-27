@@ -16,10 +16,15 @@ export function StatusPill({
     return <div className="shimmer h-9 rounded-xl" />;
   }
   const isOpenList = status.driver === 'openlist';
-  const Icon = isOpenList ? Cloud : status.degraded ? CloudOff : HardDrive;
+  // `degraded` means OpenList is configured but unreachable - and this app
+  // refuses requests rather than falling back to the local disk, which is a
+  // different tree rather than a copy. So it reads as an OpenList that is down,
+  // not as a local disk.
+  const unreachable = status.degraded;
+  const Icon = isOpenList ? Cloud : unreachable ? CloudOff : HardDrive;
   const tone = isOpenList
     ? 'text-[var(--success)]'
-    : status.degraded
+    : unreachable
       ? 'text-[var(--warn)]'
       : 'text-[var(--muted)]';
 
@@ -36,7 +41,7 @@ export function StatusPill({
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[12px] font-medium text-[var(--text)]">
-          {isOpenList ? 'OpenList 存储' : status.degraded ? '本地存储（降级）' : '本地存储'}
+          {isOpenList ? 'OpenList 存储' : unreachable ? 'OpenList 连不上' : '本地存储'}
         </div>
         <div className="truncate text-[10.5px] text-[var(--faint)]" title={status.displayRoot}>
           {status.displayRoot}

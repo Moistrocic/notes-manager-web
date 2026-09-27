@@ -4,6 +4,7 @@ import {
   ArrowUp,
   ChevronLeft,
   Cloud,
+  CloudOff,
   FileText,
   HardDrive,
   Pin,
@@ -123,7 +124,9 @@ export function NotesPanel() {
   const deleteSelection = useAppStore((s) => s.deleteSelection);
   const downloadSelection = useAppStore((s) => s.downloadSelection);
   const capabilities = useAppStore((s) => s.capabilities);
-  // 'degraded' is OpenList configured but unreachable, so notes fall back to disk.
+  // 'degraded' is OpenList configured but unreachable. The app refuses requests
+  // rather than writing to the local disk (a different tree, not a copy), so this
+  // reads as "OpenList is down" rather than as a fallback.
   const storageDegraded = useAppStore((s) => Boolean(s.status?.storage?.degraded));
   const driver = capabilities?.driver === 'openlist' ? 'openlist' : storageDegraded ? 'degraded' : 'local';
   const canWrite = useCanWrite();
@@ -225,12 +228,18 @@ export function NotesPanel() {
               )}
               title={capabilities?.root}
             >
-              {driver === 'openlist' ? <Cloud className="h-2.5 w-2.5" /> : <HardDrive className="h-2.5 w-2.5" />}
-              {driver === 'openlist' ? 'OpenList' : driver === 'degraded' ? '本地（降级）' : '本地'}
+              {driver === 'openlist' ? (
+                <Cloud className="h-2.5 w-2.5" />
+              ) : driver === 'degraded' ? (
+                <CloudOff className="h-2.5 w-2.5" />
+              ) : (
+                <HardDrive className="h-2.5 w-2.5" />
+              )}
+              {driver === 'openlist' ? 'OpenList' : driver === 'degraded' ? 'OpenList 连不上' : '本地'}
             </span>
           </div>
           <div className="truncate text-[10px] text-[var(--faint)]">
-            {capabilities?.root ?? '本地磁盘'}
+            {capabilities?.root ?? (storageDegraded ? 'OpenList 连不上' : '本地磁盘')}
             {capabilities && !capabilities.writable ? ' · 只读' : ''}
           </div>
         </div>

@@ -126,7 +126,11 @@ export function LoginScreen({ onClose }: { onClose?: () => void }) {
         >
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-[12px] text-[var(--muted)] backdrop-blur">
             <span className={cn('h-1.5 w-1.5 rounded-full', openlistReady ? 'bg-[var(--success)]' : 'bg-[var(--warn)]')} />
-            {openlistReady ? `OpenList 已连接 · ${providers?.openlistUrl ?? ''}` : 'OpenList 未连接 · 使用本地存储'}
+            {openlistReady
+              ? `OpenList 已连接 · ${providers?.openlistUrl ?? ''}`
+              : providers?.openlistUrl
+                ? 'OpenList 连不上 · 笔记暂时不可用'
+                : 'OpenList 未配置 · 使用本地存储'}
           </div>
           <h1 className="text-[42px] font-semibold leading-[1.1] tracking-tight">
             <span className="gradient-text">笔记管理面板</span>

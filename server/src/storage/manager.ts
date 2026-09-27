@@ -25,7 +25,14 @@ export interface ResolvedStorage {
   kind: StorageKind;
   /** Human readable location of the notes inside the active backend. */
   displayRoot: string;
-  /** True when `auto` mode fell back to local disk because OpenList is down. */
+  /**
+   * True when this resolution is not the configured backend.
+   *
+   * Nothing sets it any more: `auto` mode refuses with a 503 rather than falling
+   * back to a different tree, so a request either gets the configured backend or
+   * gets an error. The field stays because it says what "degraded" means, and
+   * because a future partial-availability mode would need it again.
+   */
   degraded: boolean;
   detail: string;
 }
@@ -140,18 +147,32 @@ export class StorageManager {
 
     const probe = await this.probeOpenList();
     if (!probe.reachable) {
-      if (mode === 'openlist') {
+      if (mode === 'openlist' && !probe.configured) {
         throw new StorageError(
-          probe.configured
-            ? `OpenList at ${probe.url} is not reachable. Start OpenList or switch the storage driver to "local".`
-            : 'No OpenList URL configured. Set one in Settings or switch the storage driver to "local".',
+          'No OpenList URL configured. Set one in Settings or switch the storage driver to "local".',
           503,
           'openlist_unreachable',
         );
       }
-      return probe.configured
-        ? useLocal(`Cannot reach OpenList at ${probe.url} - using the local disk`, true)
-        : useLocal('OpenList is not configured yet - using the local disk', false);
+      if (probe.configured) {
+        // "auto" used to fall back to the local disk here, and that is a trap the
+        // hard way: the local tree is *not* a copy of the OpenList one, so a note
+        // written while OpenList is down - published to the blog, most visibly -
+        // disappears from the panel and the blog the moment OpenList answers
+        // again, because both of them then read OpenList. Refusing is the honest
+        // answer, and it is the only one that cannot lose a note.
+        throw new StorageError(
+          `Cannot reach OpenList at ${probe.url}: the notes are not available. They are not on the local disk ` +
+            'either - that is a different tree, and writing to it would leave notes the app stops looking for the ' +
+            'moment OpenList is back. Start OpenList, fix the URL, or switch the storage driver to "local". ' +
+            '（OpenList 连不上：为避免把笔记写进本地副本，本次请求已拒绝；请启动 OpenList、修正地址，或把存储改为「本地」）',
+          503,
+          'openlist_unreachable',
+        );
+      }
+      // Nothing is configured at all, so the local disk *is* the storage rather
+      // than a fallback to it.
+      return useLocal('OpenList is not configured yet - using the local disk', false);
     }
 
     // Sessions that signed in *through* OpenList use their own token and nothing
@@ -220,9 +241,12 @@ export class StorageManager {
       degraded = false;
       detail = 'OpenList is not configured yet - notes are stored on the local disk';
     } else {
+      // Configured but down: every request that needs the notes is refused (see
+      // resolve()), so this is not "the notes are on disk" - it is "the notes are
+      // not available right now".
       kind = 'local';
       degraded = true;
-      detail = `Cannot reach OpenList at ${probe.url} - notes are stored on the local disk`;
+      detail = `Cannot reach OpenList at ${probe.url} - notes are unavailable until it is back (requests are refused; the local disk is a different tree, not a copy)`;
     }
 
     const root = kind === 'openlist' ? effective.storage.openlist.root : effective.storage.local.root;
