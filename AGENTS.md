@@ -60,11 +60,19 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   不存在的服务背书。
 - **服务令牌也有自己的 `base_path`**：OpenList 把每个请求路径 join 到账号的 base_path 上
   （`user.JoinPath` → `JoinBasePath`），所以绝对路径的 `OPENLIST_ROOT` 必须先换算成该账号看到的
-  路径再发。会话用户带 `openlistBasePath`；**服务令牌没有会话**（公开博客就是用它读的），
+  路径再发。会话用户带 `openlistBasePath`；**服务令牌没有会话**（面板回退时才用它读），
   `resolve()` 会调一次 `client.me()` 问出 base_path 并按 token 缓存 5 分钟（`invalidateProbe()`
   一并清掉）。拿不到就退回 `/`（与旧版一致，不新增失败）。忘了这一步的表现：把
   `/public/Notes` 原样发给 jail 在 `/public` 的账号 → OpenList 去找 `/public/public/Notes` →
-  `object not found` → 博客报「读不到根目录」。断言在 `scripts/test-openlist.mjs` 的 jail 一段。
+  `object not found` → 报「读不到根目录」。断言在 `scripts/test-openlist.mjs` 的 jail 一段。
+- **博客读 OpenList 用的是 guest 身份，不是令牌**：匿名请求在 OpenList 里就是它的 guest 账号
+  （`middlewares/auth.go`：token 为空即访客），`routes/blog.ts` 的三个接口都带 `asGuest: true`，
+  `resolveGuest()` 匿名问一次 `/api/me` 拿 guest 的 `base_path` 再换算路径（5 分钟缓存）。
+  别改回「用服务令牌读」：令牌账号能看到的目录未必是发布者看到的那个（断言：令牌被限制在
+  `/private`、访客能看 `/public` 时，面板 403 而博客正常）。guest 被禁用时博客必须报
+  403 `openlist_guest_disabled` 并说清怎么办——OpenList 出厂默认禁用 guest，所以**开启博客的
+  前提就是允许访客访问**；guest 被 jail 则是 403 `openlist_forbidden`（消息里带 base_path）。
+  这与 `settings.guest.enabled`（面板游客开关）无关：那个开关只管面板，关掉博客照常读。
 - **auto 模式绝不静默退回本地**：OpenList 已配置但连不上时 `StorageManager.resolve()` 抛
   `StorageError(503, openlist_unreachable)`，不再返回 `degraded` 的本地驱动。本地树不是 OpenList 的
   副本，断线时写进去的笔记会在 OpenList 恢复后从面板和博客里一起消失（Lead 用假 OpenList 复现过：
