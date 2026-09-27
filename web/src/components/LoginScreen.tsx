@@ -285,12 +285,12 @@ export function LoginScreen({ onClose }: { onClose?: () => void }) {
                 }}
               >
                 <UserRound className="h-4 w-4" />
-                以游客身份浏览
+                以游客身份浏览（管理面板）
               </Button>
               <p className="mt-2 text-center text-[11px] leading-relaxed text-[var(--faint)]">
                 {providers?.openlistConfigured
-                  ? 'OpenList 已开启游客访问，可免登录浏览公开目录（通常是只读）。'
-                  : '不用账号也能进来看看：只读浏览本机的笔记目录，改动一律会被服务器拒绝。'}
+                  ? 'OpenList 已开启游客访问，可免登录进入管理面板（通常是只读）。博客是公开的，不需要这个入口。'
+                  : '不用账号也能进入管理面板看看：只读浏览本机的笔记目录，改动一律会被服务器拒绝。'}
               </p>
             </div>
           ) : null}
@@ -308,7 +308,7 @@ export function LoginScreen({ onClose }: { onClose?: () => void }) {
               {providers?.guest ? (
                 <Badge tone="success">
                   <UserRound className="h-3 w-3" />
-                  {providers?.openlistConfigured ? '游客访问已开启（OpenList）' : '游客可只读浏览'}
+                  {providers?.openlistConfigured ? '游客访问已开启（OpenList）' : '游客可只读浏览（管理面板）'}
                 </Badge>
               ) : null}
               {tabs.length ? (

@@ -3347,6 +3347,13 @@ console.log('\nthe blog switch (jsdom)');
   );
   check('with nothing about front matter left in it', (setting?.textContent ?? '').includes('front matter'), false);
   check('nor about a switch still to come', (setting?.textContent ?? '').includes('随后再加'), false);
+  // Turning the blog on is what gives the public pages something to read with:
+  // the OpenList guest identity, and it has to say so - the token is the panel's.
+  check(
+    'and names the guest identity the blog reads with',
+    ['访客身份', '不需要 API 令牌', '访客被禁用'].every((text) => (setting?.textContent ?? '').includes(text)),
+    true,
+  );
 
   await act(async () => {
     blogSwitch()?.click();
@@ -3991,18 +3998,26 @@ console.log('\nguest browsing (jsdom)');
       },
     });
     const login = await renderOnce(React.createElement(LoginScreen));
-    check('a deployment without OpenList offers guest browsing', login.includes('以游客身份浏览'), true);
+    check('a deployment without OpenList offers guest browsing', login.includes('以游客身份浏览（管理面板）'), true);
     check('and says it is read-only', login.includes('只读浏览本机的笔记目录'), true);
-    check('and marks it in the status row', login.includes('游客可只读浏览'), true);
+    check('and marks it in the status row', login.includes('游客可只读浏览（管理面板）'), true);
 
     appStore.setState({ providers: { ...appStore.getState().providers!, guest: false } });
     const closed = await renderOnce(React.createElement(LoginScreen));
     check('with guest access off there is no way in', closed.includes('以游客身份浏览'), false);
 
-    // The switch that decides it lives in the server settings.
+    // The switch that decides it lives in the server settings, and it is about
+    // the panel alone: the blog reads as an OpenList guest either way.
     appStore.setState({ settingsOpen: true });
     const settings = await renderOnce(React.createElement(SettingsDialog));
-    check('the settings dialog decides who may browse', settings.includes('允许游客只读浏览'), true);
+    check('the settings dialog decides who may enter the panel', settings.includes('允许游客访问管理面板'), true);
+    check(
+      'spelling out both halves',
+      settings.includes('游客可以只读浏览管理面板，也能看博客') &&
+        settings.includes('仍可通过博客访问已发布的笔记与图片'),
+      true,
+    );
+    check('and keeping the token out of the blog picture', settings.includes('令牌只服务管理面板'), true);
   } finally {
     appStore.setState(hold);
   }

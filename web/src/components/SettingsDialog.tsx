@@ -539,6 +539,14 @@ export function SettingsDialog() {
             ) : null}
             {providers?.openlist ? <Badge tone="success">当前在线</Badge> : <Badge tone="warn">当前离线</Badge>}
           </div>
+
+          {/* Said here rather than shown as a status: the API's guest flag mixes
+              this switch with OpenList's own answer, so it cannot honestly be
+              presented as "OpenList 允许/禁止访客". */}
+          <p className="mt-3 text-[11px] leading-relaxed text-[var(--faint)]">
+            博客读取已发布的笔记与图片用的是 OpenList 的访客身份，这里配置的 API 令牌只服务管理面板本身。
+            所以 OpenList 一侧要允许访客访问笔记所在的目录，博客才读得到；被禁用时博客会提示「访客被禁用」并给出解法。
+          </p>
         </section>
 
         {/* Paths */}
@@ -584,14 +592,12 @@ export function SettingsDialog() {
           <SectionTitle icon={UserRound} title="访问" hint="不登录的人能做什么" />
           <div className="flex items-start justify-between gap-3 rounded-2xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_45%,transparent)] p-3">
             <div className="min-w-0">
-              <div className="text-[12px] text-[var(--muted)]">允许游客只读浏览</div>
+              <div className="text-[12px] text-[var(--muted)]">允许游客访问管理面板</div>
               <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--faint)]">
-                {!guestEnabled
-                  ? '已关闭：登录页不再提供游客入口，正在浏览的游客会立刻被登出。'
-                  : providers?.openlistConfigured
-                    ? '登录页会出现「以游客身份浏览」，用的是 OpenList 自己的匿名访问权限。'
-                    : '登录页会出现「以游客身份浏览」：不用账号就能只读浏览这台服务器上的笔记，任何修改都会被服务器拒绝。'}{' '}
-                关掉后保存即可生效。
+                {' '}开启：游客可以只读浏览管理面板，也能看博客；关闭：游客仍可通过博客访问已发布的笔记与图片，但进不了管理面板。
+                {guestEnabled && providers?.openlistConfigured ? ' 游客入口用的是 OpenList 自己的匿名访问权限。' : ''}
+                {!guestEnabled ? ' 关闭后，正在浏览管理面板的游客会立刻被登出。' : ''}
+                {' '}改完保存即可生效。
               </p>
             </div>
             <Switch checked={guestEnabled} onChange={setGuestEnabled} className="mt-0.5 shrink-0" />
@@ -609,6 +615,9 @@ export function SettingsDialog() {
                 {blogEnabled
                   ? '已开启：站点根 / 是博客首页。'
                   : '已关闭：访问站点根 / 会直接跳到管理面板的登录页。'}{' '}
+                开启博客会自动开启访客读取：博客以 OpenList 的访客身份取已发布的笔记与图片，不需要 API 令牌，
+                但要求 OpenList 一侧允许访客访问这些目录；如果 OpenList 禁用了访客，
+                博客会提示「访客被禁用」并给出解法。{' '}
                 博客只展示被标记为发布的笔记：是否发布、以及卡片上的标题与简介，都在左侧列表的「发布管理」里设置
                 （也可以右键一篇笔记，选「发布管理」）。保存后立即生效。
               </p>
