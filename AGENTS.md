@@ -58,6 +58,16 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （FsRename / FsMove / FsCopy 的真实语义）与 `fsup.go`（PutDirectly 要求父目录存在）。
   `scripts/fake-openlist.mjs` 就是照它写的，改行为要连假后端一起改，否则测试会替一个
   不存在的服务背书。
+- **auto 模式绝不静默退回本地**：OpenList 已配置但连不上时 `StorageManager.resolve()` 抛
+  `StorageError(503, openlist_unreachable)`，不再返回 `degraded` 的本地驱动。本地树不是 OpenList 的
+  副本，断线时写进去的笔记会在 OpenList 恢复后从面板和博客里一起消失（Lead 用假 OpenList 复现过：
+  降级时发布 → 恢复后 `GET /api/blog` 200 但 posts=0、面板里也看不到那篇）。只有「没配
+  OpenList」才用本地——那时本地就是存储本身；选「本地」同理。
+- **OpenList 的 `list()` 只允许对非根目录吞掉 not-found**：子目录不见了当空目录（扫描会走到
+  已经删掉的目录），但**配置的根目录读不到必须报错**（`openlist_root_missing`，消息里带
+  remote 根路径）。当成空目录的话，错的 `OPENLIST_ROOT`／不属于同一账号的令牌会表现成
+  「面板没有笔记」「博客还没有内容」，而不是一个能查的错误——这条有断言
+  （`scripts/test-openlist.mjs` 里把假后端的根删掉再读博客）。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
 - **同步滚动按源码行，行号来自 lexer 各 token 的 `raw` 换行累计**：`sourceBlocks` 数的是

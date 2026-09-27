@@ -161,6 +161,8 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
   面板里预览同一篇笔记时仍然走 `/api/notes/file`，两边各走各的门。
 - 博客页面不读管理面板的 store：它是给没有账号的人看的，内容用自己的公开接口取，
   面板里的笔记列表、登录状态一概不参与。
+- **博客始终是公开的**：关闭「允许游客只读浏览」只影响管理面板（游客不能再进面板看笔记），
+  不影响博客——那三扇门本来就不看会话，关掉开关之后不带任何 cookie 的访客照样能看到卡片与正文。
 
 **发布**
 
@@ -214,8 +216,14 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
 - 没有写权限的账号自动进入只读模式；只读云盘也能正常浏览
 - 每个用户可以用独立的子目录（`OPENLIST_PER_USER`），互不可见
 - 本地管理员要访问 OpenList 存储，需要一个 API 令牌（OpenList →「设置」→「API」中创建）
-- 没装 OpenList 也能用：连不上时自动改用本地磁盘，界面标注「本地存储（降级）」，
-  之后填上地址即可无缝切换
+- **「自动」模式不会在 OpenList 连不上时偷偷改用本地磁盘**：本地目录不是 OpenList 的副本，
+  而是在另一个地方的另一棵树。早先的版本会「降级」到它，于是断线期间写进去的笔记（最典型的是
+  刚发布到博客的那篇）在 OpenList 恢复后会从面板和博客里一起消失——两边读的都不是那份文件。
+  现在这种情况下接口直接回 **503**，消息里说明原因（连不上 + 本地不是副本）与三条出路：
+  启动 OpenList、修正 `OPENLIST_URL`，或者把存储明确改成「本地」。界面会标注「OpenList 连不上」，
+  设置页里也能看到具体原因
+- 真的没配 OpenList（`OPENLIST_URL` 为空）时照旧用本地磁盘——那本地就是存储本身，不是降级；
+  显式选「本地」也不受 OpenList 影响
 - `OPENLIST_ROOT` 填 OpenList 里的绝对路径；如果它不在账号的基础路径之内，
   面板会明确提示权限不足
 - **不登录也能看**：登录页提供「以游客身份浏览」
