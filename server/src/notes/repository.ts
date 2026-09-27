@@ -765,30 +765,48 @@ export class NotesRepository {
     const raw = serialiseDocument(attributes, body);
 
     // A changed title renames the file itself, exactly like a folder change
-    // already moved it: the note is written to its new path first and the old
-    // file removed afterwards, so there is never a moment without one. Both can
-    // happen in the same request.
+    // moves it. Both are filesystem operations rather than "write a copy and
+    // delete the original": on OpenList a write is an upload, so the note would
+    // come back as a *new* file - new identity, no driver-side history - and the
+    // old one would still be there whenever the delete did not take, which is
+    // exactly the "the file in OpenList still has the old name" report.
     const nextFolder = patch.folder !== undefined ? normaliseFolder(patch.folder) : current.folder;
+    const currentDir = parentPath(current.path);
     const currentName = baseName(current.path);
     const extension = extensionOf(currentName);
     const nextTitle = patch.title !== undefined ? patch.title.trim() : '';
     const wantedName =
       nextTitle && nextTitle !== current.title ? `${slugify(nextTitle)}${extension}` : currentName;
+    const nameChanged = wantedName !== currentName;
     const moved = nextFolder !== current.folder;
+    const dir = nextFolder ? `/${nextFolder}` : '/';
+    // The folder the front matter names and the folder the file is actually in
+    // can disagree - a note dropped into the tree from elsewhere keeps nothing
+    // but its path - and a move into the directory a file already sits in is an
+    // error to OpenList ("file [x] exists"), not a no-op. So the move is only
+    // performed when the directories really differ.
+    const relocating = moved && dir !== currentDir;
 
     let targetPath = current.path;
-    if (moved || wantedName !== currentName) {
-      const dir = nextFolder ? `/${nextFolder}` : '/';
-      if (nextFolder) await driver.ensureDir(dir);
-      targetPath = joinPath(dir, wantedName);
-      if (targetPath !== current.path && (await driver.exists(targetPath))) {
-        // A note with that name is already there: take the next free one.
-        const free = await this.pickFileName(driver, dir, stripExtension(wantedName));
-        targetPath = joinPath(dir, free.endsWith(extension) ? free : `${stripExtension(free)}${extension}`);
-      }
+    if (!nameChanged && !moved) {
       await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
-      if (targetPath !== current.path) await driver.removePath(current.path);
     } else {
+      // A name free on both sides of the operation: `rename` would overwrite a
+      // sibling and `move` refuses a destination that is already taken, so a
+      // note that is already there is never replaced. `self` keeps the note
+      // from blocking its own rename.
+      const chosen = await this.pickFreeFileName(driver, dir, wantedName, {
+        also: relocating ? currentDir : undefined,
+        self: current.path,
+      });
+      if (relocating && nextFolder) await driver.ensureDir(dir);
+      // Rename first, then move: `rename` only reaches a sibling, so it has to
+      // happen in the folder the file is in now, and `move` then carries the
+      // new name across. The content lands on the final path, where the note
+      // now is.
+      if (chosen !== currentName) await driver.rename(current.path, chosen);
+      if (relocating) await driver.move(joinPath(currentDir, chosen), dir);
+      targetPath = joinPath(dir, chosen);
       await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
     }
 
