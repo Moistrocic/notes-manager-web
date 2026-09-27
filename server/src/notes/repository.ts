@@ -900,6 +900,18 @@ export class NotesRepository {
     );
   }
 
+  /**
+   * The name a note gets while it waits in the trash.
+   *
+   * The id suffix is what lets two notes of the same name sit there together,
+   * and it is what `restore()` strips off again.
+   *
+   * The extension is always `.md`, whatever the note was called before: the
+   * original file name is not remembered anywhere, so a `.markdown` note that
+   * goes through the trash comes back as `.md`. It is the same note either way
+   * - the front matter, the id and the body all survive - but it is a rename
+   * nobody asked for, and worth knowing about.
+   */
   private trashName(path: string, id: string): string {
     const base = slugify(stripExtension(baseName(path)));
     return `${base}-${id.slice(0, 8)}.md`;
@@ -982,13 +994,27 @@ export class NotesRepository {
       originFolder: note.folder,
     };
     const raw = serialiseDocument(attributes, doc.body);
-    await driver.ensureDir(`/${TRASH_DIR}`);
-    let trashPath = joinPath(`/${TRASH_DIR}`, this.trashName(note.path, note.id));
-    if (await driver.exists(trashPath)) {
-      trashPath = joinPath(`/${TRASH_DIR}`, `${slugify(stripExtension(baseName(note.path)))}-${crypto.randomBytes(3).toString('hex')}.md`);
-    }
+    const trashDir = `/${TRASH_DIR}`;
+    const currentDir = parentPath(note.path);
+    await driver.ensureDir(trashDir);
+
+    // Rename in place, then move the renamed file into the trash - the same two
+    // steps as any other relocate, and for the same reason: on OpenList a write
+    // is an upload, so "write a copy into the trash and delete the original"
+    // would hand the trashed note a new identity and leave a second copy behind
+    // whenever the delete did not take. The name has to be free on both sides:
+    // `rename` reaches only a sibling, and `move` refuses a taken destination.
+    const wantedName = this.trashName(note.path, note.id);
+    const trashName = (await this.nameIsFree(driver, [trashDir, currentDir], wantedName, note.path))
+      ? wantedName
+      : await this.randomFreeName(driver, trashDir, wantedName, { also: currentDir, self: note.path });
+    if (trashName !== baseName(note.path)) await driver.rename(note.path, trashName);
+    await driver.move(joinPath(currentDir, trashName), trashDir);
+
+    // The deletion marks are written last, on the file that is already there:
+    // the bytes travel with the file, only the front matter changes.
+    const trashPath = joinPath(trashDir, trashName);
     await driver.write(trashPath, raw, { modified: new Date(), contentType: 'text/markdown; charset=utf-8' });
-    await driver.removePath(note.path);
     this.invalidate(ns);
     log.info(`moved note ${note.path} to trash`);
     return { trashed: true, id: note.id };
@@ -1094,11 +1120,33 @@ export class NotesRepository {
     const folder = normaliseFolder(found.originFolder ?? found.folder);
     const dir = folder ? `/${folder}` : '/';
     if (folder) await driver.ensureDir(dir);
-    const name = await this.pickFileName(driver, dir, slugify(stripExtension(baseName(found.path))));
-    const targetPath = joinPath(dir, name);
+
+    // Coming home is a relocate like any other: rename inside the trash (the
+    // only place `rename` can reach), then move the renamed file into its
+    // folder. Writing a copy and deleting the trashed file would upload the
+    // note again - the same defect as renaming by upload, one folder over.
+    const trashDir = `/${TRASH_DIR}`;
+    // The trash name carries the note's id so two notes of one name can wait
+    // there side by side; the note takes its own name back when it leaves. It
+    // comes back as `.md` either way (see `trashName`), and a `-2` is chosen
+    // when somebody has taken the name in the meantime - never a silent
+    // overwrite.
+    const storedStem = stripExtension(baseName(found.path));
+    const idSuffix = `-${found.id.slice(0, 8)}`;
+    const homeStem = storedStem.endsWith(idSuffix) ? storedStem.slice(0, -idSuffix.length) : storedStem;
+    const wantedName = await this.pickFileName(driver, dir, homeStem || 'note');
+    // Free in the trash as well: `move` refuses a destination that is taken, and
+    // the rename that comes before it cannot land on a sibling either.
+    const inside = (await this.nameIsFree(driver, [trashDir], wantedName, found.path))
+      ? wantedName
+      : await this.randomFreeName(driver, trashDir, wantedName, { also: dir, self: found.path });
+    if (inside !== baseName(found.path)) await driver.rename(found.path, inside);
+    await driver.move(joinPath(trashDir, inside), dir);
+
+    // Only the front matter changes on the way out - the deletion marks go.
+    const targetPath = joinPath(dir, inside);
     const raw = serialiseDocument(attributes, doc.body);
     await driver.write(targetPath, raw, { modified: now, contentType: 'text/markdown; charset=utf-8' });
-    await driver.removePath(found.path);
     this.invalidate(ns);
     this.invalidate(`${ns}:trash`);
     return this.buildNote(targetPath, raw, { size: raw.length, modified: now.getTime() });

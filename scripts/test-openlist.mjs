@@ -103,6 +103,40 @@ try {
   const bodies = (p) => sent(p).map((request) => request.body);
   const listedNote = async (id) => (await call('GET', '')).payload.notes.find((note) => note.id === id);
   const trashFiles = () => fake.files().filter((file) => file.includes('/_trash/'));
+  /** The requests that change the tree, in the order the app sent them. */
+  const mutations = () =>
+    fake.requests
+      .filter((request) => ['/api/fs/rename', '/api/fs/move', '/api/fs/put', '/api/fs/remove'].includes(request.path))
+      .map((request) => request.path);
+  // The backend's own files, for the things a JSON API cannot show: file
+  // identity (birthtime survives a rename) and exact bytes.
+  const fakePath = (p) => path.join(fake.root, ...p.split('/').filter(Boolean));
+  const bytesOf = (p) => fs.readFileSync(fakePath(p));
+  const statOf = (p) => fs.statSync(fakePath(p));
+  /** Uploads of a file's own bytes; the trash manifest is written the same way. */
+  const contentWrites = () =>
+    sent('/api/fs/put').filter((request) => request.filePath !== '/notes/.trash-files.json').map((request) => request.filePath);
+
+  // Raw-body uploads, the way the browser sends them.
+  const upload = async (name, bytes, folder) => {
+    const response = await fetch(base + '/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Note-Filename': encodeURIComponent(name),
+        ...(folder ? { 'X-Note-Folder': encodeURIComponent(folder) } : {}),
+      },
+      body: bytes,
+    });
+    const text = await response.text();
+    let payload = null;
+    try {
+      payload = text ? JSON.parse(text) : null;
+    } catch {
+      payload = { raw: text };
+    }
+    return { status: response.status, payload };
+  };
 
   /* ---- the fake itself -------------------------------------------------- */
   check('the fake starts empty', fake.files(), []);
@@ -197,17 +231,87 @@ try {
   check('a move that never lands is reported, not assumed', stuckResult, [504, 'openlist_move_pending', true]);
 
   /* ---- the trash and back ----------------------------------------------- */
+  const notePath = '/目标/新名字.md';
+  const bornBeforeTrash = statOf('/notes' + notePath).birthtimeMs;
   fake.reset();
   const removed = await call('DELETE', '/' + created.payload.note.id);
   check('deleting moves the note to the trash', [removed.status, removed.payload.trashed], [200, true]);
   check('OpenList shows one file in _trash', trashFiles().length, 1);
-  check('and none at the old path', fake.has('/notes/目标/新名字.md'), false);
+  check('and none at the old path', fake.has('/notes' + notePath), false);
 
+  const trashPath = trashFiles()[0];
+  const trashBase = trashPath.split('/').pop();
+  check('the note was renamed in place, then moved', [bodies('/api/fs/rename'), bodies('/api/fs/move')], [
+    [{ path: '/notes' + notePath, name: trashBase }],
+    [{ src_dir: '/notes/目标', dst_dir: '/notes/_trash', names: [trashBase] }],
+  ]);
+  // The whole point: a copy-and-delete would show up here as put + remove.
+  check('and nothing was copied or deleted to fake it', mutations(), ['/api/fs/rename', '/api/fs/move', '/api/fs/put']);
+  check('the write went to the file that had already moved', sent('/api/fs/put').map((request) => request.filePath), [trashPath]);
+  check('the trashed note is the same file, not a fresh upload', statOf(trashPath).birthtimeMs, bornBeforeTrash);
+
+  const trashedNote = (await call('GET', '/trash')).payload.notes.find((note) => note.id === created.payload.note.id);
+  check('the trash lists it, and where it came from', [trashedNote.kind, trashedNote.originFolder, trashedNote.path], ['note', '目标', '/_trash/' + trashBase]);
+  check('the workspace does not', (await call('GET', '')).payload.notes.some((note) => note.id === created.payload.note.id), false);
+
+  fake.reset();
   const restored = await call('POST', '/' + created.payload.note.id + '/restore');
-  check('restoring puts it back in its folder', [restored.status, restored.payload.note.folder], [200, '目标']);
+  check('restoring puts it back in its folder under its own name', [restored.status, restored.payload.note.path, restored.payload.note.folder], [200, notePath, '目标']);
+  check('by renaming inside the trash, then moving it home', [bodies('/api/fs/rename'), bodies('/api/fs/move')], [
+    [{ path: trashPath, name: '新名字.md' }],
+    [{ src_dir: '/notes/_trash', dst_dir: '/notes/目标', names: ['新名字.md'] }],
+  ]);
+  check('never as a copy and a delete', mutations(), ['/api/fs/rename', '/api/fs/move', '/api/fs/put']);
   check('the file is back and the trash is empty', [fake.has('/notes' + restored.payload.note.path), trashFiles().length], [true, 0]);
+  check('still the same file after two relocates', statOf('/notes' + restored.payload.note.path).birthtimeMs, bornBeforeTrash);
+  check('the deletion marks are gone', [restored.payload.note.deletedAt, restored.payload.note.originFolder], [null, null]);
   check('with its body intact', fake.read('/notes' + restored.payload.note.path).includes('正文'), true);
   check('and it is listed again', (await listedNote(created.payload.note.id)).path, restored.payload.note.path);
+
+  /* ---- a picture through the trash -------------------------------------- */
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489', 'hex');
+  const png2 = Buffer.concat([png, Buffer.from([0x42])]);
+  const picture = await upload('照片.png', png, '目标');
+  check('a picture uploads as a file', [picture.status, picture.payload.note.path, picture.payload.note.kind], [201, '/目标/照片.png', 'image']);
+  const bornPicture = statOf('/notes/目标/照片.png').birthtimeMs;
+
+  fake.reset();
+  const removedPicture = await call('DELETE', '/' + picture.payload.note.id);
+  check('a picture goes to the trash', [removedPicture.status, removedPicture.payload.trashed], [200, true]);
+  check('by moving it, with no upload of the file itself', [sent('/api/fs/move').length, contentWrites()], [1, []]);
+  check('the manifest remembers where it came from', (() => {
+    const entry = JSON.parse(fake.read('/notes/.trash-files.json'))[0];
+    return [entry.trashPath, entry.originalPath, typeof entry.deletedAt];
+  })(), ['/_trash/照片.png', '/目标/照片.png', 'string']);
+  check('and the file is the same one, byte for byte', [statOf('/notes/_trash/照片.png').birthtimeMs, [...bytesOf('/notes/_trash/照片.png')]], [bornPicture, [...png]]);
+
+  const pictureTrashId = (await call('GET', '/trash')).payload.notes.find((note) => note.path === '/_trash/照片.png').id;
+  fake.reset();
+  const restoredPicture = await call('POST', '/' + pictureTrashId + '/restore');
+  check('a picture comes back where it was', [restoredPicture.status, restoredPicture.payload.note.path], [200, '/目标/照片.png']);
+  check('by moving it back, not by uploading a copy', [sent('/api/fs/move').length, contentWrites()], [1, []]);
+  check('the manifest goes with it', [fake.has('/notes/_trash/照片.png'), fake.has('/notes/.trash-files.json')], [false, false]);
+  check('byte for byte the same picture', [statOf('/notes/目标/照片.png').birthtimeMs, [...bytesOf('/notes/目标/照片.png')]], [bornPicture, [...png]]);
+
+  /* ---- two files of one name in the trash ------------------------------- */
+  const clashA = await upload('重名.png', png, '目标');
+  const clashB = await upload('重名.png', png2);
+  check('two pictures of the same name, in two folders', [clashA.payload.note.path, clashB.payload.note.path], ['/目标/重名.png', '/重名.png']);
+
+  fake.reset();
+  await call('DELETE', '/' + clashA.payload.note.id);
+  check('the first goes in under its own name', [sent('/api/fs/move').length, trashFiles().includes('/notes/_trash/重名.png')], [1, true]);
+
+  fake.reset();
+  await call('DELETE', '/' + clashB.payload.note.id);
+  const clashTrash = trashFiles().sort();
+  const renamedOne = clashTrash.find((file) => file !== '/notes/_trash/重名.png');
+  check('the second takes a free name instead', [clashTrash.length, /^\/notes\/_trash\/重名-[0-9a-f]{6}\.png$/.test(renamedOne)], [2, true]);
+  check('and it renamed before it moved', mutations().filter((p) => p !== '/api/fs/put'), ['/api/fs/rename', '/api/fs/move']);
+  check('the file that was already there is untouched', [...bytesOf('/notes/_trash/重名.png')], [...png]);
+  check('and the second kept its own bytes', [...bytesOf(renamedOne)], [...png2]);
+  check('the manifest holds both rows', JSON.parse(fake.read('/notes/.trash-files.json')).length, 2);
+  check('neither original is left behind', [fake.has('/notes/目标/重名.png'), fake.has('/notes/重名.png')], [false, false]);
 } finally {
   if (server) {
     const closed = new Promise((resolve) => server.close(resolve));
