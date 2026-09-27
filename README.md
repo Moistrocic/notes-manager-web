@@ -226,6 +226,12 @@ shellcheck --severity=warning scripts/install.sh scripts/uninstall.sh scripts/te
   显式选「本地」也不受 OpenList 影响
 - `OPENLIST_ROOT` 填 OpenList 里的绝对路径；如果它不在账号的基础路径之内，
   面板会明确提示权限不足
+- **被限制在某个基路径下的账号也能用**：OpenList 会把每个请求路径拼到该账号自己的
+  `base_path` 后面，所以配置里的绝对路径要先换算成「这个账号看到的样子」再发出去——
+  例如 `OPENLIST_ROOT=/public/Notes` 而令牌账号被 jail 在 `/public` 时，实际请求的是
+  `/Notes`。登录用户的基路径来自会话；**服务令牌**（公开博客读的就是它）没有会话，
+  应用会调一次 `/api/me` 问出它的 `base_path` 并记住 5 分钟（换令牌会重新问）。
+  问不到时退回 `/`，即按原样发绝对路径——这与以前的版本一致，不会变成新的报错
 - **不登录也能看**：登录页提供「以游客身份浏览」
   - 没有配置 OpenList 时，游客是这台服务器上的**只读**访客：可以浏览、搜索、打开笔记，
     任何写入（新建 / 编辑 / 移动 / 删除）都会在服务端被拒绝，界面上会标注只读

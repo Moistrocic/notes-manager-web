@@ -58,6 +58,13 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （FsRename / FsMove / FsCopy 的真实语义）与 `fsup.go`（PutDirectly 要求父目录存在）。
   `scripts/fake-openlist.mjs` 就是照它写的，改行为要连假后端一起改，否则测试会替一个
   不存在的服务背书。
+- **服务令牌也有自己的 `base_path`**：OpenList 把每个请求路径 join 到账号的 base_path 上
+  （`user.JoinPath` → `JoinBasePath`），所以绝对路径的 `OPENLIST_ROOT` 必须先换算成该账号看到的
+  路径再发。会话用户带 `openlistBasePath`；**服务令牌没有会话**（公开博客就是用它读的），
+  `resolve()` 会调一次 `client.me()` 问出 base_path 并按 token 缓存 5 分钟（`invalidateProbe()`
+  一并清掉）。拿不到就退回 `/`（与旧版一致，不新增失败）。忘了这一步的表现：把
+  `/public/Notes` 原样发给 jail 在 `/public` 的账号 → OpenList 去找 `/public/public/Notes` →
+  `object not found` → 博客报「读不到根目录」。断言在 `scripts/test-openlist.mjs` 的 jail 一段。
 - **auto 模式绝不静默退回本地**：OpenList 已配置但连不上时 `StorageManager.resolve()` 抛
   `StorageError(503, openlist_unreachable)`，不再返回 `degraded` 的本地驱动。本地树不是 OpenList 的
   副本，断线时写进去的笔记会在 OpenList 恢复后从面板和博客里一起消失（Lead 用假 OpenList 复现过：
