@@ -1,13 +1,15 @@
-import { motion } from 'framer-motion';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CUSTOM_EFFECT_SLIDERS,
   CUSTOM_EFFECT_TOGGLES,
+  FULL_CROP,
+  cropMediaStyle,
   customBackdrop,
   customColors,
   customSwayCurve,
   resolveCustomEffect,
   sceneUnitScale,
+  type CropRect,
   type CustomEffectParams,
   type ResolvedCustomEffect,
   type ResolvedCustomWallpaper,
@@ -387,16 +389,6 @@ function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D |
   }
 }
 
-/** Does the system ask for reduced motion right now? */
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
-  } catch {
-    return false;
-  }
-}
-
 export interface CustomWallpaperProps {
   /**
    * The wallpaper settings. Only the custom fields are read, so the
@@ -405,67 +397,57 @@ export interface CustomWallpaperProps {
   settings: CustomEffectParams;
   /** The uploaded picture. Without one the neutral theme placeholder shows. */
   url?: string | null;
+  /** The part of the picture that fills the screen. */
+  crop?: CropRect;
 }
 
-export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
+/**
+ * The picture, the sway and the particles are driven by one rAF loop.
+ *
+ * They are one loop rather than a CSS/framer animation plus a particle canvas
+ * because of a bug that made the wallpaper look static: a framer-motion keyframe
+ * animation started with `initial={false}` never ran on mount, so the picture
+ * stayed pinned at its first keyframe until some later re-render happened to
+ * restart it. Writing the transform from the same loop that advances the
+ * particles makes the sway follow `customSwayCurve` exactly - the scene
+ * renderer's `oscillateposition` curve - instead of a sampled approximation.
+ *
+ * This also deliberately ignores `prefers-reduced-motion`. The scene library it
+ * copies ignores it too; the two switches in the dialog are the user's explicit
+ * way of turning the movement off, and a background sold as "the scene's sway
+ * and particles" staying frozen because Windows animations were once turned off
+ * is exactly the report this fixes.
+ */
+export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallpaperProps) {
   const effect = resolveCustomEffect(settings);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [reduced, setReduced] = useState(false);
+  /** The box the sway transform is written to; the picture is positioned in it. */
+  const frameRef = useRef<HTMLDivElement | null>(null);
   /** A picture that will not decode leaves the neutral placeholder to be the wallpaper. */
   const [failed, setFailed] = useState(false);
-  const [viewport, setViewport] = useState(() => ({
-    width: typeof window === 'undefined' ? 1280 : window.innerWidth || 1280,
-    height: typeof window === 'undefined' ? 800 : window.innerHeight || 800,
-  }));
   const picture = url && !failed ? url : null;
+  /** Whether the selection is the whole picture; the whole picture is stretched
+   *  to fill the screen, a region is positioned so that the region does. */
+  const cropped = crop.x !== 0 || crop.y !== 0 || crop.w !== 1 || crop.h !== 1;
+  /** Enlarged by twice the swing so the picture's edge never enters the frame. */
+  const baseScale = 1 + (2 * effect.amplitude) / 100 + 0.01;
 
   // The picture a failed decode replaced is a different wallpaper worth trying.
   useEffect(() => {
     setFailed(false);
   }, [url]);
 
-  // Reduced motion is read from the media query and watched: the system setting
-  // can change while the page is open.
+  // The sway and the particles. One loop owns the frame clock, the transform
+  // writes, the simulation and every listener; the cleanup puts all of it back.
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReduced(query.matches === true);
-    const onChange = () => setReduced(query.matches === true);
-    if (typeof query.addEventListener === 'function') query.addEventListener('change', onChange);
-    else {
-      const legacy = query as MediaQueryList & { addListener?: (listener: () => void) => void };
-      legacy.addListener?.(onChange);
-    }
-    return () => {
-      if (typeof query.removeEventListener === 'function') query.removeEventListener('change', onChange);
-      else {
-        const legacy = query as MediaQueryList & { removeListener?: (listener: () => void) => void };
-        legacy.removeListener?.(onChange);
-      }
-    };
-  }, []);
-
-  // The sway is sized from the window, not from layout: one read on resize.
-  useEffect(() => {
-    const measure = () => setViewport({ width: window.innerWidth || 1280, height: window.innerHeight || 800 });
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-  }, []);
-
-  const sway = useMemo(
-    () => customSwayKeyframes(effect, viewport),
-    [effect.amplitude, effect.frequency, viewport.width, viewport.height],
-  );
-
-  // The particle loop. One effect owns the canvas, the simulation and every
-  // listener; the cleanup puts all of it back.
-  useEffect(() => {
-    if (!picture || !effect.particles) return undefined;
-    const canvas = canvasRef.current;
+    if (!picture) return undefined;
+    const frame = frameRef.current;
+    const canvas = effect.particles ? canvasRef.current : null;
     const context = context2d(canvas);
-    // No 2D canvas: the picture is the wallpaper and the particles simply do not
-    // exist. Nothing to clean up.
-    if (!canvas || !context) return undefined;
+    // A picture with neither half turned on needs nothing, and neither does one
+    // whose only effect is particles in a browser with no 2D context (jsdom,
+    // SSR): the picture itself is still the wallpaper.
+    if (!frame || (!effect.sway && !context)) return undefined;
 
     const root = document.documentElement;
     const readVariable = (name: string) => {
@@ -485,27 +467,46 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
 
     let width = 1;
     let height = 1;
+    /** Sway displacement in CSS pixels, from the slider's share of the short edge. */
+    let amplitude = 0;
+    let scale = 1;
     let config = particleConfig(effect, 1);
-    let field = createCustomParticles(PARTICLE.count, config, 1, 1);
+    let field: CustomParticle[] = [];
     let raf = 0;
     let running = false;
     let last = 0;
     let time = 0;
 
+    /**
+     * One frame of the scene renderer's `oscillateposition` curve, applied to the
+     * picture's box: sin for x, cos for y, at the configured Hz.
+     */
+    const paintSway = () => {
+      if (!effect.sway) return;
+      const point = customSwayCurve(effect.frequency, time);
+      frame.style.transform =
+        `translate3d(${(point.x * amplitude).toFixed(2)}px, ${(point.y * amplitude).toFixed(2)}px, 0) scale(${scale.toFixed(4)})`;
+    };
+
     const layout = () => {
-      // A retina screen is worth two pixels per CSS pixel and no more.
-      const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-      width = Math.max(1, canvas.clientWidth || window.innerWidth || 1);
-      height = Math.max(1, canvas.clientHeight || window.innerHeight || 1);
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      // scene units/s -> px/s with the library's orthographic volume.
-      config = particleConfig(effect, sceneUnitScale(width, height));
+      width = Math.max(1, window.innerWidth || 1280);
+      height = Math.max(1, window.innerHeight || 800);
+      amplitude = (effect.amplitude / 100) * Math.min(width, height);
+      scale = 1 + (2 * effect.amplitude) / 100 + 0.01;
+      if (context && canvas) {
+        // A retina screen is worth two pixels per CSS pixel and no more.
+        const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+        canvas.width = Math.round(width * dpr);
+        canvas.height = Math.round(height * dpr);
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // scene units/s -> px/s with the library's orthographic volume.
+        config = particleConfig(effect, sceneUnitScale(width, height));
+      }
       refreshPalette();
     };
 
-    const paint = () => {
+    const paintParticles = () => {
+      if (!context) return;
       context.clearRect(0, 0, width, height);
       paintCustomParticles(context, field, particleColor, dark);
     };
@@ -516,16 +517,15 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       const delta = Math.min(64, Math.max(0, now - last));
       last = now;
       time += delta / 1000;
-      advanceCustomParticles(field, delta / 1000, time, config, width, height);
-      paint();
+      paintSway();
+      if (context) {
+        advanceCustomParticles(field, delta / 1000, time, config, width, height);
+        paintParticles();
+      }
     };
 
-    // The state that watches the media query starts at false on the very first
-    // render (the server has no way to know), so the query itself decides
-    // whether the first effect run may animate.
-    const reduceMotion = () => reduced || prefersReducedMotion();
     const start = () => {
-      if (running || reduceMotion() || document.hidden) return;
+      if (running || document.hidden) return;
       running = true;
       last = performance.now();
       raf = requestAnimationFrame(tick);
@@ -537,16 +537,24 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
     };
 
     layout();
-    field = createCustomParticles(PARTICLE.count, config, width, height);
-    paint();
+    if (context) {
+      field = createCustomParticles(PARTICLE.count, config, width, height);
+      paintParticles();
+    }
+    // The first pose is written before the first frame, so the picture starts on
+    // the curve instead of sitting untransformed for a frame.
+    paintSway();
     start();
 
     const onResize = () => {
       layout();
-      // The particles are in pixels: a new surface gets a fresh field rather
-      // than one squeezed into the old coordinates.
-      field = createCustomParticles(PARTICLE.count, config, width, height);
-      paint();
+      if (context) {
+        // The particles are in pixels: a new surface gets a fresh field rather
+        // than one squeezed into the old coordinates.
+        field = createCustomParticles(PARTICLE.count, config, width, height);
+        paintParticles();
+      }
+      paintSway();
     };
     const onVisibility = () => {
       if (document.hidden) stop();
@@ -561,7 +569,7 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
     if (typeof MutationObserver !== 'undefined') {
       observer = new MutationObserver(() => {
         refreshPalette();
-        paint();
+        paintParticles();
       });
       observer.observe(root, { attributes: true, attributeFilter: ['class'] });
     }
@@ -573,12 +581,8 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       observer?.disconnect();
     };
     // The drift numbers are what shapes the field; a change is a different field.
-  }, [picture, effect.particles, effect.rise, effect.drift, effect.direction, reduced]);
+  }, [picture, effect.sway, effect.particles, effect.amplitude, effect.frequency, effect.rise, effect.drift, effect.direction]);
 
-  const animate =
-    picture && effect.sway && !reduced
-      ? { x: sway.x, y: sway.y }
-      : undefined;
 
   return (
     <div
@@ -589,21 +593,28 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       data-custom-particles={effect.particles ? 'true' : 'false'}
     >
       {picture ? (
-        <motion.div
-          className="absolute inset-0"
-          style={{ scale: sway.scale }}
-          initial={false}
-          animate={animate}
-          transition={animate ? { duration: 1 / effect.frequency, repeat: Infinity, ease: 'linear' } : undefined}
+        // The sway is written to this box by the loop above; the picture inside
+        // it is placed by the crop rectangle, so framing and movement never
+        // fight over the same transform.
+        <div
+          ref={frameRef}
+          data-custom-image-frame
+          className="absolute inset-0 will-change-transform"
+          style={{ transform: `scale(${baseScale.toFixed(4)})` }}
         >
           <img
             src={picture}
             alt=""
             data-custom-image
-            className="absolute inset-0 h-full w-full object-cover"
+            className={
+              cropped
+                ? 'absolute max-w-none select-none'
+                : 'absolute inset-0 h-full w-full object-cover select-none'
+            }
+            style={cropped ? cropMediaStyle(crop) : undefined}
             onError={() => setFailed(true)}
           />
-        </motion.div>
+        </div>
       ) : (
         // No picture yet: a neutral theme gradient, not an editable colour field.
         <div
@@ -612,7 +623,14 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
           style={{ background: customBackdrop(customColors('', '')) }}
         />
       )}
-      {picture ? <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden /> : null}
+      {picture && effect.particles ? (
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 h-full w-full"
+          aria-hidden
+          data-custom-particles-canvas
+        />
+      ) : null}
     </div>
   );
 }

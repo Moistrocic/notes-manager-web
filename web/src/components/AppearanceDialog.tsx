@@ -23,6 +23,7 @@ import {
   acceptFor,
   clearWallpaperFile,
   shrinkWallpaperImage,
+  type CropRect,
   type CustomEffectParams,
   type WallpaperKind,
   type WallpaperSource,
@@ -64,6 +65,41 @@ const PRESETS = [
   { label: '城市夜景', url: 'https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?w=2400&q=80' },
   { label: '极简渐变', url: 'https://images.unsplash.com/photo-1557683316-973673baf926?w=2400&q=80' },
 ];
+
+/**
+ * The crop editor, shared by the media kinds and by the custom wallpaper.
+ *
+ * One block rather than two copies: "which part of the picture fills the
+ * screen" is the same question whichever kind of wallpaper is being picked, and
+ * the custom one only used to be missing it.
+ */
+function CropSection({
+  src,
+  kind,
+  crop,
+  onChange,
+  unavailable,
+}: {
+  src: string | null;
+  kind: 'image' | 'video' | 'scene';
+  crop: CropRect;
+  onChange: (crop: CropRect) => void;
+  unavailable?: string;
+}) {
+  return (
+    <section className="space-y-2.5" data-crop-section>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[12px] text-[var(--muted)]">取景区</span>
+        <span className="text-[11px] text-[var(--faint)]">框住的部分会填满屏幕</span>
+      </div>
+      {src ? (
+        <WallpaperCrop src={src} kind={kind} crop={crop} onChange={onChange} unavailable={unavailable} />
+      ) : (
+        <p className="text-[11px] text-[var(--faint)]">选择壁纸后可以在这里框选要显示的区域。</p>
+      )}
+    </section>
+  );
+}
 
 /** Wallpaper settings. Client side only, so every account can use it. */
 export function AppearanceDialog() {
@@ -452,7 +488,7 @@ export function AppearanceDialog() {
                 data-custom-preview
                 className="relative h-24 w-full overflow-hidden rounded-xl border border-[var(--line)]"
               >
-                <CustomWallpaper settings={wallpaper} url={wallpaperUrl} />
+                <CustomWallpaper settings={wallpaper} url={wallpaperUrl} crop={wallpaper.crop} />
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
@@ -481,6 +517,14 @@ export function AppearanceDialog() {
                 一张 10 MB 的照片通常只剩几百 KB。晃动与粒子参数对齐 wallpaper-scene-layers 的
                 drift / oscillateposition 语义。
               </p>
+
+              <CropSection
+                src={wallpaperUrl}
+                kind="image"
+                crop={wallpaper.crop}
+                onChange={(crop) => setWallpaper({ crop })}
+                unavailable="这张图片没有可以预览的样子。"
+              />
 
               <CustomWallpaperControls
                 value={wallpaper}
@@ -636,27 +680,15 @@ export function AppearanceDialog() {
 
             {/* Which part of the picture fills the screen. A rectangle, because a
                 zoom factor and an anchor point cannot be reasoned about together. */}
-            <section className="space-y-2.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-[12px] text-[var(--muted)]">取景区</span>
-                <span className="text-[11px] text-[var(--faint)]">框住的部分会填满屏幕</span>
-              </div>
-              {wallpaperUrl ? (
-                <WallpaperCrop
-                  // A live scene is stored as its scene.pkg, which no img can
-                  // render; the layer hands over a captured frame instead.
-                  src={wallpaper.kind === 'scene' ? scenePreview : wallpaperUrl}
-                  kind={wallpaper.kind === 'video' ? 'video' : wallpaper.kind === 'scene' ? 'scene' : 'image'}
-                  crop={wallpaper.crop}
-                  onChange={(crop) => setWallpaper({ crop })}
-                  unavailable={
-                    wallpaper.kind === 'scene' ? '正在从场景里取一帧用于预览…' : '这张壁纸没有可以预览的图片。'
-                  }
-                />
-              ) : (
-                <p className="text-[11px] text-[var(--faint)]">选择壁纸后可以在这里框选要显示的区域。</p>
-              )}
-            </section>
+            <CropSection
+              // A live scene is stored as its scene.pkg, which no img can render;
+              // the layer hands over a captured frame instead.
+              src={wallpaper.kind === 'scene' ? scenePreview : wallpaperUrl}
+              kind={wallpaper.kind === 'video' ? 'video' : wallpaper.kind === 'scene' ? 'scene' : 'image'}
+              crop={wallpaper.crop}
+              onChange={(crop) => setWallpaper({ crop })}
+              unavailable={wallpaper.kind === 'scene' ? '正在从场景里取一帧用于预览…' : '这张壁纸没有可以预览的图片。'}
+            />
 
             {/* Interface colour: taken from the picture by default, because a
                 wallpaper and an accent that fight each other look like a bug. */}

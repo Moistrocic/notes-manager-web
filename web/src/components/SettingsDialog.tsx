@@ -561,7 +561,6 @@ export function SettingsDialog() {
                   </div>
                 ) : null}
 
-                {background.kind === 'custom' ? null : (
                 <div className="space-y-2">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[12px] text-[var(--muted)]">取景区</span>
@@ -581,7 +580,6 @@ export function SettingsDialog() {
                     <p className="text-[11px] text-[var(--faint)]">选好文件后可以在这里框选要显示的区域。</p>
                   )}
                 </div>
-                )}
               </>
             ) : null}
 
@@ -597,7 +595,7 @@ export function SettingsDialog() {
               {background.kind === 'off'
                 ? '没有默认背景：每个人在「外观」里自己选。已经选过的人不会被打扰。'
                 : background.kind === 'custom'
-                  ? '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；晃动与粒子参数、暗度都以这里为准，图片是缩图后上传的。'
+                  ? '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；取景区、晃动与粒子参数、暗度都以这里为准，图片是缩图后上传的。'
                   : '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；取景区、模糊、暗度与是否实时渲染都以这里为准。'}{' '}
               改完点右下角保存。
             </p>

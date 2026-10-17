@@ -5516,10 +5516,19 @@ console.log('\nthe custom wallpaper (jsdom)');
     const realFetch = globalThis.fetch;
     globalThis.fetch = (async () => reply({})) as typeof fetch;
     canvasProto.getContext = () => null;
-    w.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+    // The component calls the global function, which this harness defines on
+    // both scopes; the spy has to replace both.
+    const globals = globalThis as unknown as {
+      requestAnimationFrame?: typeof w.requestAnimationFrame;
+      cancelAnimationFrame?: typeof w.cancelAnimationFrame;
+    };
+    const realGlobalRaf = globals.requestAnimationFrame;
+    const rafSpy = ((callback: FrameRequestCallback) => {
       rafCalls += 1;
       return realRaf.call(w, callback);
     }) as typeof w.requestAnimationFrame;
+    w.requestAnimationFrame = rafSpy;
+    globals.requestAnimationFrame = rafSpy;
     const host = document.createElement('div');
     document.body.appendChild(host);
     const root = createRoot(host);
@@ -5540,23 +5549,36 @@ console.log('\nthe custom wallpaper (jsdom)');
         'https://cdn.example.com/custom.webp',
       );
       check('and a canvas for the particles', Boolean(host.querySelector('[data-custom-particles]')), true);
-      check('which does not animate without a canvas context', rafCalls, 0);
+      // The sway is written from the same loop as the particles and needs no 2D
+      // context: without one the picture still moves.
+      check('the sway starts without a canvas context', rafCalls > 0, true);
+      const frame = () => host.querySelector<HTMLElement>('[data-custom-image-frame]');
+      const firstFrame = frame()?.style.transform ?? '';
+      await settled(60);
+      check('and the frame is a transform away from where it started', (frame()?.style.transform ?? '') !== firstFrame, true);
+      check('written on the frame, not on the picture', (frame()?.style.transform ?? '').includes('translate3d'), true);
+      check(
+        'so the picture is free to be cropped',
+        (host.querySelector<HTMLElement>('[data-custom-image]')?.style.transform ?? ''),
+        '',
+      );
 
-      // No picture: the colour field is the wallpaper, and it is a CSS gradient.
+      // No picture: the placeholder is the wallpaper, and the sway keeps running
+      // on the frame - an explicit effect switch is what turns it off.
       await act(async () => {
         appStore.setState({ wallpaperUrl: null } as never);
       });
       await flush();
       check('without a picture there is no image', Boolean(host.querySelector('[data-custom-image]')), false);
-      // The custom wallpaper is a picture now: with nothing imported there is a
-      // theme-gradient placeholder saying so instead of a drawn colour field.
       check('and a placeholder says a picture is needed', Boolean(host.querySelector('[data-custom-placeholder]')), true);
       check(
         'drawn from the theme gradient',
         (host.querySelector('[data-custom-placeholder]')?.getAttribute('style') ?? '').includes('gradient'),
         true,
       );
-      check('still without a frame of animation', rafCalls, 0);
+      const beforeStall = rafCalls;
+      await settled(60);
+      check('the sway still runs over the placeholder', rafCalls > beforeStall, true);
     } finally {
       await act(async () => {
         root.unmount();
@@ -5565,6 +5587,7 @@ console.log('\nthe custom wallpaper (jsdom)');
       canvasProto.getContext = realGetContext;
       w.requestAnimationFrame = realRaf;
       w.cancelAnimationFrame = realCancel;
+      globals.requestAnimationFrame = realGlobalRaf;
       globalThis.fetch = realFetch;
       appStore.setState(hold);
     }
@@ -5639,15 +5662,24 @@ console.log('\nthe custom wallpaper (jsdom)');
       return { host, root };
     };
     try {
-      const still = await renderLayer(true);
-      check('reduced motion does not animate the wallpaper', scheduled, 0);
+      // Reduced motion is a preference, not an order: the scene library keeps
+      // animating too, and the two switches are the explicit control. So the
+      // loop is still scheduled and both halves still move.
+      const reduced = await renderLayer(true);
+      check('reduced motion still animates the wallpaper', scheduled > 0, true);
+      check(
+        'and the picture is transformed as it goes',
+        (reduced.host.querySelector<HTMLElement>('[data-custom-image-frame]')?.style.transform ?? '').includes('translate3d'),
+        true,
+      );
       await act(async () => {
-        still.root.unmount();
+        reduced.root.unmount();
       });
-      still.host.remove();
+      reduced.host.remove();
 
+      const beforeMoving = scheduled;
       const moving = await renderLayer(false);
-      check('with a canvas the particles animate', scheduled > 0, true);
+      check('and so does it without the preference', scheduled > beforeMoving, true);
       const stopsBefore = cancelled;
       await act(async () => {
         moving.root.unmount();
@@ -5661,6 +5693,95 @@ console.log('\nthe custom wallpaper (jsdom)');
       globals.requestAnimationFrame = realGlobalRaf;
       globals.cancelAnimationFrame = realGlobalCancel;
       w.matchMedia = realMatchMedia;
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
+/* --- the crop rectangle is a window on the picture ------------------------ */
+  {
+    const { Wallpaper } = await import('./src/components/Wallpaper');
+    const { cropMediaStyle } = await import('./src/lib/wallpaper');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      // A cropped picture is placed by its rectangle: width / height / offset,
+      // which is the same helper the picture and video kinds use.
+      const crop = { x: 0.25, y: 0.1, w: 0.5, h: 0.5 };
+      appStore.setState({
+        appearanceOpen: false,
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', crop },
+        wallpaperUrl: 'https://cdn.example.com/custom.webp',
+      } as never);
+      await act(async () => {
+        root.render(React.createElement(Wallpaper));
+      });
+      await flush();
+      const image = () => host.querySelector<HTMLElement>('[data-custom-image]');
+      const expected = cropMediaStyle(crop) as unknown as Record<string, string>;
+      check(
+        'a cropped custom picture is placed by the crop rectangle',
+        [image()?.style.width, image()?.style.height, image()?.style.left, image()?.style.top],
+        [expected.width, expected.height, expected.left, expected.top],
+      );
+      check('and not object-cover, which would crop it again', (image()?.className ?? '').includes('object-cover'), false);
+
+      // The full rectangle is the default: the picture covers the frame itself.
+      appStore.setState({
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', crop: { x: 0, y: 0, w: 1, h: 1 } },
+      } as never);
+      await flush();
+      check('a full rectangle is object-cover', (image()?.className ?? '').includes('object-cover'), true);
+      check('with no inline placement', image()?.style.width, '');
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
+/* --- and it is framed in the dialogs too --------------------------------- */
+  {
+    const { AppearanceDialog } = await import('./src/components/AppearanceDialog');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    appStore.setState({
+      appearanceOpen: true,
+      adminBackground: null,
+      wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom' },
+      wallpaperUrl: null,
+    } as never);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(React.createElement(AppearanceDialog));
+      });
+      await flush();
+      const section = () => host.querySelector('[data-crop-section]');
+      check('the custom wallpaper has a crop section', Boolean(section()), true);
+      check('which asks for a picture first', section()?.querySelectorAll('[aria-label^="调整 "]').length ?? 0, 0);
+      // With the picture it has the same eight handles as every other kind.
+      await act(async () => {
+        appStore.setState({ wallpaperUrl: 'https://cdn.example.com/custom.webp' } as never);
+      });
+      await flush();
+      check('with a picture it has the eight handles', section()?.querySelectorAll('[aria-label^="调整 "]').length ?? 0, 8);
+      check('and says how to use them', (section()?.textContent ?? '').includes('拖动方框'), true);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
       globalThis.fetch = realFetch;
       appStore.setState(hold);
     }
@@ -5698,6 +5819,7 @@ console.log('\nthe custom wallpaper (jsdom)');
         customParticleRise: 120,
         customParticleDrift: 310,
         customParticleDirection: 0.4,
+        crop: { x: 0.1, y: 0.2, w: 0.6, h: 0.6 },
       }) as never,
     );
     check(
@@ -5716,6 +5838,7 @@ console.log('\nthe custom wallpaper (jsdom)');
       ['custom', 'https://cdn.example.com/bg.webp', false, 6, 0.3, true, 120, 310, 0.4],
     );
     check('and takes the darkness from the administrator', [custom.dim, custom.blur], [0.4, 3]);
+    check('and the crop the administrator framed', custom.crop, { x: 0.1, y: 0.2, w: 0.6, h: 0.6 });
     const legacy = shownWallpaper(DEFAULT_WALLPAPER, admin('custom', {}) as never);
     check(
       'a settings file from before the seven controls gets the defaults',

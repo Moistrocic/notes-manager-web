@@ -59,16 +59,19 @@ export function shownWallpaper(settings: WallpaperSettings, admin: AdminBackgrou
     return { ...settings, kind: 'none', source: 'url', url: '', auroraA: admin.options.auroraA, auroraB: admin.options.auroraB };
   }
   if (admin.kind === 'custom') {
-    // The custom background carries its own sway and particle numbers; the
-    // framing knobs (crop, blur) belong to pictures and videos and mean nothing
-    // here. resolveCustomEffect() fills in whatever the administrator's settings
-    // file predates, so the layer always receives a complete set.
+    // The custom background carries its own sway and particle numbers, and its
+    // own crop: the picture is the wallpaper, so which part of it fills the
+    // screen is the administrator's call exactly as it is for a plain image.
+    // Blur stays out of it - the picture is drawn through the sway transform and
+    // a blurred sway looks like a rendering fault. resolveCustomEffect() fills in
+    // whatever the administrator's settings file predates.
     const effect = resolveCustomEffect(admin.options);
     return {
       ...settings,
       kind: 'custom',
       source: 'url',
       url: admin.url,
+      crop: admin.options.crop,
       dim: admin.options.dim,
       customSway: effect.sway,
       customSwayAmplitude: effect.amplitude,

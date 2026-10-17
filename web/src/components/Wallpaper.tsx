@@ -360,7 +360,7 @@ export function Wallpaper() {
   if (wallpaper.kind === 'custom') {
     return (
       <div className="wallpaper-layer" aria-hidden>
-        <CustomWallpaper settings={wallpaper} url={url} />
+        <CustomWallpaper settings={wallpaper} url={url} crop={wallpaper.crop} />
         <div className="wallpaper-scrim" style={{ opacity: wallpaper.dim }} />
       </div>
     );
