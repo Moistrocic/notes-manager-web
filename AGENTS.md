@@ -41,7 +41,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 公式（KaTeX）与 markdown 渲染规则 | `web/src/lib/markdown.ts`：五条 tokenizer/renderer 扩展（`$$…$$` 块级与单行、`$…$`、`\[…\]`、`\(…\)`）、`PURIFY_CONFIG`（html + mathMl + svg profile）、只放行 `.katex` 里 `style` 的 hook |
 | 排序优先级（四个键的先后） | store 的 `sortKeys` / `normaliseSortKeys` / `setSortKeys` / `moveSortKey` + `NoteTree.tsx` 的 `compareNotes`（树与列表共用）；localStorage `notes-manager-sort-keys`，旧键 `notes-manager-sort` 同步写 |
 | 大纲折叠 | `web/src/lib/outline.ts` 的 `buildOutlineTree` / `collapsibleHeadingIndexes` / `visibleOutlineRows` + `OutlinePanel.tsx`（默认收起、全部展开/收起；导航仍用扁平 index） |
-| 壁纸（含自定义壁纸） | `web/src/lib/wallpaper.ts` + `components/Wallpaper.tsx` + `components/CustomWallpaper.tsx`（Canvas 自绘）+ `AppearanceDialog.tsx`；管理员默认背景在 `lib/admin-background.ts` + `SettingsDialog.tsx` |
+| 壁纸（含自定义壁纸） | `web/src/lib/wallpaper.ts` + `components/Wallpaper.tsx` + `components/CustomWallpaper.tsx`（rAF 写 transform + 库 ParticleSystem 画粒子）+ `web/src/lib/scene/pkg-wallpaper.ts`（.pkg → layer 0 贴图 → 回退 `renderSceneStill` → 缩图）+ `AppearanceDialog.tsx`；管理员默认背景在 `lib/admin-background.ts` + `SettingsDialog.tsx` |
 | 「新建笔记」的默认目录 | store 的 `lastFolder`（`selectNote` 记笔记所在目录、树里点文件夹记该路径；`renameFolder` / `moveFolder` 跟随、`deleteFolder` 清空）+ `NoteList.tsx` 的 `lastFolder → newNoteFolder`（目录不在列表里时回退根目录） |
 | 分栏两侧的滚动同步 | `web/src/lib/scroll-sync.ts`（源码行 ⇄ 预览位置的映射）+ `markdown.ts` 的 `sourceBlocks` / `annotateSourceLines` + `Editor.tsx` 里的 `data-sync-scroll` 按钮与监听 |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
@@ -129,6 +129,11 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 - **自定义壁纸「有图片才动」，且不再被 reduced-motion 停掉**：晃动由一个 rAF 循环直接写
   `[data-custom-image-frame]` 的 `transform`（与粒子同一个循环，按库的 `oscillateposition` 精确算），
   粒子画在 `[data-custom-particles]` 上；没有 2D 上下文时晃动照常跑、只是不画粒子。
+  粒子**不是手写噪声**：用库的 `ParticleSystem`（`createLibraryParticles`）跑仿真，`buildVertices`
+  取四边形、实测的 halo 贴图 + `globalCompositeOperation='lighter'` 加色绘制，再挂一个 glow
+  子发射器（放大 ~20 倍、全屏时 alpha 压到 0.02–0.06）；开屏前 `warmUpLibraryParticles` 预热
+  3.2 秒（预设 starttime 是 3s）。断言里先固定 `Math.random`（mulberry32）再取统计量，
+  否则 aliveCount / 尺寸类断言会偶发红。
   `prefers-reduced-motion` **不整体停用**（场景库也一样会动），显式开关
   （`customSway` / `customShowParticles`）才是唯一的停用方式——断言里「reduced-motion 下 0 次 rAF」
   已翻成「仍然调度、transform 帧间变化」。没有图片时仍渲染 `[data-custom-placeholder]` 主题渐变占位。
@@ -136,6 +141,14 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   否则切走壁纸后还在画；DPR 上限 2。
 - **别再用 framer-motion 的 keyframes 做壁纸晃动**：首挂那次动画不启动，背景图会停在第一帧
   （真实 Chromium 上肉眼可见）；要「挂上就动、暂停能停、卸载能清」就用 rAF 自己写 transform。
+- **自定义壁纸的导入也收 `.pkg`**：`lib/scene/pkg-wallpaper.ts` 走 `scene.json → layer → model →
+  material → passes[].textures[0]` 找 `materials/<name>.tex`（引擎内置贴图如 `particle/halo`
+  不在包里，会继续找下一张），取**不超过 4096 的 mip**、非 2 次幂的 RGBA 裁回真实尺寸；
+  PNG/JPEG 直接取字节，其余用库的纹理解码器。取不到就走 `renderSceneStill` 渲一帧，再走缩图。
+  错误消息要能看懂：「这不是 .pkg 场景包」「这个场景包是空的」「这个文件不是 Wallpaper Engine
+  的场景包（scene.pkg）」。测试用 `data/backgrounds/rossi.pkg`（gitignored，本机有）。
+- **两个自定义壁纸的预览区已经删掉，别再找 `[data-custom-preview]` / `[data-admin-custom-preview]`**
+  （用户要求去掉，取景区 `[data-crop-section]` 就是唯一的画面）；断言要断言它们**不存在**。
 - **自定义壁纸的取景区与晃动写在不同元素上**：图片按 `cropMediaStyle(crop)`（width/height/left/top）
   摆在自己的 img 上，晃动写在外层 frame 的 transform 上（满幅时才用 `object-cover`）——
   两者不能写同一个元素，否则一次晃动会把取景覆盖掉。外观对话框与管理员设置都渲染同一个
