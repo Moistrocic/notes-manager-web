@@ -10,15 +10,19 @@ import {
   KeyRound,
   RefreshCw,
   Save,
+  Upload,
   UserRound,
   Wand2,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, backgroundFileUrl } from '../lib/api';
 import { cn } from '../lib/cn';
+import { formatBytes } from '../lib/format';
 import { sceneStillUrl } from '../lib/scene/render-still';
 import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
+import { CUSTOM_DEFAULTS, shrinkWallpaperImage } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
+import { CustomWallpaper, CustomWallpaperControls } from './CustomWallpaper';
 import { StatusDetail, StatusPill } from './StatusPill';
 import { WallpaperCrop } from './WallpaperCrop';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
@@ -32,9 +36,27 @@ const BACKGROUND_KINDS: { value: BackgroundSettings['kind']; label: string; hint
   { value: 'image', label: '图片', hint: 'JPG / PNG / WebP / GIF' },
   { value: 'video', label: '视频', hint: 'MP4 / WebM' },
   { value: 'scene', label: '场景壁纸', hint: 'Wallpaper Engine 的 .pkg，可实时渲染' },
+  { value: 'custom', label: '自定义壁纸', hint: '图片 + 缓慢晃动 + 粒子，图片先缩图再上传' },
 ];
 
-const KIND_LABELS: Record<string, string> = { image: '图片', video: '视频', scene: '场景壁纸' };
+const KIND_LABELS: Record<string, string> = {
+  image: '图片',
+  video: '视频',
+  scene: '场景壁纸',
+  custom: '自定义壁纸',
+};
+
+/**
+ * Which file kind a background kind is chosen from.
+ *
+ * The custom background is a picture like any other: what makes it custom is
+ * the motion and particles drawn over it, not a different file format.
+ */
+function fileKindFor(kind: BackgroundSettings['kind']): 'image' | 'video' | 'scene' | null {
+  if (kind === 'custom') return 'image';
+  if (kind === 'image' || kind === 'video' || kind === 'scene') return kind;
+  return null;
+}
 
 const DEFAULT_BACKGROUND: BackgroundSettings = {
   kind: 'off',
@@ -46,15 +68,17 @@ const DEFAULT_BACKGROUND: BackgroundSettings = {
   dynamic: false,
   auroraA: '',
   auroraB: '',
+  customDrift: CUSTOM_DEFAULTS.drift,
+  customSpeed: CUSTOM_DEFAULTS.speed,
+  customDensity: CUSTOM_DEFAULTS.density,
+  customParticleSize: CUSTOM_DEFAULTS.particleSize,
+  customParticleOpacity: CUSTOM_DEFAULTS.particleOpacity,
+  customParticleLife: CUSTOM_DEFAULTS.particleLife,
+  customParticleSpeed: CUSTOM_DEFAULTS.particleSpeed,
+  customParticleTurbulence: CUSTOM_DEFAULTS.particleTurbulence,
+  customParticleColor: CUSTOM_DEFAULTS.particleColor,
+  customParticleWind: CUSTOM_DEFAULTS.particleWind,
 };
-
-/** A file size, for a list of files nobody wants to read in bytes. */
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
 
 /** A file name inside a sentence, so the paths read as paths. */
 function Code({ children }: { children: React.ReactNode }) {
@@ -94,6 +118,9 @@ export function SettingsDialog() {
   const [blogEnabled, setBlogEnabled] = useState(false);
   /** A composited frame of the scene being picked, for the crop editor. */
   const [cropStill, setCropStill] = useState<string | null>(null);
+  /** The custom background's picture picker. */
+  const backgroundFileRef = useRef<HTMLInputElement | null>(null);
+  const [uploadingBackground, setUploadingBackground] = useState(false);
   // Reported by /api/system/status, so it is the running server's own version.
   const version = useAppStore((s) => s.status?.version);
 
@@ -160,20 +187,53 @@ export function SettingsDialog() {
   const envLocked = (key: string) => payload?.effective.sources?.[key] === 'env';
 
   /** A file kind needs a file; the theme's own background does not. */
-  const needsFile = background.kind === 'image' || background.kind === 'video' || background.kind === 'scene';
+  const expectedFileKind = fileKindFor(background.kind);
+  const needsFile = expectedFileKind !== null;
   const available = adminBackground?.available ?? [];
-  const matchingFiles = needsFile ? available.filter((entry) => entry.kind === background.kind) : [];
+  const matchingFiles = needsFile ? available.filter((entry) => entry.kind === expectedFileKind) : [];
   const backgroundsDir = payload ? `${payload.paths.dataDir}/backgrounds` : 'data/backgrounds';
   const kindLabel = (kind: BackgroundSettings['kind']) => KIND_LABELS[kind] ?? '背景';
 
   /** Choosing a kind also chooses a file, when there is one of that kind. */
   const chooseKind = (kind: BackgroundSettings['kind']) => {
+    const fileKind = fileKindFor(kind);
     setBackground((current) => {
-      if (kind !== 'image' && kind !== 'video' && kind !== 'scene') return { ...current, kind, file: '' };
-      const kept = available.find((entry) => entry.kind === kind && entry.name === current.file);
-      const first = kept ?? available.find((entry) => entry.kind === kind);
+      if (!fileKind) return { ...current, kind, file: '' };
+      const kept = available.find((entry) => entry.kind === fileKind && entry.name === current.file);
+      const first = kept ?? available.find((entry) => entry.kind === fileKind);
       return { ...current, kind, file: first?.name ?? '' };
     });
+  };
+
+  /**
+   * Imports the administrator's picture for the custom background.
+   *
+   * Shrunk in the browser first, exactly like the personal one: uploading the
+   * original would make every visitor download a 12 MB file for a background
+   * that is never seen at its full size.
+   */
+  const uploadCustomBackground = async (file: File | undefined) => {
+    if (!file) return;
+    setUploadingBackground(true);
+    try {
+      const shrunk = await shrinkWallpaperImage(file);
+      const stored = await api.uploadBackground(
+        new File([shrunk.blob], shrunk.fileName, { type: shrunk.blob.type || 'image/webp' }),
+        shrunk.fileName,
+      );
+      await refreshAdminBackground();
+      setBackground((current) => ({ ...current, kind: 'custom', file: stored.file.name }));
+      pushToast({
+        title: '背景图片已上传',
+        message: `${formatBytes(shrunk.before)} → ${formatBytes(shrunk.after)}，已选为自定义壁纸（点保存生效）`,
+        tone: 'success',
+      });
+    } catch (err) {
+      pushToast({ title: '背景图片上传失败', message: (err as Error).message, tone: 'error' });
+    } finally {
+      setUploadingBackground(false);
+      if (backgroundFileRef.current) backgroundFileRef.current.value = '';
+    }
   };
 
   // The picture the crop editor draws over: the file itself, or - for a scene,
@@ -182,6 +242,25 @@ export function SettingsDialog() {
   /** The size is part of the cache key: a replaced file is a different frame. */
   const previewBytes = available.find((entry) => entry.name === background.file)?.bytes ?? 0;
   const cropSource = background.kind === 'scene' ? cropStill : previewUrl;
+  /**
+   * The framing controls. Blur is a picture/video knob; the custom background
+   * is drawn from a picture that is already softened by its own drift, so only
+   * the scrim (暗度) applies to it.
+   */
+  const framingControls: ReadonlyArray<{
+    key: 'blur' | 'dim';
+    label: string;
+    min: number;
+    max: number;
+    step: number;
+    suffix: string;
+  }> =
+    background.kind === 'custom'
+      ? [{ key: 'dim', label: '暗度', min: 0, max: 0.85, step: 0.05, suffix: '' }]
+      : [
+          { key: 'blur', label: '模糊', min: 0, max: 40, step: 1, suffix: 'px' },
+          { key: 'dim', label: '暗度', min: 0, max: 0.85, step: 0.05, suffix: '' },
+        ];
 
   useEffect(() => {
     if (!open || background.kind !== 'scene' || !previewUrl) {
@@ -366,6 +445,48 @@ export function SettingsDialog() {
               </div>
             ) : null}
 
+            {/* The custom background: a picture the administrator uploads (the
+                browser shrinks it first), plus the same motion and particle
+                controls the appearance dialog offers. */}
+            {background.kind === 'custom' ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    ref={backgroundFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    data-background-import
+                    onChange={(event) => void uploadCustomBackground(event.target.files?.[0])}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={uploadingBackground}
+                    onClick={() => backgroundFileRef.current?.click()}
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    导入图片（缩图后上传）
+                  </Button>
+                  <span className="text-[11px] text-[var(--faint)]">
+                    也可以把图片放进 backgrounds/ 再点「重新读取」
+                  </span>
+                </div>
+                <div
+                  role="img"
+                  aria-label="默认自定义壁纸预览"
+                  data-admin-custom-preview
+                  className="relative h-24 w-full overflow-hidden rounded-xl border border-[var(--line)]"
+                >
+                  <CustomWallpaper settings={background} url={previewUrl} />
+                </div>
+                <CustomWallpaperControls
+                  value={background}
+                  onChange={(patch) => setBackground((current) => ({ ...current, ...patch }))}
+                />
+              </div>
+            ) : null}
+
             {background.kind === 'aurora' ? (
               <div className="flex flex-wrap items-center gap-3">
                 {(
@@ -402,12 +523,7 @@ export function SettingsDialog() {
             {needsFile ? (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {(
-                    [
-                      { key: 'blur' as const, label: '模糊', min: 0, max: 40, step: 1, suffix: 'px' },
-                      { key: 'dim' as const, label: '暗度', min: 0, max: 0.85, step: 0.05, suffix: '' },
-                    ] as const
-                  ).map((control) => (
+                  {framingControls.map((control) => (
                     <label key={control.key} className="space-y-1.5">
                       <span className="flex items-center justify-between text-[12px] text-[var(--muted)]">
                         <span>{control.label}</span>
@@ -448,6 +564,7 @@ export function SettingsDialog() {
                   </div>
                 ) : null}
 
+                {background.kind === 'custom' ? null : (
                 <div className="space-y-2">
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[12px] text-[var(--muted)]">取景区</span>
@@ -467,6 +584,7 @@ export function SettingsDialog() {
                     <p className="text-[11px] text-[var(--faint)]">选好文件后可以在这里框选要显示的区域。</p>
                   )}
                 </div>
+                )}
               </>
             ) : null}
 
@@ -481,7 +599,9 @@ export function SettingsDialog() {
             <p className="text-[11px] leading-relaxed text-[var(--faint)]">
               {background.kind === 'off'
                 ? '没有默认背景：每个人在「外观」里自己选。已经选过的人不会被打扰。'
-                : '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；取景区、模糊、暗度与是否实时渲染都以这里为准。'}{' '}
+                : background.kind === 'custom'
+                  ? '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；晃动与粒子参数、暗度都以这里为准，图片是缩图后上传的。'
+                  : '所有人的「外观 → 背景」都会用这套设置，并且可以自己关掉开关改用个人选择；取景区、模糊、暗度与是否实时渲染都以这里为准。'}{' '}
               改完点右下角保存。
             </p>
           </div>

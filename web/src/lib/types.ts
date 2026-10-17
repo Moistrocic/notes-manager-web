@@ -253,7 +253,7 @@ export interface NoteCapabilities {
 
 /** What the server stores about the administrator's default background. */
 export interface BackgroundSettings extends BackgroundOptions {
-  kind: 'off' | 'aurora' | 'image' | 'video' | 'scene';
+  kind: 'off' | 'aurora' | 'image' | 'video' | 'scene' | 'custom';
   file: string;
   note: string;
 }

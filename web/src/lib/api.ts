@@ -211,7 +211,7 @@ export const api = {
     request<{
       configured: boolean;
       file: string | null;
-      kind: 'aurora' | 'image' | 'video' | 'scene' | null;
+      kind: 'aurora' | 'image' | 'video' | 'scene' | 'custom' | null;
       bytes: number;
       /** Content hash of the configured file, for cache keys. */
       hash: string | null;
@@ -219,6 +219,42 @@ export const api = {
       options: BackgroundOptions;
       available: BackgroundFile[];
     }>('/background'),
+
+  /**
+   * Uploads the administrator's custom background picture.
+   *
+   * Raw bytes with the name in a header, like the note and font uploads: the
+   * browser sends exactly the bytes the server stores, and no multipart parser
+   * is needed for one file. The server sniffs the image format and decides the
+   * stored extension, so this name is only a label. The client shrinks the
+   * picture before calling this - an unreduced photo never leaves the browser.
+   */
+  uploadBackground: async (file: Blob, fileName: string) => {
+    const response = await fetch(`${API_ROOT}/background`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'X-Background-Filename': encodeURIComponent(fileName),
+      },
+      body: file,
+    });
+    const text = await response.text();
+    let payload: { error?: { message?: string; code?: string } } & Record<string, unknown> = {};
+    try {
+      payload = text ? (JSON.parse(text) as typeof payload) : {};
+    } catch {
+      payload = {};
+    }
+    if (!response.ok) {
+      throw new ApiError(
+        payload.error?.message ?? `背景上传失败 (${response.status})`,
+        response.status,
+        payload.error?.code ?? 'background_upload',
+      );
+    }
+    return payload as unknown as { file: BackgroundFile; available: BackgroundFile[] };
+  },
 
   listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),
   deleteTrashFolder: (path: string) =>

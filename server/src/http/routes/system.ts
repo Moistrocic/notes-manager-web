@@ -8,7 +8,22 @@ import type { AppSettings } from '../../config.js';
 const log = createLogger('routes:system');
 const startedAt = Date.now();
 
-const KIND_LABELS: Record<string, string> = { image: '图片', video: '视频', scene: '场景壁纸' };
+const KIND_LABELS: Record<string, string> = {
+  image: '图片',
+  video: '视频',
+  scene: '场景壁纸',
+  custom: '自定义壁纸',
+};
+
+/**
+ * The kind of file a background kind is built from.
+ *
+ * The custom background is a picture: what makes it custom is the motion and
+ * particles the browser draws over it, not a different container.
+ */
+function fileKindOf(kind: string): string | null {
+  return kind === 'custom' ? 'image' : kind;
+}
 
 /**
  * Checks a background choice against the files that are actually there.
@@ -32,7 +47,8 @@ function validateBackground(services: Services, body: Partial<AppSettings>): { m
       code: 'background_missing',
     };
   }
-  if (file.kind !== wanted.kind) {
+  const expected = fileKindOf(wanted.kind);
+  if (file.kind !== expected) {
     return {
       message: `「${file.name}」是${KIND_LABELS[file.kind]}，不能当作${KIND_LABELS[wanted.kind]}使用`,
       code: 'background_kind_mismatch',

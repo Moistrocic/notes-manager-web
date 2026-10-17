@@ -296,6 +296,130 @@ check('anything else is nothing', kindOf('notes.md'), null);
 }
 
 /* -------------------------------------------------------------------------- */
+/* The custom background: the upload route and the settings                   */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('custom background');
+
+{
+  // Imported here rather than at the top: this section runs before the express
+  // import the app sections below use.
+  const express = (await import('express')).default;
+  const { backgroundRoutes } = await import(
+    `file://${path.join(HERE, '..', 'server', 'dist', 'http', 'routes', 'background.js').replace(/\\/g, '/')}`,
+  );
+  const { systemRoutes } = await import(
+    `file://${path.join(HERE, '..', 'server', 'dist', 'http', 'routes', 'system.js').replace(/\\/g, '/')}`,
+  );
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-bg-upload-'));
+  try {
+    const store = new BackgroundStore(dir);
+    const settings = new SettingsStore(dir);
+    const session = { role: 'admin' };
+    let anonymous = false;
+    const services = {
+      backgrounds: store,
+      settings,
+      config: { version: '1.5.0', basePath: '', publicUrl: '' },
+      storage: {
+        status: async () => ({ driver: 'local', mode: 'local', displayRoot: dir, degraded: false, detail: 'test' }),
+        probeOpenList: async () => ({ reachable: false, initialized: false, configured: false }),
+        // The settings handler invalidates the cached probe and the note caches.
+        invalidateProbe() {},
+      },
+      notes: { clearCaches() {} },
+      auth: { localEnabled: true },
+    };
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.session = anonymous ? null : session;
+      next();
+    });
+    app.use('/api/background', backgroundRoutes(services));
+    app.use('/api/system', systemRoutes(services));
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+    const post = async (bytes, headers = {}) => {
+      const response = await fetch(origin + '/api/background', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', ...headers },
+        body: bytes,
+      });
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
+    const putSettings = async (background) => {
+      const response = await fetch(origin + '/api/system/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ background }),
+      });
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
+    try {
+      // The bytes decide the format; the name only supplies a label.
+      const webp = Buffer.concat([
+        Buffer.from('RIFF', 'latin1'),
+        Buffer.from([0x1a, 0, 0, 0]),
+        Buffer.from('WEBP', 'latin1'),
+        Buffer.from('VP8 ', 'latin1'),
+        Buffer.alloc(64, 7),
+      ]);
+      anonymous = true;
+      check('an anonymous upload is refused', (await post(webp, { 'X-Background-Filename': 'x.png' })).status, 401);
+      anonymous = false;
+      session.role = 'guest';
+      check('a guest may not upload a background', (await post(webp, { 'X-Background-Filename': 'x.png' })).status, 403);
+      session.role = 'admin';
+      const empty = await post(Buffer.alloc(0), { 'X-Background-Filename': 'x.png' });
+      check('an empty upload is refused', [empty.status, empty.payload.error.code], [400, 'empty_body']);
+      const notPicture = await post(Buffer.from('this is not a picture'), { 'X-Background-Filename': 'x.png' });
+      check('a file that is not a picture is refused', [notPicture.status, notPicture.payload.error.code], [400, 'invalid_background']);
+      const uploaded = await post(webp, { 'X-Background-Filename': encodeURIComponent('我的背景.png') });
+      check('a picture goes in', [uploaded.status, uploaded.payload.file.name], [201, '我的背景.webp']);
+      check('its format comes from the bytes, not the name', [uploaded.payload.file.kind, uploaded.payload.file.bytes], ['image', webp.length]);
+      check('and it joins the list', uploaded.payload.available.some((file) => file.name === '我的背景.webp'), true);
+      const served = await fetch(origin + '/api/background/file?name=' + encodeURIComponent('我的背景.webp'));
+      const servedBytes = Buffer.from(await served.arrayBuffer());
+      check('and is served back byte for byte', [served.status, Buffer.compare(servedBytes, webp)], [200, 0]);
+
+      // Choosing it as the default background: kind custom names an image file.
+      const chosen = await putSettings({ ...settings.effective().background, kind: 'custom', file: '我的背景.webp' });
+      check('a custom default background is saved', chosen.status, 200);
+      const readBack = await (await fetch(origin + '/api/background')).json();
+      check('and read back as the configured background', [readBack.kind, readBack.file], ['custom', '我的背景.webp']);
+      check(
+        'with the motion defaults the layer draws',
+        [readBack.options.customDrift, readBack.options.customSpeed, readBack.options.customParticleWind],
+        [0.5, 1, 90],
+      );
+      const missing = await putSettings({ ...settings.effective().background, kind: 'custom', file: 'gone.png' });
+      check('a file that is not there is refused', [missing.status, missing.payload.error.code], [400, 'background_missing']);
+      writeFileSync(path.join(store.dir, 'clip.mp4'), Buffer.alloc(64));
+      const mismatch = await putSettings({ ...settings.effective().background, kind: 'custom', file: 'clip.mp4' });
+      check('a video cannot stand in for the picture', [mismatch.status, mismatch.payload.error.code], [400, 'background_kind_mismatch']);
+      const off = await putSettings({ ...settings.effective().background, kind: 'off', file: '' });
+      check('and turning it off is saved', off.status, 200);
+      check('as no background at all', (await (await fetch(origin + '/api/background')).json()).configured, false);
+
+      // A hand-edited settings file cannot put the canvas out of range.
+      settings.update({ background: { ...settings.effective().background, kind: 'custom', file: '我的背景.webp', customDrift: 9, customParticleWind: 400, customDensity: 999 } });
+      const clamped = settings.effective().background;
+      check('wild custom numbers are clamped on the way in', [clamped.customDrift, clamped.customParticleWind, clamped.customDensity], [1, 360, 240]);
+      // (The upload's 20 MB ceiling is a raw-body parser limit and the browser
+      // shrinks before sending, so no test here sends a file that big.)
+    } finally {
+      const closed = new Promise((resolve) => server.close(resolve));
+      server.closeAllConnections?.();
+      await closed;
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* Guest access                                                                */
 /* -------------------------------------------------------------------------- */
 const { AuthService } = await import(`file://${path.join(HERE, '..', 'server', 'dist', 'auth', 'service.js').replace(/\\/g, '/')}`);
@@ -602,6 +726,43 @@ console.log('note rename + folder move');
     check('the note keeps its id and body', [combined.payload.note.id, combined.payload.note.content.trimEnd()], [inFolder.payload.note.id, '计划正文']);
     check('the new file is on disk', onDisk('/归档/Plan-B.md'), true);
     check('the old file is gone', onDisk('/项目/计划.md'), false);
+
+    /* ---- a folder path can be several levels deep ----------------------- */
+    // The dialog lets a new note name a folder that does not exist yet; the
+    // server makes every level of it on the way - a/b/c is three directories, not
+    // an error about a missing a/b.
+    const nested = await call('POST', '/folders', { path: '层级/子级/末端' });
+    check(
+      'a folder path makes every level on the way',
+      [nested.status, folderPaths(nested.payload).includes('层级/子级/末端')],
+      [201, true],
+    );
+    check(
+      'and all three are directories on disk',
+      [onDisk('/层级'), onDisk('/层级/子级'), onDisk('/层级/子级/末端')],
+      [true, true, true],
+    );
+    // Slashes are normalised rather than refused: a stray one is not a different
+    // folder.
+    const slashed = await call('POST', '/folders', { path: '/层级//另一层/' });
+    check('stray slashes are one separator', [slashed.status, folderPaths(slashed.payload).includes('层级/另一层')], [201, true]);
+
+    // A path that tries to climb out of the notes root is refused outright: the
+    // normaliser would drop the segment, and quietly creating a different folder
+    // than the one asked for is worse than saying no.
+    const climbingRoot = await call('POST', '/folders', { path: '../escape' });
+    check(
+      'a folder path cannot climb out of the root',
+      [climbingRoot.status, climbingRoot.payload.error.code],
+      [400, 'invalid_folder'],
+    );
+    const climbingMiddle = await call('POST', '/folders', { path: '层级/../escape' });
+    check(
+      'nor can it climb out through the middle',
+      [climbingMiddle.status, climbingMiddle.payload.error.code],
+      [400, 'invalid_folder'],
+    );
+    check('and nothing was created outside the notes root', existsSync(path.join(root, '..', 'escape')), false);
 
     /* ---- a guest may not move anything ---------------------------------- */
     session.guest = true;
@@ -1396,6 +1557,51 @@ console.log('blog against a storage that is down');
   );
   check('a blocked direct link falls back to the proxy', [...(await blocked.readBinary('/a.png'))], [9, 8]);
   check('and the proxy is asked for the same file', proxied[0], '/notes/a.png');
+}
+
+/* -------------------------------------------------------------------------- */
+/* Creating a folder path, one level at a time                                 */
+/* -------------------------------------------------------------------------- */
+{
+  const root = mkdtempSync(path.join(os.tmpdir(), 'nm-driver-mkdir-'));
+  try {
+    const local = new LocalStorageDriver(root);
+    // A nested path is every directory on the way, not an error about a missing
+    // parent.
+    await local.ensureDir('/a/b/c');
+    check('the local driver makes a nested path', [existsSync(path.join(root, 'a')), existsSync(path.join(root, 'a', 'b')), existsSync(path.join(root, 'a', 'b', 'c'))], [true, true, true]);
+    // Running it again is not an error: the folder may already be there.
+    const again = await local.ensureDir('/a/b/c').then(() => 'ok', (err) => err.message);
+    check('and asking again is not an error', again, 'ok');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // OpenList has no recursive mkdir endpoint, so the client makes the path one
+  // request at a time - every prefix, in order, or a deep path would be one
+  // request for a folder whose parent does not exist yet.
+  const { OpenListClient } = await import(
+    `file://${path.join(HERE, '..', 'server', 'dist', 'integrations', 'openlist', 'client.js').replace(/\\/g, '/')}`
+  );
+  const client = new OpenListClient({ baseUrl: 'http://stub.invalid', token: 'test' });
+  const made = [];
+  // The HTTP call is the only thing stubbed: what is asserted is the order of
+  // the paths the client asks for.
+  client.request = async (endpoint, options = {}) => {
+    made.push([endpoint, options?.json?.path]);
+    return null;
+  };
+  await client.ensureDir('/层级/子级/末端');
+  check('the OpenList client makes every level in order', made, [
+    ['/api/fs/mkdir', '/层级'],
+    ['/api/fs/mkdir', '/层级/子级'],
+    ['/api/fs/mkdir', '/层级/子级/末端'],
+  ]);
+  made.length = 0;
+  await client.ensureDir('/');
+  check('and the notes root asks for nothing', made, []);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

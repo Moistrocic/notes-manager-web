@@ -280,7 +280,11 @@ interface AppState {
   setColor: (id: string, color: string | null) => Promise<void>;
   refreshMeta: () => Promise<void>;
   refreshWallpaperUrl: () => Promise<void>;
-  createFolder: (path: string) => Promise<void>;
+  /**
+   * Creates a folder (parents and all). Answers whether it exists now, so a
+   * caller that needs it before writing something else can stop on failure.
+   */
+  createFolder: (path: string, options?: { silent?: boolean }) => Promise<boolean>;
   deleteFolder: (path: string) => Promise<void>;
   renameFolder: (path: string, name: string) => Promise<void>;
   /** Moves a note to another folder. An empty string means the root. */
@@ -1143,13 +1147,20 @@ export const appStore = createStore<AppState>((set, get) => ({
     }
   },
 
-  createFolder: async (path) => {
+  createFolder: async (path, options) => {
     try {
       const result = await api.createFolder(path);
       set({ folders: result.folders });
-      get().pushToast({ title: '文件夹已创建', message: result.folder, tone: 'success' });
+      // Part of a bigger action (a note in a folder that did not exist yet)
+      // says nothing of its own: the toast for the thing that was asked for is
+      // the one that matters.
+      if (!options?.silent) {
+        get().pushToast({ title: '文件夹已创建', message: result.folder, tone: 'success' });
+      }
+      return true;
     } catch (err) {
       get().pushToast({ title: '创建文件夹失败', message: errorMessage(err), tone: 'error' });
+      return false;
     }
   },
 

@@ -1397,6 +1397,14 @@ export class NotesRepository {
 
   async createFolder(user: SessionUser | null | undefined, folder: string): Promise<string> {
     const storage = await this.storageManager.resolve(user);
+    // A path that tries to climb out of the notes root is refused outright. The
+    // normaliser would drop the segment, but quietly creating a different folder
+    // than the one asked for is worse than saying no.
+    if (String(folder ?? '').split('/').some((segment) => segment.trim() === '..')) {
+      throw new StorageError('Folder path must not contain ".."', 400, 'invalid_folder');
+    }
+    // The driver's ensureDir makes every missing parent on the way: a/b/c is
+    // three directories, not an error about a missing a/b.
     const clean = normaliseFolder(folder);
     if (!clean) throw new StorageError('Folder name must not be empty', 400, 'invalid_folder');
     await storage.driver.ensureDir(`/${clean}`);

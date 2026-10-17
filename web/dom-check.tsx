@@ -1587,7 +1587,7 @@ console.log('\nthe tree\'s own menus (jsdom)');
     'which opens the new-note dialog already pointed there',
     [
       document.querySelector('[data-testid="dialog-title"]')?.textContent,
-      (document.querySelector('[data-testid="dialog-folder-select"]') as HTMLInputElement | null)?.value,
+      (document.querySelector('[data-testid="dialog-folder-input"]') as HTMLInputElement | null)?.value,
     ],
     ['新建笔记', 'proj'],
   );
@@ -2230,20 +2230,128 @@ console.log('\nsorting the panel (jsdom)');
   } as never);
 
   const panel = await mountPanel();
-  const sortKey = panel.host.querySelector<HTMLSelectElement>('[data-testid="sort-key"]');
-  const asc = () => panel.host.querySelector('[data-testid="sort-order-asc"]');
-  const desc = () => panel.host.querySelector('[data-testid="sort-order-desc"]');
   const order = () =>
     Array.from(panel.host.querySelectorAll('[data-tree-row]')).map((item) => item.getAttribute('data-tree-row'));
+  const asc = () => panel.host.querySelector<HTMLElement>('[data-testid="sort-order-asc"]');
+  const desc = () => panel.host.querySelector<HTMLElement>('[data-testid="sort-order-desc"]');
+  const button = () => panel.host.querySelector<HTMLButtonElement>('[data-testid="sort-menu-button"]');
+  const menu = () => panel.host.querySelector<HTMLElement>('[data-testid="sort-menu"]');
+  const rows = () => Array.from(panel.host.querySelectorAll<HTMLElement>('[data-testid^="sort-menu-item-"]'));
+  const row = (key: string) => panel.host.querySelector<HTMLElement>('[data-testid="sort-menu-item-' + key + '"]');
+  const rowKeys = () => rows().map((item) => item.getAttribute('data-testid')?.replace('sort-menu-item-', ''));
+  const clickOn = async (element: Element | null | undefined) => {
+    await act(async () => {
+      element?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    });
+    await flush();
+  };
+  /** A pointer event the way the tree's gesture block dispatches them. */
+  const pointer = async (element: Element | null | undefined, type: string, x: number, y: number) => {
+    await act(async () => {
+      element?.dispatchEvent(new w.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y }));
+    });
+    await flush();
+  };
+  const wait = async (ms: number) => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    });
+  };
+  const openMenu = async () => {
+    if (!menu()) await clickOn(button());
+  };
 
-  check('the sort is a labelled picker', sortKey?.getAttribute('aria-label'), '排序方式');
-  check('defaulting to the title', sortKey?.value, 'title');
-  check('which it calls 标题', sortKey?.selectedOptions[0]?.textContent, '标题');
+  // The picker is one line: a button saying which key is in charge, and the
+  // priority list opens over the panel instead of taking a block of it.
+  check('the sort is one compact button', Boolean(button()), true);
+  check('that says it opens a list', button()?.getAttribute('aria-haspopup'), 'listbox');
+  check('and which key is in charge', button()?.getAttribute('aria-label'), '排序方式：标题');
+  check('with nothing open yet', [button()?.getAttribute('aria-expanded'), Boolean(menu())], ['false', false]);
   check('and running upwards by default', asc()?.getAttribute('aria-pressed'), 'true');
   check('with the other direction unpressed', desc()?.getAttribute('aria-pressed'), 'false');
   // Folders first, then the notes inside them - the order the tree is for.
   check('the tree is in title order', order(), ['folder:proj', 'note:s1', 'note:s2', 'note:s3']);
 
+  await openMenu();
+  check('clicking the button opens the priority list', Boolean(menu()), true);
+  check('as a listbox', menu()?.getAttribute('role'), 'listbox');
+  check('with the button saying it is open', button()?.getAttribute('aria-expanded'), 'true');
+  check('listing every key in priority order', rowKeys(), ['title', 'updated', 'created', 'words']);
+  check('each row an option', rows().map((item) => item.getAttribute('role')), ['option', 'option', 'option', 'option']);
+  check(
+    'the head marked as the one in charge',
+    rows().map((item) => item.getAttribute('aria-selected')),
+    ['true', 'false', 'false', 'false'],
+  );
+  check('each row saying its place', row('words')?.getAttribute('aria-label'), '字数，优先级 4');
+  check('and the list saying which way it runs', (menu()?.textContent ?? '').includes('从上到下优先级减弱'), true);
+
+  // A click promotes: the key becomes the head, which is what decides the order.
+  await clickOn(row('words'));
+  check('clicking a key makes it the head', appStore.getState().sortKeys, ['words', 'title', 'updated', 'created']);
+  check('the store sort follows the head', appStore.getState().sort, 'words');
+  check('the button says so', button()?.getAttribute('aria-label'), '排序方式：字数');
+  check('the click closes the list', Boolean(menu()), false);
+  // By word count upwards: Beta (10) then Alpha (30) inside proj, Gamma at the
+  // root - folders first, then the notes inside them.
+  check('the tree is ordered by the new head', order(), ['folder:proj', 'note:s2', 'note:s1', 'note:s3']);
+  check(
+    'and both saved keys follow',
+    [w.localStorage.getItem('notes-manager-sort-keys'), w.localStorage.getItem('notes-manager-sort')],
+    [JSON.stringify(['words', 'title', 'updated', 'created']), 'words'],
+  );
+
+  // Holding a row for a moment picks it up; dragging it reorders the whole list.
+  await openMenu();
+  const startY = 100;
+  await pointer(row('words'), 'pointerdown', 20, startY);
+  await wait(320); // longer than the 300ms hold
+  check('holding a row picks it up to drag', row('words')?.getAttribute('data-sort-dragging'), 'true');
+  // jsdom has no row heights, so the drag reads the pointer's travel: two rows
+  // down is two row-heights (28px each).
+  await pointer(row('words'), 'pointermove', 20, startY + 56);
+  check('the rows follow the pointer while dragging', rowKeys(), ['title', 'updated', 'words', 'created']);
+  await pointer(row('words'), 'pointerup', 20, startY + 56);
+  check('letting go reorders the priority', appStore.getState().sortKeys, ['title', 'updated', 'words', 'created']);
+  check(
+    'and the order is saved as it was dragged',
+    w.localStorage.getItem('notes-manager-sort-keys'),
+    JSON.stringify(['title', 'updated', 'words', 'created']),
+  );
+  check('with the head deciding the tree again', appStore.getState().sort, 'title');
+
+  // The click a drag leaves behind is not a click: it must not promote the row.
+  await clickOn(row('updated'));
+  check('a drag does not turn into a promoting click', appStore.getState().sortKeys, ['title', 'updated', 'words', 'created']);
+  check('and the list is still open', Boolean(menu()), true);
+
+  // The keyboard moves a row as well, from wherever it is.
+  await act(async () => {
+    row('created')?.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('ArrowUp moves a key up', appStore.getState().sortKeys, ['title', 'updated', 'created', 'words']);
+  await act(async () => {
+    row('created')?.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('ArrowDown moves it back down', appStore.getState().sortKeys, ['title', 'updated', 'words', 'created']);
+
+  // Escape puts it away, and so does a press anywhere else.
+  await act(async () => {
+    w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+  await flush();
+  check('Escape closes the priority list', Boolean(menu()), false);
+  await openMenu();
+  check('it opens again', Boolean(menu()), true);
+  await act(async () => {
+    document.body.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true }));
+  });
+  await flush();
+  check('and a press outside it closes it', Boolean(menu()), false);
+
+  // The direction is still one global switch, and it still turns the tree around.
   await act(async () => {
     desc()?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   });
@@ -2252,65 +2360,6 @@ console.log('\nsorting the panel (jsdom)');
   check('and turns the notes around', order(), ['folder:proj', 'note:s2', 'note:s1', 'note:s3']);
   check('showing which direction is on', desc()?.getAttribute('aria-pressed'), 'true');
   check('and which is not', asc()?.getAttribute('aria-pressed'), 'false');
-
-  /* --- the priority order -------------------------------------------------- */
-  // Every key breaks the tie left by the ones above it, and which order they run
-  // in is the reader's to say rather than a fixed chain behind the picker.
-  const priorityKeys = () =>
-    Array.from(panel.host.querySelectorAll('[data-testid^="sort-priority-item-"]')).map((item) =>
-      item.getAttribute('data-testid')?.replace('sort-priority-item-', ''),
-    );
-  const priorityUp = (key: string) =>
-    panel.host.querySelector<HTMLButtonElement>('[data-testid="sort-priority-up-' + key + '"]');
-  const priorityDown = (key: string) =>
-    panel.host.querySelector<HTMLButtonElement>('[data-testid="sort-priority-down-' + key + '"]');
-  const clickOn = async (element: Element | null | undefined) => {
-    await act(async () => {
-      element?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
-    });
-    await flush();
-  };
-
-  check('the priority list is there', Boolean(panel.host.querySelector('[data-testid="sort-priority"]')), true);
-  check(
-    'and says what it is for',
-    panel.host.querySelector('[data-testid="sort-priority"]')?.getAttribute('aria-label'),
-    '排序优先级',
-  );
-  check('listing every sort key', priorityKeys(), ['title', 'updated', 'created', 'words']);
-  check('the first row cannot go up', priorityUp('title')?.disabled, true);
-  check('and the last cannot go down', priorityDown('words')?.disabled, true);
-  check(
-    'while the ones in between can',
-    [priorityUp('words')?.disabled ?? true, priorityDown('title')?.disabled ?? true],
-    [false, false],
-  );
-  check('the arrows name what they move', priorityDown('title')?.getAttribute('aria-label'), '下移 标题');
-
-  // Ascending again, then let the second key decide the order.
-  await clickOn(asc());
-  await clickOn(priorityDown('title'));
-  check('moving a key down changes the order', appStore.getState().sortKeys, ['updated', 'title', 'created', 'words']);
-  check('and the list shows it', priorityKeys(), ['updated', 'title', 'created', 'words']);
-  check('the picker follows the head', appStore.getState().sort, 'updated');
-  check('and the value it shows', sortKey?.value, 'updated');
-  // The tree follows the whole order, not only the head: by updated, Beta is the
-  // oldest and Gamma the newest.
-  check('the notes are ordered by the new head', order(), ['folder:proj', 'note:s2', 'note:s1', 'note:s3']);
-  check(
-    'and the order is written down',
-    w.localStorage.getItem('notes-manager-sort-keys'),
-    JSON.stringify(['updated', 'title', 'created', 'words']),
-  );
-  check('with the old single key kept in step', w.localStorage.getItem('notes-manager-sort'), 'updated');
-
-  // Any key can move, not only the head - the ends are just where it stops.
-  await clickOn(priorityUp('words'));
-  check('a key can move up', appStore.getState().sortKeys, ['updated', 'title', 'words', 'created']);
-  await clickOn(priorityDown('words'));
-  check('and back down again', appStore.getState().sortKeys, ['updated', 'title', 'created', 'words']);
-  await clickOn(priorityUp('title'));
-  check('until the picker value is the head again', [appStore.getState().sortKeys[0], sortKey?.value], ['title', 'title']);
 
   if (savedKeys === null) w.localStorage.removeItem('notes-manager-sort-keys');
   else w.localStorage.setItem('notes-manager-sort-keys', savedKeys);
@@ -2342,11 +2391,21 @@ console.log('\nthe panel\'s controls (jsdom)');
   } as never);
 
   // Where a confirmed dialog sends its answer, recorded rather than performed.
+  // The order matters when a new note needs a folder made for it first.
+  const calls: string[] = [];
   const created: string[] = [];
   const movedTo: string[] = [];
+  /** Cleared to make the folder request fail, like a server that refuses it. */
+  let folderCreated = true;
   appStore.setState({
+    createFolder: async (path: string) => {
+      calls.push('folder:' + path);
+      return folderCreated;
+    },
     createNote: async (input?: { title?: string; folder?: string }) => {
-      created.push((input?.folder ?? '') + '|' + (input?.title ?? ''));
+      const made = (input?.folder ?? '') + '|' + (input?.title ?? '');
+      created.push(made);
+      calls.push('note:' + made);
     },
     moveNote: async (id: string, folder: string) => {
       movedTo.push(id + '|' + folder);
@@ -2414,32 +2473,57 @@ console.log('\nthe panel\'s controls (jsdom)');
   await flush();
   check('clicking a folder remembers it', appStore.getState().lastFolder, 'proj');
 
-  const folderField = () => document.querySelector<HTMLInputElement>('[data-testid="dialog-folder-select"]');
-  const folderError = () => document.querySelector('[data-testid="dialog-folder-error"]')?.textContent ?? null;
+  /* --- the folder field ---------------------------------------------------- */
+  // The destination is typed by hand: a prefix is matched against the folders
+  // that exist, and a new note may name a folder that does not - it is made with
+  // the note. Every other prompt still only moves things into a folder that is
+  // already there.
+  const titleInput = () => document.querySelector<HTMLInputElement>('[data-testid="dialog-input"]');
+  const folderField = () => document.querySelector<HTMLInputElement>('[data-testid="dialog-folder-input"]');
+  const folderWrapper = () => document.querySelector('[data-testid="dialog-folder-select"]');
+  const folderHint = () => document.querySelector('[data-testid="dialog-folder-hint"]')?.textContent ?? null;
   const confirm = () => document.querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]');
+  const suggestionList = () => document.querySelector('[data-testid="folder-suggestions"]');
   const suggestions = () =>
-    Array.from(document.querySelectorAll('#prompt-folder-options option')).map((option) => option.getAttribute('value'));
+    Array.from(document.querySelectorAll('[data-testid^="folder-suggestion-"]')).map((item) =>
+      (item.getAttribute('data-testid') ?? '').replace('folder-suggestion-', ''),
+    );
+  const typeFolder = (value: string) => typeIntoInput('[data-testid="dialog-folder-input"]', value);
+  const closeDialog = async () => {
+    await act(async () => {
+      cancel()?.click();
+    });
+    await flush();
+  };
 
-  // Making a note asks where it goes: the destination is a field you type into,
-  // with the folders offered as suggestions - a list of every folder gets long,
-  // and an exact answer is the only one taken.
   await act(async () => {
     button('新建笔记')?.click();
   });
   await flush();
   check('making a note asks where it goes', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
-  check('with a title to give it', Boolean(document.querySelector('[data-testid="dialog-input"]')), true);
+  check('with a title to give it', Boolean(titleInput()), true);
   check('and a destination field', folderField()?.getAttribute('aria-label'), '目标目录');
   check('which starts in the folder that was just clicked', folderField()?.value, 'proj');
-  check('offering the folders as suggestions', folderField()?.getAttribute('list'), 'prompt-folder-options');
-  check('every folder there is', suggestions(), ['proj', 'proj/deep']);
-  check('with no empty suggestion standing for the root', suggestions().includes(''), false);
+  check('keeping the old test id on its wrapper', Boolean(folderWrapper()), true);
+  check(
+    'as a combobox with a list behind it',
+    [folderField()?.getAttribute('role'), folderField()?.getAttribute('aria-autocomplete')],
+    ['combobox', 'list'],
+  );
+  check('an existing folder needs no comment', folderHint(), null);
+  check('and its own prefix is already suggested', suggestions().includes('proj'), true);
   check('and a way to confirm it', Boolean(confirm()), true);
 
   // A small dialog that appears out of nowhere asking for a name looks like a
-  // login form to a password manager: each one has its own opt-out, and both
-  // fields set them all.
-  const guards = (input: HTMLInputElement | null) => ({
+  // login form to a password manager. The type is the fix that works: Bitwarden's
+  // content script skips search inputs when it collects fields and its login
+  // filler ignores them - its data-bwignore opt-out only applies when the user
+  // turns that setting on, so attributes alone never fixed this. The browser's
+  // search chrome (rounded ends, the clear button) is taken back off with
+  // classes, so it still looks and behaves like a text field.
+  const fieldFacts = (input: HTMLInputElement | null) => ({
+    type: input?.getAttribute('type'),
+    appearanceOff: (input?.className ?? '').includes('appearance-none'),
     autocomplete: input?.getAttribute('autocomplete'),
     autocorrect: input?.getAttribute('autocorrect'),
     autocapitalize: input?.getAttribute('autocapitalize'),
@@ -2448,7 +2532,9 @@ console.log('\nthe panel\'s controls (jsdom)');
     onepassword: input?.getAttribute('data-1p-ignore'),
     lastpass: input?.getAttribute('data-lpignore'),
   });
-  const noAutofill = {
+  const passwordManagerProof = {
+    type: 'search',
+    appearanceOff: true,
     autocomplete: 'off',
     autocorrect: 'off',
     autocapitalize: 'off',
@@ -2457,33 +2543,103 @@ console.log('\nthe panel\'s controls (jsdom)');
     onepassword: 'true',
     lastpass: 'true',
   };
-  check('the title field is not a login form', guards(document.querySelector<HTMLInputElement>('[data-testid="dialog-input"]')), noAutofill);
-  check('nor is the destination field', guards(folderField()), noAutofill);
+  check('the title field looks like a search box to a password manager', fieldFacts(titleInput()), passwordManagerProof);
+  check('and so does the folder field', fieldFacts(folderField()), passwordManagerProof);
   check(
-    'and neither carries a name a password manager knows',
-    [document.querySelector('[data-testid="dialog-input"]')?.getAttribute('name'), folderField()?.getAttribute('name')],
-    ['prompt-value', 'prompt-folder'],
+    'with names of their own, not ones a manager knows',
+    [titleInput()?.getAttribute('name'), folderField()?.getAttribute('name')],
+    ['dialog-field', 'dialog-folder'],
   );
 
-  // A typed path has to name a folder exactly: a near miss is refused rather than
-  // guessed at.
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
-  check('a folder that exists is accepted', [folderError(), confirm()?.disabled], [null, false]);
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/nope');
-  check('a path that names nothing is refused', folderError(), '没有这个文件夹');
-  check('and the dialog will not confirm it', confirm()?.disabled, true);
-  await typeIntoInput('[data-testid="dialog-folder-select"]', '');
-  check('an empty answer means the root', [folderField()?.value, folderError(), confirm()?.disabled], ['', null, false]);
+  // Prefix matching: what is typed is compared with the start of every folder,
+  // and the list is a glance rather than a second dialog.
+  await typeFolder('pro');
+  check('typing a prefix offers the matching folders', suggestions(), ['proj', 'proj/deep']);
+  check(
+    'in a listbox the field controls',
+    [suggestionList()?.getAttribute('role'), folderField()?.getAttribute('aria-expanded'), folderField()?.getAttribute('aria-controls')],
+    ['listbox', 'true', 'prompt-folder-suggestions'],
+  );
+  check('and the field says a missing one will be made', folderHint(), '不存在，将新建该文件夹');
+  await typeFolder('proj/de');
+  check('a longer prefix narrows the list', suggestions(), ['proj/deep']);
+  // A suggestion is a step on the way to confirm, not the answer: it fills the
+  // field in and leaves the dialog open.
+  await act(async () => {
+    document
+      .querySelector<HTMLElement>('[data-testid="folder-suggestion-proj/deep"]')
+      ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+  check('clicking a suggestion fills the field', folderField()?.value, 'proj/deep');
+  check('and leaves the dialog open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+  check('an existing folder is accepted as it is', [folderHint(), confirm()?.disabled], [null, false]);
 
-  // Confirming sends that folder with the note.
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  // Empty and focused offers the first folders; empty and away offers none.
+  await typeFolder('');
+  await act(async () => {
+    folderField()?.focus();
+  });
+  await flush();
+  check('an empty field that has the keyboard offers the folders', suggestions(), ['proj', 'proj/deep']);
+  await act(async () => {
+    folderField()?.blur();
+  });
+  await flush();
+  check('and away from it there is nothing to suggest', Boolean(suggestionList()), false);
+
+  // The path is normalised before it is checked: stray slashes and spaces are not
+  // a different folder, and a dot segment is refused rather than dropped.
+  await typeFolder('  proj  ');
+  check('spaces around a path are trimmed', [folderHint(), confirm()?.disabled], [null, false]);
+  await typeFolder('proj//deep/');
+  check('a doubled slash is one separator', [folderHint(), confirm()?.disabled], [null, false]);
+  await typeFolder('proj/../etc');
+  check('a path that climbs out is refused', folderHint(), '路径里不能有 . 或 ..');
+  check('with the dialog held shut', confirm()?.disabled, true);
+  await typeFolder('.');
+  check('and a bare dot is refused too', folderHint(), '路径里不能有 . 或 ..');
+  await closeDialog();
+
+  // A hand-typed folder that does not exist yet is made first, and the note only
+  // follows if that worked.
+  await act(async () => {
+    button('新建笔记')?.click();
+  });
+  await flush();
+  await typeFolder('proj/new');
+  check('a new folder is announced, not refused', folderHint(), '不存在，将新建该文件夹');
+  check('and the dialog will make it', confirm()?.disabled, false);
   await typeIntoInput('[data-testid="dialog-input"]', '会议记录');
+  calls.length = 0;
+  created.length = 0;
   await act(async () => {
     confirm()?.click();
   });
   await flush();
-  check('confirming makes the note in that folder', created, ['proj/deep|会议记录']);
+  check('confirming makes the folder first, then the note in it', calls, [
+    'folder:proj/new',
+    'note:proj/new|会议记录',
+  ]);
   check('and puts the dialog away', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
+
+  // A folder that could not be made leaves no note behind: it would be homeless.
+  folderCreated = false;
+  await act(async () => {
+    button('新建笔记')?.click();
+  });
+  await flush();
+  await typeFolder('proj/refused');
+  await typeIntoInput('[data-testid="dialog-input"]', '不该出现');
+  calls.length = 0;
+  created.length = 0;
+  await act(async () => {
+    confirm()?.click();
+  });
+  await flush();
+  check('a folder that could not be made makes no note', calls, ['folder:proj/refused']);
+  check('and the note was never asked for', created, []);
+  folderCreated = true;
 
   // A remembered folder that no longer exists falls back to the root rather than
   // to a path that would have to be refused.
@@ -2495,14 +2651,12 @@ console.log('\nthe panel\'s controls (jsdom)');
   });
   await flush();
   check('a folder that is gone is not offered', folderField()?.value, '');
-  await act(async () => {
-    cancel()?.click();
-  });
-  await flush();
+  await closeDialog();
   check('cancelling puts it away', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
-  check('and sends nothing', created, ['proj/deep|会议记录']);
+  check('and sends nothing', created, []);
 
-  // Moving a note asks the same question, starting from where the note already is.
+  // Moving a note only goes to a folder that is already there: unlike a new note,
+  // nothing here can invent a destination.
   await rightClick(host.querySelector('[data-tree-row="note:b"]') as Element);
   await act(async () => {
     document.querySelector<HTMLElement>('[data-menu-item="note-move"]')?.click();
@@ -2510,7 +2664,12 @@ console.log('\nthe panel\'s controls (jsdom)');
   await flush();
   check('moving a note asks where to', document.querySelector('[data-testid="dialog-title"]')?.textContent, '移动笔记');
   check('starting where it already is', folderField()?.value, 'proj');
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  await typeFolder('proj/nope');
+  check('a folder that is not there is refused, not made', folderHint(), '没有这个文件夹');
+  check('with the dialog held shut', confirm()?.disabled, true);
+  await typeFolder('proj/deep');
+  check('an existing one can be confirmed', [folderHint(), confirm()?.disabled], [null, false]);
+  movedTo.length = 0;
   await act(async () => {
     confirm()?.click();
   });
@@ -2525,14 +2684,15 @@ console.log('\nthe panel\'s controls (jsdom)');
   });
   await flush();
   check('moving a folder asks where to', document.querySelector('[data-testid="dialog-title"]')?.textContent, '移动文件夹');
-  check('and offers no place inside itself', suggestions(), []);
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj');
-  check('typing itself is refused', folderError(), '不能移动到这个文件夹');
-  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
-  check('and so is its own subfolder', folderError(), '不能移动到这个文件夹');
+  await typeFolder('pro');
+  check('and suggests no place inside itself', [Boolean(suggestionList()), suggestions()], [false, []]);
+  await typeFolder('proj');
+  check('typing itself is refused', folderHint(), '不能移动到这个文件夹');
+  await typeFolder('proj/deep');
+  check('and so is its own subfolder', folderHint(), '不能移动到这个文件夹');
   check('with the dialog held shut', confirm()?.disabled, true);
-  await typeIntoInput('[data-testid="dialog-folder-select"]', '');
-  check('the root is always somewhere to go', [folderError(), confirm()?.disabled], [null, false]);
+  await typeFolder('');
+  check('the root is always somewhere to go', [folderHint(), confirm()?.disabled], [null, false]);
   await act(async () => {
     confirm()?.click();
   });
@@ -2553,10 +2713,7 @@ console.log('\nthe panel\'s controls (jsdom)');
   );
   // Any file is accepted: a picture is as much a part of the folder as a note.
   check('and the picker does not narrow the choice', host.querySelector('input[type="file"]')?.hasAttribute('accept'), false);
-  await act(async () => {
-    cancel()?.click();
-  });
-  await flush();
+  await closeDialog();
 
   await act(async () => {
     root.unmount();
@@ -4673,7 +4830,9 @@ console.log('\ndefault background (jsdom)');
   let markup = host.innerHTML;
   check('the settings dialog offers the kinds', ['不设置', '主题极光', '图片', '视频', '场景壁纸'].every((label) => markup.includes(label)), true);
   check('and the files that can be chosen', markup.includes('rossi.pkg'), true);
-  check('with their size', markup.includes('43.5 MB'), true);
+  // The shared size formatter rounds a file this large to whole megabytes, which
+  // is all a file list needs to say.
+  check('with their size', markup.includes('43 MB'), true);
   check('and the darkness and framing controls', markup.includes('模糊') && markup.includes('暗度') && markup.includes('取景区'), true);
   check('a scene can be played or composited', markup.includes('在 worker 里实时播放'), true);
   check('the files it cannot use are not offered', markup.includes('still.png'), false);
@@ -4701,6 +4860,29 @@ console.log('\ndefault background (jsdom)');
   // A picture the browser can show is its own preview, so the crop editor is
   // there to frame it - a scene has to be composited first, which jsdom cannot do.
   check('and a video can be framed', markup.includes('拖动方框移动'), true);
+
+  // The custom background is a picture the administrator uploads, shrunk in the
+  // browser first, plus the same motion and particle controls the personal one
+  // has - one list of sliders, drawn by both dialogs.
+  check('a custom background is on offer', markup.includes('自定义壁纸'), true);
+  const customKind = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === '自定义壁纸');
+  await act(async () => {
+    customKind?.click();
+  });
+  markup = host.innerHTML;
+  check('choosing it offers an upload', markup.includes('导入图片（缩图后上传）'), true);
+  check('with a file picker behind the button', Boolean(host.querySelector('[data-background-import]')), true);
+  check(
+    'a preview of the wallpaper everyone would see',
+    Boolean(host.querySelector('[data-admin-custom-preview] [data-custom-wallpaper]')),
+    true,
+  );
+  check('and the shared sliders', host.querySelectorAll('[data-custom-controls] input[type="range"]').length, 9);
+  check(
+    'saying where a hand dropped file goes as well',
+    markup.includes('也可以把图片放进 backgrounds/'),
+    true,
+  );
 
   await act(async () => {
     root.unmount();
@@ -4914,6 +5096,445 @@ console.log('\nwallpaper loading (jsdom)');
       root.unmount();
     });
     host.remove();
+  }
+}
+
+/* --- the custom wallpaper (jsdom) ----------------------------------------- */
+console.log('\nthe custom wallpaper (jsdom)');
+{
+  const {
+    CUSTOM_IMAGE_MAX_EDGE,
+    CUSTOM_IMAGE_QUALITY,
+    CUSTOM_MAX_PARTICLES,
+    CUSTOM_WALLPAPER_SLIDERS,
+    CUSTOM_DEFAULTS,
+    DEFAULT_WALLPAPER,
+    customBackdrop,
+    customParticleCount,
+    resolveCustomWallpaper,
+    shrinkDimensions,
+    shrinkWallpaperImage,
+  } = await import('./src/lib/wallpaper');
+  const { createCustomParticles, advanceCustomParticles, particleLifeRatio, particleAppearance } = await import(
+    './src/components/CustomWallpaper'
+  );
+  const { shownWallpaper } = await import('./src/lib/admin-background');
+
+  /* --- one picture, one set of numbers ------------------------------------ */
+  // An imported picture is resized before it is stored: the long edge fits 2560
+  // and the copy is WebP. A phone photo is the case this exists for.
+  check('a big picture is scaled down', shrinkDimensions(6000, 4000), { width: 2560, height: 1707 });
+  check('a small one is left alone', shrinkDimensions(1600, 1067), { width: 1600, height: 1067 });
+  check('the long edge is the constraint', shrinkDimensions(1000, 5000), { width: 512, height: 2560 });
+  check('the edge can be asked for', shrinkDimensions(6000, 4000, 1000), { width: 1000, height: 667 });
+  check('an empty picture still has a pixel', shrinkDimensions(0, 0), { width: 1, height: 1 });
+  check('the limits are the ones the dialog says', [CUSTOM_IMAGE_MAX_EDGE, CUSTOM_IMAGE_QUALITY], [2560, 0.82]);
+
+  // jsdom has no canvas to re-encode with, so the original is passed through: a
+  // wallpaper that cannot be shrunk is better than one that vanished. The size
+  // numbers still describe what happened honestly.
+  {
+    // The component reads the name off a File; this harness has only the jsdom
+    // one, so it is lent to the module scope for this check.
+    const globals = globalThis as unknown as { File?: unknown };
+    const previousFile = globals.File;
+    globals.File = w.File;
+    try {
+      const file = new w.File([new Uint8Array([1, 2, 3, 4])], 'photo.png', { type: 'image/png' });
+      const shrunk = await shrinkWallpaperImage(file);
+      check('a picture that cannot be decoded is kept as it is', [shrunk.shrunk, shrunk.blob === file], [false, true]);
+      check('with its sizes said as they are', [shrunk.before, shrunk.after], [4, 4]);
+      check('and a name for the bytes it kept', shrunk.fileName, 'photo.png');
+    } finally {
+      globals.File = previousFile;
+    }
+  }
+
+  // Missing fields, and numbers from a hand-edited settings file, are answered
+  // in exactly one place.
+  {
+    check('an empty custom wallpaper gets the defaults', resolveCustomWallpaper({}), {
+      colors: { a: 'var(--accent)', b: 'var(--accent-2)' },
+      drift: CUSTOM_DEFAULTS.drift,
+      speed: CUSTOM_DEFAULTS.speed,
+      particles: {
+        count: CUSTOM_DEFAULTS.density,
+        size: CUSTOM_DEFAULTS.particleSize,
+        opacity: CUSTOM_DEFAULTS.particleOpacity,
+        life: CUSTOM_DEFAULTS.particleLife,
+        speed: CUSTOM_DEFAULTS.particleSpeed,
+        turbulence: CUSTOM_DEFAULTS.particleTurbulence,
+        color: '',
+        wind: CUSTOM_DEFAULTS.particleWind,
+      },
+    });
+    const wild = resolveCustomWallpaper({
+      customDrift: 9,
+      customSpeed: 0,
+      customDensity: 9999,
+      customParticleSize: 100,
+      customParticleOpacity: -1,
+      customParticleLife: 99,
+      customParticleSpeed: -5,
+      customParticleTurbulence: 2,
+      customParticleWind: 400,
+      customParticleColor: '  #ff0000 ',
+    });
+    check(
+      'numbers out of range are clamped',
+      [wild.drift, wild.speed, wild.particles.count, wild.particles.size, wild.particles.opacity, wild.particles.life, wild.particles.speed, wild.particles.turbulence, wild.particles.wind],
+      [1, 0.2, CUSTOM_MAX_PARTICLES, 6, 0.05, 12, 0, 1, 360],
+    );
+    check('and a colour is taken as written', wild.particles.color, '#ff0000');
+    const partial = resolveCustomWallpaper({ customDrift: 0.9 });
+    check(
+      'an old settings file keeps what it has and defaults the rest',
+      [partial.drift, partial.particles.count, partial.colors.a],
+      [0.9, CUSTOM_DEFAULTS.density, 'var(--accent)'],
+    );
+    check('the particle cap is the rendered cap', customParticleCount(9999), CUSTOM_MAX_PARTICLES);
+  }
+
+  // One list of sliders, drawn by both dialogs.
+  check('nine sliders make the wallpaper', CUSTOM_WALLPAPER_SLIDERS.map((slider: { key: string }) => slider.key), [
+    'customDrift',
+    'customSpeed',
+    'customDensity',
+    'customParticleSize',
+    'customParticleOpacity',
+    'customParticleLife',
+    'customParticleSpeed',
+    'customParticleTurbulence',
+    'customParticleWind',
+  ]);
+  check(
+    'each one is named in words',
+    CUSTOM_WALLPAPER_SLIDERS.map((slider: { label: string }) => slider.label),
+    ['晃动幅度', '晃动速度', '粒子数量', '粒子大小', '粒子不透明度', '粒子寿命', '粒子速度', '湍流强度', '风向'],
+  );
+  check('the still version is the same picture', customBackdrop({ a: '#111111', b: '#222222' }).includes('radial-gradient'), true);
+
+  /* --- the particles, with a seeded random --------------------------------- */
+  // The simulation is pure with `random` injected: same seed, same picture.
+  {
+    const config = { count: 3, size: 2, opacity: 0.5, life: 4, speed: 40, turbulence: 0.3, color: '', wind: 90 };
+    const fixed = () => 0.5;
+    const particles = createCustomParticles(3, config, 800, 600, fixed);
+    check('the count asked for is the count made', particles.length, 3);
+    check('a fixed random puts them at known places', particles.map((particle: { x: number; y: number }) => [particle.x, particle.y]), [
+      [400, 300],
+      [400, 300],
+      [400, 300],
+    ]);
+    check(
+      'their life, size and alpha follow the settings',
+      [particles[0].lifeMax, particles[0].size, particles[0].alpha],
+      [4, 2 * (0.55 + Math.pow(0.5, 2) * 1.7), 0.5 * 0.75],
+    );
+    check('and they start part way through a life', particles[0].age, 4 * 0.5 * 0.9);
+    // Wind of 90 degrees is upward: the particle's vertical speed is negative.
+    check('the wind decides the direction', [Math.abs(particles[0].vx) < 0.001, particles[0].vy < 0], [true, true]);
+    const before = particles.map((particle: { x: number; y: number }) => particle.x + ',' + particle.y);
+    advanceCustomParticles(particles, 0.1, 0, config, 800, 600, fixed);
+    const after = particles.map((particle: { x: number; y: number }) => particle.x + ',' + particle.y);
+    check('advancing moves them', after.some((place: string, index: number) => place !== before[index]), true);
+    check(
+      'and ages them by the step',
+      particles.map((particle: { age: number }) => Number(particle.age.toFixed(4))),
+      // The step is capped at a twentieth of a second, so a tenth advances by
+      // half of it - the same cap that keeps a sleeping tab from jumping.
+      particles.map(() => Number((4 * 0.45 + 1 / 20).toFixed(4))),
+    );
+  }
+  // The fade in and out are the engine's alphafade and sizechange, combined.
+  {
+    const life = (age: number) => ({
+      x: 0,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      size: 10,
+      alpha: 0.5,
+      lifeMax: 4,
+      age,
+      seed: 0,
+      turbulence: 0,
+      phase: 0,
+    });
+    check('a newborn particle is not visible yet', particleAppearance(life(0)).alpha, 0);
+    check('half way through it is at its brightest', particleAppearance(life(2)).alpha, 0.5);
+    check('and at its full size', particleAppearance(life(2)).size, 10);
+    check(
+      'after the middle it shrinks',
+      Number(particleAppearance(life(3.2)).size.toFixed(3)),
+      Number((10 * (1 - ((0.8 - 0.5) / 0.5) * 0.8)).toFixed(3)),
+    );
+    check('and fades out towards the end', particleAppearance(life(3.2)).alpha.toFixed(3), (0.5 * ((1 - 0.8) / 0.3)).toFixed(3));
+    check(
+      'a dead particle is invisible',
+      [particleAppearance(life(4)).alpha, Number(particleAppearance(life(4)).size.toFixed(3))],
+      [0, 2],
+    );
+    check('the life ratio runs from 0 to 1', [particleLifeRatio(life(0)), particleLifeRatio(life(4))], [0, 1]);
+  }
+
+  /* --- the layer ----------------------------------------------------------- */
+  // jsdom has no 2D canvas: the picture and the CSS backdrop are what it can
+  // draw, and the animation must simply not start.
+  {
+    const { Wallpaper } = await import('./src/components/Wallpaper');
+    const hold = appStore.getState();
+    const canvasProto = w.HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+    const realGetContext = canvasProto.getContext;
+    const realRaf = w.requestAnimationFrame;
+    const realCancel = w.cancelAnimationFrame;
+    let rafCalls = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    canvasProto.getContext = () => null;
+    w.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      rafCalls += 1;
+      return realRaf.call(w, callback);
+    }) as typeof w.requestAnimationFrame;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      appStore.setState({
+        appearanceOpen: false,
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', customDensity: 20 },
+        wallpaperUrl: 'https://cdn.example.com/custom.webp',
+      } as never);
+      await act(async () => {
+        root.render(React.createElement(Wallpaper));
+      });
+      await flush();
+      check('the custom wallpaper is a layer of its own', Boolean(host.querySelector('[data-custom-wallpaper]')), true);
+      check(
+        'with the picture it was given',
+        host.querySelector('[data-custom-image]')?.getAttribute('src'),
+        'https://cdn.example.com/custom.webp',
+      );
+      check('and a canvas for the particles', Boolean(host.querySelector('[data-custom-particles]')), true);
+      check('which does not animate without a canvas context', rafCalls, 0);
+
+      // No picture: the colour field is the wallpaper, and it is a CSS gradient.
+      await act(async () => {
+        appStore.setState({ wallpaperUrl: null } as never);
+      });
+      await flush();
+      check('without a picture there is no image', Boolean(host.querySelector('[data-custom-image]')), false);
+      check(
+        'and the colour field is drawn as a gradient',
+        (host.querySelector('[data-custom-wallpaper]')?.getAttribute('style') ?? '').includes('radial-gradient'),
+        true,
+      );
+      check('still without a frame of animation', rafCalls, 0);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      canvasProto.getContext = realGetContext;
+      w.requestAnimationFrame = realRaf;
+      w.cancelAnimationFrame = realCancel;
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
+  // With a canvas the loop runs; reduced motion keeps it still; unmounting stops
+  // it. The frame callbacks are counted rather than run.
+  {
+    const { Wallpaper } = await import('./src/components/Wallpaper');
+    const hold = appStore.getState();
+    const canvasProto = w.HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+    const realGetContext = canvasProto.getContext;
+    const realRaf = w.requestAnimationFrame;
+    const realCancel = w.cancelAnimationFrame;
+    // The component calls the global functions, which this harness defines on
+    // both scopes; a spy has to replace both.
+    const globals = globalThis as unknown as {
+      requestAnimationFrame?: typeof w.requestAnimationFrame;
+      cancelAnimationFrame?: typeof w.cancelAnimationFrame;
+    };
+    const realGlobalRaf = globals.requestAnimationFrame;
+    const realGlobalCancel = globals.cancelAnimationFrame;
+    const realMatchMedia = w.matchMedia;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    canvasProto.getContext = () => ({
+      globalAlpha: 1,
+      globalCompositeOperation: 'source-over',
+      fillStyle: '',
+      setTransform() {},
+      fillRect() {},
+      clearRect() {},
+      createRadialGradient: () => ({ addColorStop() {} }),
+      beginPath() {},
+      arc() {},
+      fill() {},
+    });
+    let scheduled = 0;
+    let cancelled = 0;
+    const rafSpy = (() => {
+      scheduled += 1;
+      return scheduled;
+    }) as unknown as typeof w.requestAnimationFrame;
+    const cancelSpy = (() => {
+      cancelled += 1;
+    }) as unknown as typeof w.cancelAnimationFrame;
+    w.requestAnimationFrame = rafSpy;
+    w.cancelAnimationFrame = cancelSpy;
+    globals.requestAnimationFrame = rafSpy;
+    globals.cancelAnimationFrame = cancelSpy;
+    const renderLayer = async (reducedMotion: boolean) => {
+      w.matchMedia = ((query: string) => ({
+        matches: reducedMotion && query.includes('prefers-reduced-motion'),
+        media: query,
+        addEventListener() {},
+        removeEventListener() {},
+      })) as unknown as typeof w.matchMedia;
+      appStore.setState({
+        appearanceOpen: false,
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', customDensity: 5 },
+        wallpaperUrl: null,
+      } as never);
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      await act(async () => {
+        root.render(React.createElement(Wallpaper));
+      });
+      await flush();
+      return { host, root };
+    };
+    try {
+      const still = await renderLayer(true);
+      check('reduced motion does not animate the wallpaper', scheduled, 0);
+      await act(async () => {
+        still.root.unmount();
+      });
+      still.host.remove();
+
+      const moving = await renderLayer(false);
+      check('with a canvas the particles animate', scheduled > 0, true);
+      const stopsBefore = cancelled;
+      await act(async () => {
+        moving.root.unmount();
+      });
+      moving.host.remove();
+      check('and going away stops the loop', cancelled > stopsBefore, true);
+    } finally {
+      canvasProto.getContext = realGetContext;
+      w.requestAnimationFrame = realRaf;
+      w.cancelAnimationFrame = realCancel;
+      globals.requestAnimationFrame = realGlobalRaf;
+      globals.cancelAnimationFrame = realGlobalCancel;
+      w.matchMedia = realMatchMedia;
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
+  /* --- the administrator's version of the same wallpaper ------------------- */
+  {
+    const admin = (kind: string, options: Record<string, unknown>) => ({
+      configured: true,
+      kind,
+      file: 'bg.webp',
+      bytes: 1000,
+      hash: 'abc',
+      url: 'https://cdn.example.com/bg.webp',
+      note: null,
+      options: {
+        crop: { x: 0, y: 0, w: 1, h: 1 },
+        blur: 12,
+        dim: 0.4,
+        dynamic: false,
+        auroraA: '',
+        auroraB: '',
+        ...options,
+      },
+      available: [],
+    });
+    const mine = { ...DEFAULT_WALLPAPER, kind: 'image' as const, url: 'https://cdn.example.com/mine.png', blur: 3, dim: 0.2 };
+    const custom = shownWallpaper(mine, admin('custom', { customDrift: 0.8, customDensity: 42, customParticleWind: 180 }) as never);
+    check(
+      'a custom default background carries its picture and its numbers',
+      [custom.kind, custom.url, custom.customDrift, custom.customDensity, custom.customParticleWind],
+      ['custom', 'https://cdn.example.com/bg.webp', 0.8, 42, 180],
+    );
+    check('and takes the darkness from the administrator', [custom.dim, custom.blur], [0.4, 3]);
+    const legacy = shownWallpaper(DEFAULT_WALLPAPER, admin('custom', {}) as never);
+    check(
+      'a settings file from before the custom numbers gets the defaults',
+      [legacy.customDrift, legacy.customSpeed, legacy.customDensity],
+      [CUSTOM_DEFAULTS.drift, CUSTOM_DEFAULTS.speed, undefined],
+    );
+    // The kinds that were there before are unchanged.
+    const picture = shownWallpaper(mine, admin('image', { blur: 9, dim: 0.5 }) as never);
+    check(
+      'a picture default background still frames the picture',
+      [picture.kind, picture.url, picture.blur, picture.dim],
+      ['image', 'https://cdn.example.com/bg.webp', 9, 0.5],
+    );
+    const aurora = shownWallpaper(mine, admin('aurora', { auroraA: '#111111' }) as never);
+    check('and the theme background is still the theme', [aurora.kind, aurora.auroraA], ['none', '#111111']);
+    check('with no administrator background the user keeps theirs', shownWallpaper(mine, null), mine);
+  }
+
+  /* --- the appearance dialog's controls ------------------------------------ */
+  {
+    const { AppearanceDialog } = await import('./src/components/AppearanceDialog');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    appStore.setState({
+      appearanceOpen: true,
+      adminBackground: null,
+      wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', customA: '#123456', customB: '#654321' },
+    } as never);
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(React.createElement(AppearanceDialog));
+    });
+    await flush();
+    const sliders = Array.from(host.querySelectorAll<HTMLInputElement>('[data-custom-controls] input[type="range"]'));
+    check('the fourth wallpaper shows its controls', Boolean(host.querySelector('[data-custom-controls]')), true);
+    check(
+      'with nine sliders, named like the shared list',
+      sliders.map((slider) => slider.getAttribute('aria-label')),
+      CUSTOM_WALLPAPER_SLIDERS.map((slider: { label: string }) => slider.label),
+    );
+    check(
+      'and the two colours of the colour field',
+      [
+        host.querySelector<HTMLInputElement>('input[aria-label="自定义壁纸主色"]')?.value,
+        host.querySelector<HTMLInputElement>('input[aria-label="自定义壁纸辅色"]')?.value,
+      ],
+      ['#123456', '#654321'],
+    );
+    check('a picture can be imported', Boolean(host.querySelector('[data-custom-import]')), true);
+    check('and the preview is the real wallpaper', Boolean(host.querySelector('[data-custom-preview] [data-custom-wallpaper]')), true);
+    // Moving a slider writes the setting it belongs to.
+    const drift = host.querySelector<HTMLInputElement>('input[aria-label="晃动幅度"]') as HTMLInputElement;
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(drift, '0.9');
+      drift.dispatchEvent(new w.Event('input', { bubbles: true }));
+    });
+    await flush();
+    check('a slider writes its setting', appStore.getState().wallpaper.customDrift, 0.9);
+    check('and the wallpaper stays the custom one', appStore.getState().wallpaper.kind, 'custom');
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+    globalThis.fetch = realFetch;
+    appStore.setState(hold);
   }
 }
 

@@ -4,7 +4,6 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronLeft,
-  ChevronUp,
   Cloud,
   CloudOff,
   FileText,
@@ -26,7 +25,6 @@ import { cn } from '../lib/cn';
 import type { NoteSummary } from '../lib/types';
 import {
   DEFAULT_SEARCH_SCOPE,
-  SORT_KEYS,
   useAppStore,
   useCanWrite,
   useReadOnlyReason,
@@ -37,7 +35,7 @@ import { NoteTree, compareNotes } from './NoteTree';
 import { SessionFooter } from './Sidebar';
 import { PublishDialog } from './publish/PublishDialog';
 import { PublishManagerDialog } from './publish/PublishManagerDialog';
-import { Badge, Button, Field, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
+import { Badge, Button, Field, Input, Modal, Skeleton, Tooltip } from './ui/primitives';
 
 /** What each sort key is called, wherever it is shown. */
 const SORT_LABELS: Record<SortKey, string> = {
@@ -47,9 +45,21 @@ const SORT_LABELS: Record<SortKey, string> = {
   words: '字数',
 };
 
-// Built from the store's own list so the picker cannot drift out of step with
-// what the store accepts, and so titles stay first.
-const SORTS = SORT_KEYS.map((value) => ({ value, label: SORT_LABELS[value] }));
+/** How long a row is held before it can be dragged, and how far the pointer
+ * may wander first. The tree uses the same pair of numbers for its gestures. */
+const SORT_HOLD_MS = 300;
+const SORT_DRAG_SLOP = 8;
+/** A row's height, for environments with no layout to measure (jsdom). */
+const SORT_ROW_HEIGHT = 28;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+/** Moves one key to a new position in a priority order. */
+function moveKeyTo(order: SortKey[], key: SortKey, index: number): SortKey[] {
+  const rest = order.filter((item) => item !== key);
+  rest.splice(clamp(index, 0, rest.length), 0, key);
+  return rest;
+}
 
 /** The two directions, in the order the buttons are drawn. */
 const ORDERS: { value: SortOrder; label: string; hint: string; Icon: typeof ArrowUp }[] = [
@@ -58,19 +68,34 @@ const ORDERS: { value: SortOrder; label: string; hint: string; Icon: typeof Arro
 ];
 
 /**
- * What a prompt's inputs tell the browser and the password managers.
+ * The type a prompt's text inputs use.
  *
- * A small dialog that appears out of nowhere asking for a name looks exactly
- * like a login form to them: Chrome offers to save a password, Bitwarden /
- * 1Password / LastPass paint their icon over the field. These are each
- * manager's own opt-out, plus the generic autocomplete and spellcheck ones.
+ * A dialog that appears out of nowhere asking for a name looks like a login
+ * form to password managers. The attributes below are each manager's own
+ * opt-out, but Bitwarden only honours `data-bwignore` when its "page-controlled
+ * attributes" setting is enabled, which is why piling attributes on alone never
+ * fixed this. What it does unconditionally is ignore the *type*: its content
+ * script skips `input[type=search]` when collecting fields (so no inline menu),
+ * and its login filler excludes the type. So the fields are search boxes to the
+ * browser - still plain text inputs to type in - and the classes take the
+ * browser's search chrome (rounded corners, the clear button) back off.
+ *
+ * This is a heuristic arms race; the report for the change has the sources and
+ * what to do if an old extension still offers to fill them.
+ */
+const PROMPT_INPUT_TYPE = 'search';
+const PROMPT_SEARCH_CLASSES =
+  'appearance-none [&::-webkit-search-cancel-button]:hidden [&::-webkit-search-decoration]:hidden';
+
+/**
+ * What a prompt's inputs tell the browser and the password managers besides the
+ * type: the generic autocomplete/spellcheck opt-outs, plus each manager's own.
  */
 const PROMPT_INPUT_GUARDS = {
   autoComplete: 'off',
   autoCorrect: 'off',
   autoCapitalize: 'off',
   spellCheck: false,
-  name: 'prompt-value',
   'data-bwignore': 'true',
   'data-1p-ignore': 'true',
   'data-lpignore': 'true',
@@ -96,6 +121,24 @@ export type PromptState =
   | null;
 
 /**
+ * Normalises a folder typed by hand: `a//b/` is the path `a/b`, and an empty
+ * answer is the notes root. A `.` or `..` segment is refused rather than
+ * dropped - dropping it would write the note somewhere other than it says.
+ */
+function normaliseFolderInput(raw: string): { path: string; error: string | null } {
+  const trimmed = raw.trim();
+  if (trimmed === '') return { path: '', error: null };
+  const segments = trimmed
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  if (segments.some((segment) => segment === '.' || segment === '..')) {
+    return { path: '', error: '路径里不能有 . 或 ..' };
+  }
+  return { path: segments.join('/'), error: null };
+}
+
+/**
  * The single left column: navigation, filters and the note tree in one place.
  *
  * The card list and the grid are gone. Notes live in folders on disk, and the
@@ -118,7 +161,7 @@ export function NotesPanel() {
   const sort = useAppStore((s) => s.sort);
   const setSort = useAppStore((s) => s.setSort);
   const sortKeys = useAppStore((s) => s.sortKeys);
-  const moveSortKey = useAppStore((s) => s.moveSortKey);
+  const setSortKeys = useAppStore((s) => s.setSortKeys);
   const sortOrder = useAppStore((s) => s.sortOrder);
   const setSortOrder = useAppStore((s) => s.setSortOrder);
   const activeTag = useAppStore((s) => s.activeTag);
@@ -450,20 +493,13 @@ export function NotesPanel() {
           <span className="truncate text-[12px] font-medium text-[var(--muted)]">{filterLabel}</span>
           <Badge tone="neutral">{filtered.length}</Badge>
           <div className="ml-auto flex items-center gap-1">
-            <Select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
-              aria-label="排序方式"
-              data-testid="sort-key"
-              containerClassName="w-[104px]"
-              className="h-[30px] rounded-lg border-[var(--line)] bg-transparent pl-2 pr-7 text-[11.5px] text-[var(--muted)]"
-            >
-              {SORTS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
+            <SortMenu
+              sort={sort}
+              sortKeys={sortKeys}
+              sortOrder={sortOrder}
+              onPromote={setSort}
+              onReorder={setSortKeys}
+            />
             {/* Which way the sort runs. Two buttons rather than one toggle, so
                 the direction in force is readable at a glance instead of having
                 to be worked out from an icon that could mean either. */}
@@ -498,64 +534,6 @@ export function NotesPanel() {
               ))}
             </div>
           </div>
-        </div>
-
-        {/* The order the four keys take part in. Left out in the open rather
-            than folded away: which column decides the order is what the list is
-            doing, and a setting nobody can see is one nobody uses. Each row is
-            one key; the arrows move it in the order, and the first row decides
-            the order outright. */}
-        <div
-          data-testid="sort-priority"
-          role="group"
-          aria-label="排序优先级"
-          className="rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] px-2 py-1.5"
-        >
-          <div className="mb-0.5 flex items-center gap-1 text-[10.5px] text-[var(--faint)]">
-            <ListOrdered className="h-3 w-3 shrink-0" />
-            <span>排序优先级</span>
-            <span className="ml-auto">从上到下</span>
-          </div>
-          <ol className="space-y-0.5">
-            {sortKeys.map((key, index) => (
-              <li
-                key={key}
-                data-testid={'sort-priority-item-' + key}
-                className="flex items-center gap-1 rounded-md px-1 py-0.5 text-[11.5px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
-              >
-                <span aria-hidden className="w-3 shrink-0 text-[10px] tabular-nums text-[var(--faint)]">
-                  {index + 1}
-                </span>
-                <span className="min-w-0 flex-1 truncate">{SORT_LABELS[key]}</span>
-                {/* The direction is one setting for the whole order, so every row
-                    carries the same arrow: it says which way these keys run, not
-                    that this row has a direction of its own. */}
-                <span aria-hidden className="shrink-0 text-[10px] text-[var(--faint)]">
-                  {sortOrder === 'asc' ? '↑' : '↓'}
-                </span>
-                <button
-                  type="button"
-                  data-testid={'sort-priority-up-' + key}
-                  aria-label={'上移 ' + SORT_LABELS[key]}
-                  disabled={index === 0}
-                  onClick={() => moveSortKey(key, -1)}
-                  className="focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <ChevronUp className="h-3 w-3" />
-                </button>
-                <button
-                  type="button"
-                  data-testid={'sort-priority-down-' + key}
-                  aria-label={'下移 ' + SORT_LABELS[key]}
-                  disabled={index === sortKeys.length - 1}
-                  onClick={() => moveSortKey(key, 1)}
-                  className="focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              </li>
-            ))}
-          </ol>
         </div>
 
         {activeTag || favoriteOnly || activeFolder !== null ? (
@@ -665,10 +643,20 @@ export function NotesPanel() {
               case 'renameNote':
                 void renameNote(current.id, value);
                 break;
-              case 'newNote':
+              case 'newNote': {
                 // An empty title is a real choice: the note is called 未命名笔记.
-                void createNote({ title: value.trim() || undefined, folder });
+                const title = value.trim() || undefined;
+                // The folder asked for need not exist yet: it is made first, and
+                // the note only follows if that worked.
+                if (folder !== '' && !folders.some((entry) => entry.path === folder)) {
+                  void createFolder(folder, { silent: true }).then((created) => {
+                    if (created) void createNote({ title, folder });
+                  });
+                  break;
+                }
+                void createNote({ title, folder });
                 break;
+              }
               case 'upload':
                 // The dialog has said where; now comes the picker.
                 uploadTarget.current = folder;
@@ -822,10 +810,13 @@ export function PromptDialog({
 }) {
   const [value, setValue] = useState('');
   const [folder, setFolder] = useState('');
+  /** Whether the folder field has the keyboard, which shows its suggestions. */
+  const [folderFocused, setFolderFocused] = useState(false);
 
   useEffect(() => {
     setValue(state && 'value' in state ? state.value : '');
     setFolder(state ? initialFolder(state) : '');
+    setFolderFocused(false);
   }, [state]);
 
   if (!state) return null;
@@ -836,17 +827,36 @@ export function PromptDialog({
   const options = info.exclude
     ? folders.filter((path) => path !== info.exclude && !path.startsWith(`${info.exclude}/`))
     : folders;
-  // The destination is typed now, so it has to name a folder exactly: an empty
-  // answer is the root, and a near miss would put the note somewhere the user
-  // did not mean. Trimming is what keeps a stray space from being a typo.
-  const typedFolder = folder.trim();
-  const folderError =
-    typedFolder === '' || options.includes(typedFolder)
+  // The destination is typed by hand and then checked: it names a folder
+  // exactly, or it does not. Trimming and the segment check happen first, so
+  // ` proj ` is `proj` and `a//b` is `a/b`.
+  const typedFolder = normaliseFolderInput(folder);
+  const folderPath = typedFolder.path;
+  const folderExists = folderPath === '' || folders.includes(folderPath);
+  // A new note may name a folder that does not exist yet - it is created with
+  // the note. Every other prompt only moves things to a folder already there.
+  const canCreateFolder = state.kind === 'newNote';
+  const folderAllowed = folderPath === '' || options.includes(folderPath);
+  const folderHint =
+    typedFolder.error ??
+    (folderAllowed
       ? null
-      : folders.includes(typedFolder)
+      : folderExists
         ? '不能移动到这个文件夹'
-        : '没有这个文件夹';
-  const ready = (!info.field?.required || value.trim().length > 0) && folderError === null;
+        : canCreateFolder
+          ? '不存在，将新建该文件夹'
+          : '没有这个文件夹');
+  const folderInvalid =
+    typedFolder.error !== null || (!folderAllowed && !(canCreateFolder && !folderExists));
+  const ready = (!info.field?.required || value.trim().length > 0) && !folderInvalid;
+  // Suggestions follow the prefix typed so far - `pro` offers `proj` and
+  // `proj/deep` - and only folders this prompt would accept, capped so the
+  // list stays a glance rather than a second dialog.
+  const suggestionPrefix = folder.trim().replace(/^\/+/, '').toLowerCase();
+  const prefixMatches = options
+    .filter((candidate) => candidate.toLowerCase().startsWith(suggestionPrefix))
+    .slice(0, 8);
+  const showSuggestions = prefixMatches.length > 0 && (folderFocused || folder.trim() !== '');
 
   return (
     <Modal
@@ -865,7 +875,7 @@ export function PromptDialog({
             size="sm"
             data-testid="dialog-confirm"
             disabled={!ready}
-            onClick={() => onConfirm(value, typedFolder)}
+            onClick={() => onConfirm(value, folderPath)}
           >
             确定
           </Button>
@@ -877,6 +887,9 @@ export function PromptDialog({
           <Field label={info.field.label}>
             <Input
               {...PROMPT_INPUT_GUARDS}
+              type={PROMPT_INPUT_TYPE}
+              className={PROMPT_SEARCH_CLASSES}
+              name="dialog-field"
               value={value}
               autoFocus
               aria-label={info.field.aria}
@@ -884,37 +897,68 @@ export function PromptDialog({
               placeholder={info.field.placeholder}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && ready) onConfirm(value, typedFolder);
+                if (e.key === 'Enter' && ready) onConfirm(value, folderPath);
               }}
             />
           </Field>
         ) : null}
         {info.picker ? (
-          <Field label="目标目录" hint="留空表示根目录，也可以直接输入路径">
-            <Input
-              {...PROMPT_INPUT_GUARDS}
-              name="prompt-folder"
-              value={folder}
-              aria-label="目标目录"
-              data-testid="dialog-folder-select"
-              list="prompt-folder-options"
-              placeholder="根目录"
-              onChange={(e) => setFolder(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && ready) onConfirm(value, typedFolder);
-              }}
-            />
-            {/* The browser's own suggestion list: every folder the prompt would
-                accept, and no invented ones. An empty value is the root, which
-                is the placeholder rather than a choice. */}
-            <datalist id="prompt-folder-options">
-              {options.map((path) => (
-                <option key={path} value={path} />
-              ))}
-            </datalist>
-            {folderError ? (
-              <p data-testid="dialog-folder-error" className="mt-1 text-[11px] text-[var(--danger)]">
-                {folderError}
+          <Field label="目标目录" hint="留空表示根目录；输入后按前缀匹配，不存在则新建">
+            {/* The old test id stays on the wrapper: the field itself is a text
+                input now, and anything that only looked for it keeps working. */}
+            <div data-testid="dialog-folder-select" className="relative">
+              <Input
+                {...PROMPT_INPUT_GUARDS}
+                type={PROMPT_INPUT_TYPE}
+                className={PROMPT_SEARCH_CLASSES}
+                name="dialog-folder"
+                value={folder}
+                aria-label="目标目录"
+                data-testid="dialog-folder-input"
+                role="combobox"
+                aria-expanded={showSuggestions}
+                aria-controls="prompt-folder-suggestions"
+                aria-autocomplete="list"
+                placeholder="根目录"
+                onFocus={() => setFolderFocused(true)}
+                onBlur={() => setFolderFocused(false)}
+                onChange={(e) => setFolder(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && ready) onConfirm(value, folderPath);
+                }}
+              />
+              {showSuggestions ? (
+                <div
+                  id="prompt-folder-suggestions"
+                  data-testid="folder-suggestions"
+                  role="listbox"
+                  aria-label="匹配的文件夹"
+                  className="absolute left-0 right-0 top-full z-20 mt-1 max-h-40 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--elevated)] p-1 shadow-strong"
+                >
+                  {prefixMatches.map((candidate) => (
+                    <button
+                      key={candidate}
+                      type="button"
+                      role="option"
+                      aria-selected={candidate === folderPath}
+                      data-testid={'folder-suggestion-' + candidate}
+                      // Keeps the keyboard in the field: the dialog is not done.
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => setFolder(candidate)}
+                      className="focus-ring block w-full truncate rounded-lg px-2 py-1 text-left font-mono text-[11.5px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-[var(--text)]"
+                    >
+                      {candidate}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {folderHint ? (
+              <p
+                data-testid="dialog-folder-hint"
+                className={cn('mt-1 text-[11px]', folderInvalid ? 'text-[var(--danger)]' : 'text-[var(--faint)]')}
+              >
+                {folderHint}
               </p>
             ) : null}
           </Field>
@@ -951,3 +995,256 @@ function EmptyState({ hasQuery, canCreate, onCreate }: { hasQuery: boolean; canC
     </motion.div>
   );
 }
+
+/**
+ * The sort picker.
+ *
+ * One line, one button: the priority list opens over the panel instead of
+ * taking a block of it. A click on a key makes it the first thing the tree
+ * compares on; holding a row for a moment and dragging it reorders the whole
+ * list, which is what the old up/down buttons did while saying it in two rows.
+ */
+function SortMenu({
+  sort,
+  sortKeys,
+  sortOrder,
+  onPromote,
+  onReorder,
+}: {
+  sort: SortKey;
+  sortKeys: SortKey[];
+  sortOrder: SortOrder;
+  onPromote: (key: SortKey) => void;
+  onReorder: (keys: SortKey[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  /** The order the rows are drawn in while a drag is in progress. */
+  const [draft, setDraft] = useState<SortKey[]>(sortKeys);
+  /** The row being dragged, for the marker and for ignoring its click. */
+  const [dragging, setDragging] = useState<SortKey | null>(null);
+  const wrap = useRef<HTMLDivElement | null>(null);
+  const holdTimer = useRef<number | null>(null);
+  const press = useRef<{ key: SortKey; index: number; x: number; y: number } | null>(null);
+  const detach = useRef<(() => void) | null>(null);
+  const draggingRef = useRef<SortKey | null>(null);
+  const draftRef = useRef<SortKey[]>(sortKeys);
+  /** Set when a press became a drag: the click it leaves is not a click. */
+  const swallowClick = useRef(false);
+
+  const stopPress = () => {
+    if (holdTimer.current !== null) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
+    detach.current?.();
+    detach.current = null;
+    press.current = null;
+    draggingRef.current = null;
+    setDragging(null);
+  };
+
+  const close = () => {
+    stopPress();
+    setOpen(false);
+  };
+
+  // The store is the truth: when the order changes anywhere else, the rows
+  // follow. A drag is the exception - it is the one doing the changing.
+  useEffect(() => {
+    if (draggingRef.current !== null) return;
+    draftRef.current = sortKeys;
+    setDraft(sortKeys);
+  }, [sortKeys]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      stopPress();
+      setOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
+  // A press anywhere else puts the menu away.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (event: PointerEvent) => {
+      if (wrap.current?.contains(event.target as Node)) return;
+      stopPress();
+      setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open]);
+
+  /** Which row the pointer would put the dragged key in front of. */
+  const dropIndex = (pointerY: number): number => {
+    const rows = wrap.current
+      ? Array.from(wrap.current.querySelectorAll<HTMLElement>('[data-testid^="sort-menu-item-"]'))
+      : [];
+    const rects = rows.map((row) => row.getBoundingClientRect());
+    const order = draftRef.current;
+    if (rects.length === 0 || rects.every((rect) => rect.height === 0)) {
+      // No layout to measure: the pointer's travel across rows is all there is.
+      const start = press.current;
+      if (!start) return 0;
+      return clamp(start.index + Math.round((pointerY - start.y) / SORT_ROW_HEIGHT), 0, order.length - 1);
+    }
+    let index = 0;
+    rects.forEach((rect, row) => {
+      if (pointerY > rect.top + rect.height / 2) index = row + 1;
+    });
+    return clamp(index, 0, order.length - 1);
+  };
+
+  const beginPress = (event: React.PointerEvent, key: SortKey, index: number) => {
+    if (typeof event.button === 'number' && event.button !== 0) return;
+    stopPress();
+    // A press always comes before the click it may produce, so a flag left over
+    // from a previous drag cannot eat this one.
+    swallowClick.current = false;
+    press.current = { key, index, x: event.clientX ?? 0, y: event.clientY ?? 0 };
+
+    const onMove = (move: PointerEvent) => {
+      const origin = press.current;
+      if (!origin) return;
+      const x = move.clientX ?? 0;
+      const y = move.clientY ?? 0;
+      if (draggingRef.current === null) {
+        // Not held long enough to be a drag, but no longer a click either.
+        if (Math.hypot(x - origin.x, y - origin.y) > SORT_DRAG_SLOP) {
+          swallowClick.current = true;
+          stopPress();
+        }
+        return;
+      }
+      move.preventDefault();
+      const next = moveKeyTo(draftRef.current, origin.key, dropIndex(y));
+      draftRef.current = next;
+      setDraft(next);
+    };
+
+    const onUp = () => {
+      const wasDragging = draggingRef.current !== null;
+      const next = draftRef.current;
+      stopPress();
+      if (!wasDragging) return;
+      // A drag that ended on its own row is not an edit.
+      if (next.join(',') !== sortKeys.join(',')) onReorder(next);
+    };
+
+    holdTimer.current = window.setTimeout(() => {
+      holdTimer.current = null;
+      draggingRef.current = key;
+      setDragging(key);
+      swallowClick.current = true;
+      draftRef.current = [...sortKeys];
+      setDraft([...sortKeys]);
+    }, SORT_HOLD_MS);
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', stopPress);
+    detach.current = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', stopPress);
+    };
+  };
+
+  return (
+    <div ref={wrap} className="relative">
+      <button
+        type="button"
+        data-testid="sort-menu-button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={'排序方式：' + SORT_LABELS[sort]}
+        onClick={() => {
+          stopPress();
+          swallowClick.current = false;
+          draftRef.current = sortKeys;
+          setDraft(sortKeys);
+          setOpen((value) => !value);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowDown' || open) return;
+          event.preventDefault();
+          draftRef.current = sortKeys;
+          setDraft(sortKeys);
+          setOpen(true);
+        }}
+        className="focus-ring flex h-[30px] items-center gap-1 rounded-lg border border-[var(--line)] px-2 text-[11.5px] text-[var(--muted)] transition-colors hover:text-[var(--text)]"
+      >
+        <ListOrdered className="h-3 w-3 shrink-0 text-[var(--faint)]" />
+        <span className="max-w-[64px] truncate">{SORT_LABELS[sort]}</span>
+        <ChevronDown
+          className={cn('h-3 w-3 shrink-0 text-[var(--faint)] transition-transform', open && 'rotate-180')}
+        />
+      </button>
+      {open ? (
+        <div
+          data-testid="sort-menu"
+          role="listbox"
+          aria-label="排序优先级"
+          className="absolute right-0 top-full z-20 mt-1 w-[172px] rounded-xl border border-[var(--line)] bg-[var(--elevated)] p-1 shadow-strong"
+        >
+          <p className="px-2 pb-1 pt-0.5 text-[10px] leading-relaxed text-[var(--faint)]">
+            从上到下优先级减弱 · 长按拖动可改顺序
+          </p>
+          {draft.map((key, index) => (
+            <button
+              key={key}
+              type="button"
+              role="option"
+              aria-selected={key === sort}
+              aria-label={SORT_LABELS[key] + '，优先级 ' + (index + 1)}
+              data-testid={'sort-menu-item-' + key}
+              data-sort-dragging={dragging === key ? 'true' : undefined}
+              onPointerDown={(event) => beginPress(event, key, index)}
+              onClick={() => {
+                if (swallowClick.current) {
+                  swallowClick.current = false;
+                  stopPress();
+                  return;
+                }
+                onPromote(key);
+                close();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+                event.preventDefault();
+                const step = event.key === 'ArrowUp' ? -1 : 1;
+                onReorder(moveKeyTo(draft, key, draft.indexOf(key) + step));
+              }}
+              className={cn(
+                'flex w-full items-center gap-1.5 rounded-lg px-2 py-1 text-left text-[11.5px] transition-colors',
+                key === sort ? 'text-[var(--accent)]' : 'text-[var(--muted)]',
+                dragging === key
+                  ? 'bg-[var(--accent-soft)] ring-1 ring-[var(--accent)]'
+                  : 'hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)]',
+              )}
+            >
+              <span aria-hidden className="w-3 shrink-0 text-[10px] tabular-nums text-[var(--faint)]">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{SORT_LABELS[key]}</span>
+              {key === sort ? (
+                <span className="shrink-0 rounded bg-[var(--accent-soft)] px-1 text-[9px] leading-4 text-[var(--accent)]">
+                  主键
+                </span>
+              ) : null}
+              <span aria-hidden className="shrink-0 text-[10px] text-[var(--faint)]">
+                {sortOrder === 'asc' ? '↑' : '↓'}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+

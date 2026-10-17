@@ -3,7 +3,7 @@ import { extractAccent } from '../lib/accent';
 import { shownWallpaper } from '../lib/admin-background';
 import { playScene, playsScenesLive, type ScenePlayer } from '../lib/scene/play-scene';
 import { sceneStillUrl } from '../lib/scene/render-still';
-import { cropMediaStyle, customColors } from '../lib/wallpaper';
+import { cropMediaStyle } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 import { CustomWallpaper } from './CustomWallpaper';
 
@@ -328,7 +328,10 @@ export function Wallpaper() {
     let cancelled = false;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
-      const media = document.querySelector('.wallpaper-media');
+      // Pictures and videos carry .wallpaper-media; the custom wallpaper's
+      // drifting picture is a motion <img> of its own.
+      const media =
+        document.querySelector('.wallpaper-media') ?? document.querySelector('[data-custom-image]');
       if (!media) return;
       setAccent(extractAccent(media as unknown as CanvasImageSource));
     }, 1500);
@@ -350,17 +353,14 @@ export function Wallpaper() {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
 
-  // The custom wallpaper draws itself: no URL, no file, nothing to fetch, so
-  // it leaves before the code that expects a media source.
+  // The custom wallpaper is a picture that drifts with particles over it, or
+  // the colour field alone when there is no picture. It accepts the settings
+  // object as-is - only the custom fields are read - so the administrator's
+  // mapping and the user's own choice arrive through the same door.
   if (wallpaper.kind === 'custom') {
     return (
       <div className="wallpaper-layer" aria-hidden>
-        <CustomWallpaper
-          colors={customColors(wallpaper.customA, wallpaper.customB)}
-          drift={wallpaper.customDrift}
-          speed={wallpaper.customSpeed}
-          density={wallpaper.customDensity}
-        />
+        <CustomWallpaper settings={wallpaper} url={url} />
         <div className="wallpaper-scrim" style={{ opacity: wallpaper.dim }} />
       </div>
     );

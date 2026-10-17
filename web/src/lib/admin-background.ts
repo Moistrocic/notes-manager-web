@@ -1,4 +1,5 @@
-import type { CropRect, WallpaperKind, WallpaperSettings } from './wallpaper';
+import { CUSTOM_DEFAULTS } from './wallpaper';
+import type { CropRect, CustomWallpaperParams, WallpaperKind, WallpaperSettings } from './wallpaper';
 
 /** One file in the server's backgrounds folder. */
 export interface BackgroundFile {
@@ -7,8 +8,15 @@ export interface BackgroundFile {
   bytes: number;
 }
 
-/** How the administrator wants their background framed and lit. */
-export interface BackgroundOptions {
+/**
+ * How the administrator wants their background framed and lit.
+ *
+ * The custom background's motion and particle numbers are the same fields the
+ * personal setting uses; they are optional here because a settings file written
+ * before that background existed has none of them (the server fills defaults in
+ * before this ever reaches the browser).
+ */
+export interface BackgroundOptions extends Omit<CustomWallpaperParams, 'customA' | 'customB'> {
   crop: CropRect;
   blur: number;
   dim: number;
@@ -23,7 +31,7 @@ export interface BackgroundOptions {
 export interface AdminBackground {
   configured: boolean;
   /** `aurora` is the theme's own background; null when nothing is set. */
-  kind: 'aurora' | 'image' | 'video' | 'scene' | null;
+  kind: 'aurora' | 'image' | 'video' | 'scene' | 'custom' | null;
   file: string | null;
   bytes: number;
   /** Content hash of the file, as the server reports it. */
@@ -50,6 +58,32 @@ export function shownWallpaper(settings: WallpaperSettings, admin: AdminBackgrou
   if (!settings.useAdminBackground || admin?.configured !== true) return settings;
   if (admin.kind === 'aurora') {
     return { ...settings, kind: 'none', source: 'url', url: '', auroraA: admin.options.auroraA, auroraB: admin.options.auroraB };
+  }
+  if (admin.kind === 'custom') {
+    // The custom background carries its own motion and particles; the framing
+    // knobs (crop, blur) belong to pictures and videos and mean nothing here.
+    // The palette stays the user's, used only if their copy of the picture
+    // fails to load and the drawn field takes over.
+    return {
+      ...settings,
+      kind: 'custom',
+      source: 'url',
+      url: admin.url,
+      dim: admin.options.dim,
+      // The two required numbers need a value even when the administrator's
+      // settings file predates them; the optional ones may stay undefined and
+      // resolveCustomWallpaper() fills them in.
+      customDrift: admin.options.customDrift ?? CUSTOM_DEFAULTS.drift,
+      customSpeed: admin.options.customSpeed ?? CUSTOM_DEFAULTS.speed,
+      customDensity: admin.options.customDensity,
+      customParticleSize: admin.options.customParticleSize,
+      customParticleOpacity: admin.options.customParticleOpacity,
+      customParticleLife: admin.options.customParticleLife,
+      customParticleSpeed: admin.options.customParticleSpeed,
+      customParticleTurbulence: admin.options.customParticleTurbulence,
+      customParticleColor: admin.options.customParticleColor,
+      customParticleWind: admin.options.customParticleWind,
+    };
   }
   if (!admin.kind) return settings;
   return {

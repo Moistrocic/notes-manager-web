@@ -30,8 +30,12 @@ export interface StorageSettings {
  * `off` is not a background: it hands the choice back to each user, which is
  * what an install that has never configured one does. `aurora` is the theme's
  * own background, which takes two colours rather than a file.
+ *
+ * `custom` is a picture uploaded through the settings dialog and then drawn by
+ * the browser: it drifts, and particles float over it. It needs a file like
+ * `image` does, and unlike the others it also stores the numbers that shape it.
  */
-export type BackgroundKind = 'off' | 'aurora' | 'image' | 'video' | 'scene';
+export type BackgroundKind = 'off' | 'aurora' | 'image' | 'video' | 'scene' | 'custom';
 
 /** Which part of the picture fills the screen, in fractions of the picture. */
 export interface BackgroundCrop {
@@ -56,6 +60,23 @@ export interface BackgroundSettings {
   /** The theme's own background takes two colours; empty means the theme's. */
   auroraA: string;
   auroraB: string;
+  /**
+   * The custom background's motion and particles. Same names and ranges as the
+   * personal setting in web/src/lib/wallpaper.ts, so both dialogs describe the
+   * background in one vocabulary; mergeSettings() clamps them.
+   */
+  customDrift: number;
+  customSpeed: number;
+  customDensity: number;
+  customParticleSize: number;
+  customParticleOpacity: number;
+  customParticleLife: number;
+  customParticleSpeed: number;
+  customParticleTurbulence: number;
+  /** Empty means the theme's accent, like auroraA/auroraB. */
+  customParticleColor: string;
+  /** Degrees: 90 is up. */
+  customParticleWind: number;
 }
 
 export interface GuestSettings {
@@ -86,7 +107,7 @@ export interface AppSettings {
   blog: BlogSettings;
 }
 
-const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene'];
+const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene', 'custom'];
 /** The smallest selection the crop editor can produce, as a server side floor. */
 const MIN_CROP = 0.05;
 
@@ -102,6 +123,19 @@ export const DEFAULT_BACKGROUND: BackgroundSettings = {
   dynamic: false,
   auroraA: '',
   auroraB: '',
+  // The custom background's defaults: mirror web/src/lib/wallpaper.ts
+  // CUSTOM_DEFAULTS, so a background "set here" and one "set in 外观" start the
+  // same and a fresh install's default looks like the shipped one.
+  customDrift: 0.5,
+  customSpeed: 1,
+  customDensity: 140,
+  customParticleSize: 2.2,
+  customParticleOpacity: 0.55,
+  customParticleLife: 3.5,
+  customParticleSpeed: 40,
+  customParticleTurbulence: 0.35,
+  customParticleColor: '',
+  customParticleWind: 90,
 };
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -366,6 +400,25 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
     if (typeof b.dynamic === 'boolean') current.dynamic = b.dynamic;
     if (b.auroraA !== undefined) current.auroraA = colour(b.auroraA, '');
     if (b.auroraB !== undefined) current.auroraB = colour(b.auroraB, '');
+    // The custom background: same ranges the sliders offer, enforced here so a
+    // hand-edited settings.json cannot put the canvas out of range.
+    if (b.customDrift !== undefined) current.customDrift = clampNumber(b.customDrift, 0, 1, current.customDrift);
+    if (b.customSpeed !== undefined) current.customSpeed = clampNumber(b.customSpeed, 0.2, 2, current.customSpeed);
+    if (b.customDensity !== undefined)
+      current.customDensity = Math.round(clampNumber(b.customDensity, 0, 240, current.customDensity));
+    if (b.customParticleSize !== undefined)
+      current.customParticleSize = clampNumber(b.customParticleSize, 0.6, 6, current.customParticleSize);
+    if (b.customParticleOpacity !== undefined)
+      current.customParticleOpacity = clampNumber(b.customParticleOpacity, 0.05, 1, current.customParticleOpacity);
+    if (b.customParticleLife !== undefined)
+      current.customParticleLife = clampNumber(b.customParticleLife, 1, 12, current.customParticleLife);
+    if (b.customParticleSpeed !== undefined)
+      current.customParticleSpeed = clampNumber(b.customParticleSpeed, 0, 120, current.customParticleSpeed);
+    if (b.customParticleTurbulence !== undefined)
+      current.customParticleTurbulence = clampNumber(b.customParticleTurbulence, 0, 1, current.customParticleTurbulence);
+    if (b.customParticleColor !== undefined) current.customParticleColor = colour(b.customParticleColor, '');
+    if (b.customParticleWind !== undefined)
+      current.customParticleWind = clampNumber(b.customParticleWind, 0, 360, current.customParticleWind);
   }
   return out;
 }

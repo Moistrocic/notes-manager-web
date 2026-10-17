@@ -38,6 +38,8 @@ const notes = new Map<string, Note>();
 let notesRoot = '/public/Notes';
 /** While set, write replies are held back so a save can be raced with typing. */
 let slowWrites = false;
+/** While set, the folder endpoint refuses - as a server with no write access would. */
+let refuseFolderCreate = false;
 
 /* -------------------------------------------------------------------------- */
 /* window stub, so the deep link code has somewhere to read the address from   */
@@ -122,6 +124,11 @@ globalThis.fetch = (async (input: unknown, init: RequestInit = {}) => {
   }
   if (url.includes('/api/notes/folders') && method === 'DELETE') {
     return json({ ok: true, folders: [] });
+  }
+  if (url.includes('/api/notes/folders') && method === 'POST') {
+    if (refuseFolderCreate) return json({ error: { message: '拒绝创建' } }, 400);
+    const patch = JSON.parse(body ?? '{}') as { path?: string };
+    return json({ folder: patch.path ?? '', folders: [] });
   }
 
   const noteMatch = /\/api\/notes\/([^/?]+)/.exec(url);
@@ -645,6 +652,28 @@ console.log('sort priority');
   check('a short order is filled in', store.getState().sortKeys, ['words', 'title', 'updated', 'created']);
   store.getState().setSortKeys(SORT_KEYS);
   check('and the default order is put back', store.getState().sortKeys, SORT_KEYS);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Making a folder the server refuses                                          */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('creating a folder');
+
+// 28. A folder that cannot be made says so, and reports failure - the caller
+// that was about to put a note in it has to know not to.
+{
+  refuseFolderCreate = true;
+  store.setState({ toasts: [] } as never);
+  const refused = await store.getState().createFolder('新/目录', { silent: true });
+  check('a folder the server refuses comes back false', refused, false);
+  check('and says which action failed', store.getState().toasts.map((toast) => toast.title), ['创建文件夹失败']);
+
+  refuseFolderCreate = false;
+  store.setState({ toasts: [] } as never);
+  const made = await store.getState().createFolder('新/目录', { silent: true });
+  check('a folder the server accepts comes back true', made, true);
+  check('and a silent creation says nothing of its own', store.getState().toasts, []);
 }
 
 /* -------------------------------------------------------------------------- */

@@ -1,6 +1,7 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
+import { MAX_BACKGROUND_BYTES } from '../../backgrounds/store.js';
 import { createLogger } from '../../logger.js';
-import { handler } from '../middleware.js';
+import { handler, requireAdmin } from '../middleware.js';
 import type { Services } from '../../services.js';
 
 const log = createLogger('routes:background');
@@ -26,7 +27,14 @@ export function backgroundRoutes(services: Services): Router {
       // A file kind without a usable file is not a background: an administrator
       // who deleted the file leaves everybody with their own choice rather than
       // a locked, broken page.
-      const kind = settings.kind === 'off' ? null : settings.kind === 'aurora' ? 'aurora' : file ? settings.kind : null;
+      const kind =
+        settings.kind === 'off'
+          ? null
+          : settings.kind === 'aurora'
+            ? 'aurora'
+            : file && (settings.kind !== 'custom' || file.kind === 'image')
+              ? settings.kind
+              : null;
       // What the browser keys its copy of the file on: the same bytes keep the
       // same hash however the file was replaced, and a different file is a
       // different hash - so a wallpaper is downloaded when it changes rather
@@ -46,6 +54,16 @@ export function backgroundRoutes(services: Services): Router {
           dynamic: settings.dynamic,
           auroraA: settings.auroraA,
           auroraB: settings.auroraB,
+          customDrift: settings.customDrift,
+          customSpeed: settings.customSpeed,
+          customDensity: settings.customDensity,
+          customParticleSize: settings.customParticleSize,
+          customParticleOpacity: settings.customParticleOpacity,
+          customParticleLife: settings.customParticleLife,
+          customParticleSpeed: settings.customParticleSpeed,
+          customParticleTurbulence: settings.customParticleTurbulence,
+          customParticleColor: settings.customParticleColor,
+          customParticleWind: settings.customParticleWind,
         },
         available: files.map((entry) => ({ name: entry.name, kind: entry.kind, bytes: entry.bytes })),
       });
@@ -84,6 +102,49 @@ export function backgroundRoutes(services: Services): Router {
       }
       log.info(`serving background ${file.name}`);
       res.sendFile(absolute);
+    }),
+  );
+
+  /**
+   * Uploads a picture for the custom background.
+   *
+   * Raw bytes with the label in a header, the same shape as the note and font
+   * uploads: no multipart parser, and the bytes stored are the bytes sent. The
+   * client shrinks the picture first; the format is taken from the bytes, and
+   * the settings keep naming the resulting file, so the existing GET / and
+   * GET /file routes serve it like any hand-dropped background.
+   *
+   * Contract: POST /api/background, requireAdmin, Content-Type
+   * application/octet-stream, X-Background-Filename (percent-encoded label),
+   * body = PNG/JPEG/WebP/GIF bytes, max 20 MB. 201 { file, available };
+   * 400 empty_body/invalid_background; 401 unauthenticated; 403 forbidden;
+   * 413 request entity too large (from the raw body parser).
+   */
+  router.post(
+    '/',
+    requireAdmin,
+    express.raw({ type: () => true, limit: MAX_BACKGROUND_BYTES + 1024 }),
+    handler(async (req, res) => {
+      const body = req.body as Buffer | undefined;
+      if (!Buffer.isBuffer(body) || body.length === 0) {
+        res.status(400).json({ error: { message: '没有收到图片数据', code: 'empty_body' } });
+        return;
+      }
+      const decode = (value: unknown): string => {
+        if (typeof value !== 'string') return '';
+        try {
+          return decodeURIComponent(value);
+        } catch {
+          return value;
+        }
+      };
+      const fileName = decode(req.headers['x-background-filename']) || 'background';
+      try {
+        const file = services.backgrounds.save(fileName, body);
+        res.status(201).json({ file, available: services.backgrounds.list() });
+      } catch (err) {
+        res.status(400).json({ error: { message: (err as Error).message, code: 'invalid_background' } });
+      }
     }),
   );
 

@@ -35,9 +35,59 @@ export interface BackgroundManifest {
   note?: string;
 }
 
+/**
+ * The largest picture an administrator may upload.
+ *
+ * The browser shrinks the file before uploading (long edge 2560, WebP), so a
+ * real request is a few hundred kilobytes; this ceiling is for a client that
+ * does not shrink - curl, an old tab - not for the normal path.
+ */
+export const MAX_BACKGROUND_BYTES = 20 * 1024 * 1024;
+
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif']);
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.m4v', '.mov', '.ogv']);
 const SCENE_EXTENSIONS = new Set(['.pkg']);
+
+/** The image format, read from the first bytes of an upload. */
+export function sniffImageType(data: Buffer): 'png' | 'jpeg' | 'gif' | 'webp' | null {
+  if (!data || data.length < 12) return null;
+  if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return 'png';
+  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'jpeg';
+  if (data.subarray(0, 3).toString('latin1') === 'GIF') return 'gif';
+  if (data.subarray(0, 4).toString('latin1') === 'RIFF' && data.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+
+/** The extension a sniffed format is stored under. */
+const TYPE_EXTENSIONS: Record<'png' | 'jpeg' | 'gif' | 'webp', string> = {
+  png: '.png',
+  jpeg: '.jpg',
+  gif: '.gif',
+  webp: '.webp',
+};
+
+/**
+ * A file name that is safe to write and still recognisable.
+ *
+ * The browser sends whatever the file was called; it is only a label. Path
+ * separators are dropped by `basename`, characters that are hostile to a file
+ * system become dashes, a leading dot cannot turn it into a hidden file, and
+ * the extension is chosen by the bytes (see save) - so a .png that is really a
+ * JPEG is not served with the wrong Content-Type for the rest of its life.
+ */
+function safeBackgroundName(raw: string, extension: string): string {
+  const base = path.basename((raw || '').replace(/\\/g, '/'));
+  const stem = base.replace(/\.[^.]*$/, '');
+  const cleaned = stem
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/[\u0000-\u001f]+/g, '')
+    .replace(/^\.+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+    .trim();
+  return `${cleaned || `background-${Date.now()}`}${extension}`;
+}
 
 export function kindOf(name: string): BackgroundFileKind | null {
   const ext = path.extname(name).toLowerCase();
@@ -140,6 +190,31 @@ export class BackgroundStore {
     } catch {
       return 0;
     }
+  }
+
+  /**
+   * Stores an uploaded picture and returns it as the folder listing would.
+   *
+   * The format comes from the bytes rather than from the request's name: the
+   * extension has to match what will actually be served, or the browser refuses
+   * to draw it. A file of the same name is replaced - the administrator is
+   * uploading into the same slot, and the saved settings keep pointing at it.
+   */
+  save(rawName: string, data: Buffer): BackgroundFile {
+    if (!data || data.length === 0) throw new Error('没有收到图片数据');
+    if (data.length > MAX_BACKGROUND_BYTES) throw new Error('背景图片太大（上限 20 MB）');
+    const type = sniffImageType(data);
+    if (!type) throw new Error('只支持 PNG / JPEG / WebP / GIF 图片');
+    fs.mkdirSync(this.dir, { recursive: true });
+    const name = safeBackgroundName(rawName, TYPE_EXTENSIONS[type]);
+    const absolute = path.join(this.dir, name);
+    // Written under a temporary name and renamed, so a failed write never
+    // leaves a half picture where a background used to be.
+    const temporary = path.join(this.dir, `.${name}.upload`);
+    fs.writeFileSync(temporary, data);
+    fs.renameSync(temporary, absolute);
+    log.info(`background saved: ${name} (${data.length} bytes)`);
+    return { name, kind: 'image', bytes: data.length };
   }
 
   contentType(file: BackgroundFile): string {
