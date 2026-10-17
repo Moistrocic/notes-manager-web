@@ -3324,6 +3324,89 @@ console.log('\nthe preview keeps up without holding typing back (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- formulas (KaTeX) ----------------------------------------------------- */
+console.log('\nformulas (jsdom)');
+{
+  const { renderMarkdown, sourceBlocks, annotateSourceLines } = await import('./src/lib/markdown');
+
+  const render = (source: string) => {
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown(source);
+    return container;
+  };
+  const text = (container: HTMLElement) => (container.textContent ?? '').trim();
+
+  // The five delimiters people write a formula with. Each one has to typeset, and
+  // the markup it was written with has to be gone from the text the page shows.
+  {
+    const block = render('前文\n\n$$\na^2 + b^2 = c^2\n$$\n\n后文');
+    check('a block between double dollars is typeset', Boolean(block.querySelector('.katex')), true);
+    check('and its delimiters are gone', text(block).includes('$$'), false);
+    const single = render('前文 $$E = mc^2$$ 后文');
+    check('a display formula written on one line is typeset', Boolean(single.querySelector('.katex')), true);
+    check('with its delimiters gone', text(single).includes('$$'), false);
+    const inline = render('当$x=1$时，解是 1。');
+    check('a formula between single dollars is typeset', Boolean(inline.querySelector('.katex')), true);
+    check('and the dollar signs are gone', text(inline).includes('$'), false);
+    const bracket = render('\\[x^2 + y^2\\]');
+    check('a display formula in brackets is typeset', Boolean(bracket.querySelector('.katex')), true);
+    const paren = render('行内 \\(a+b\\) 公式');
+    check('an inline formula in parens is typeset', Boolean(paren.querySelector('.katex')), true);
+  }
+
+  // The single dollar is deliberately conservative: a note has more prices than
+  // formulas, so the rule has to tell them apart.
+  {
+    const prices = render('价格 $5 和 $6 元');
+    check('two prices are not a formula', Boolean(prices.querySelector('.katex')), false);
+    check('and the dollars are kept', text(prices), '价格 $5 和 $6 元');
+    const chinese = render('当$x=1$时');
+    check('a formula against Chinese characters is still typeset', Boolean(chinese.querySelector('.katex')), true);
+    const spaced = render('$ x $');
+    check('a dollar followed by a space is not a formula', Boolean(spaced.querySelector('.katex')), false);
+    check('and is left as written', text(spaced), '$ x $');
+    const escaped = render('\\$5 美元');
+    check('an escaped dollar is not a formula', Boolean(escaped.querySelector('.katex')), false);
+    check('and shows the character it escapes', text(escaped), '$5 美元');
+  }
+
+  // Code is code, and a formula still being written must not take the note down.
+  {
+    const fenced = render('```\n$not math$ and $$also not$$\n```');
+    check('a fenced block is not typeset', Boolean(fenced.querySelector('.katex')), false);
+    check('and keeps its dollars', (fenced.textContent ?? '').includes('$not math$'), true);
+    const inlineCode = render('用 `$x$` 表示内联代码');
+    check('inline code is not typeset', Boolean(inlineCode.querySelector('.katex')), false);
+    check('and keeps its dollars', inlineCode.querySelector('code')?.textContent, '$x$');
+    const unclosed = render('未闭合 $$ 不吞掉\n\n后文还在');
+    check('an unclosed display delimiter does not swallow what follows', text(unclosed).includes('后文还在'), true);
+    const broken = render('坏公式 $\\frac{1}{$ 之后');
+    check('a formula that will not typeset does not throw', Boolean(broken), true);
+    check('and its source is still readable', text(broken).includes('\\frac'), true);
+  }
+
+  // Formulas are the one place inline styles are allowed, and only there.
+  {
+    const styled = render('<span style="color:red">x</span>\n\n$y=1$');
+    const plain = Array.from(styled.querySelectorAll('span')).find((element) => !element.closest('.katex'));
+    check('a note cannot style the page', plain?.hasAttribute('style'), false);
+    check('but a formula keeps the inline styles it needs', Boolean(styled.querySelector('.katex [style]')), true);
+    const hostile = render('<img src="x" onerror="window.__pwned=1"><script>window.__pwned=1</script>');
+    check('an event handler attribute is stripped', hostile.innerHTML.includes('onerror'), false);
+    check('and a script tag is stripped', hostile.querySelector('script'), null);
+  }
+
+  // A formula is a block like any other: the scroll sync still needs its line.
+  {
+    const source = '# 一\n\n$$\na=1\n$$\n\n## 二\n\n正文\n';
+    const container = render(source);
+    annotateSourceLines(container, source);
+    const marks = Array.from(container.querySelectorAll('[data-line]')).map((element) => element.getAttribute('data-line'));
+    check('every rendered block still carries its source line', marks.length, sourceBlocks(source).length);
+    check('including the formula block', marks, ['1', '3', '7', '9']);
+  }
+}
+
 /* --- the pictures a note refers to ---------------------------------------- */
 console.log('\nimages inside a note (jsdom)');
 {
