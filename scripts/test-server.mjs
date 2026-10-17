@@ -399,8 +399,10 @@ console.log('custom background');
           readBack.options.customParticleRise,
           readBack.options.customParticleDrift,
           readBack.options.customParticleDirection,
+          readBack.options.customParticleDensity,
+          readBack.options.customParticleColor,
         ],
-        [true, 2.5, 0.1, true, 240, 200, 0.7],
+        [true, 2.5, 0.1, true, 240, 200, 0.7, 300, ''],
       );
       // A 1.5.x client still sends the old knobs. They are ignored rather than
       // refused: an upgrade must not fail a save, and the new defaults stand.
@@ -415,10 +417,27 @@ console.log('custom background');
       check('an old client\'s knobs are accepted', oldClient.status, 200);
       const afterOld = settings.effective().background;
       check(
-        'and ignored in favour of the seven controls',
-        [afterOld.customSwayAmplitude, afterOld.customParticleRise],
-        [2.5, 240],
+        'and ignored in favour of the nine controls',
+        [afterOld.customSwayAmplitude, afterOld.customParticleRise, afterOld.customParticleDensity],
+        [2.5, 240, 300],
       );
+      // The base colour is not one of the legacy knobs: a client that already
+      // sends it is honoured, and normalised on the way in.
+      const coloured = await putSettings({
+        ...settings.effective().background,
+        kind: 'custom',
+        file: '我的背景.webp',
+        customParticleColor: '#FF4040',
+      });
+      check('a colour from a client is accepted', coloured.status, 200);
+      check('and saved lowercased', settings.effective().background.customParticleColor, '#ff4040');
+      const brokenColour = await putSettings({
+        ...settings.effective().background,
+        kind: 'custom',
+        file: '我的背景.webp',
+        customParticleColor: 'red',
+      });
+      check('a non-colour falls back to following the theme', [brokenColour.status, settings.effective().background.customParticleColor], [200, '']);
       const missing = await putSettings({ ...settings.effective().background, kind: 'custom', file: 'gone.png' });
       check('a file that is not there is refused', [missing.status, missing.payload.error.code], [400, 'background_missing']);
       writeFileSync(path.join(store.dir, 'clip.mp4'), Buffer.alloc(64));
@@ -438,13 +457,22 @@ console.log('custom background');
           customSwayFrequency: 0,
           customParticleRise: 9999,
           customParticleDirection: 9,
+          customParticleDensity: 9999,
+          customParticleColor: 'red',
         },
       });
       const clamped = settings.effective().background;
       check(
         'wild custom numbers are clamped on the way in',
-        [clamped.customSwayAmplitude, clamped.customSwayFrequency, clamped.customParticleRise, clamped.customParticleDirection],
-        [8, 0.02, 500, 1],
+        [
+          clamped.customSwayAmplitude,
+          clamped.customSwayFrequency,
+          clamped.customParticleRise,
+          clamped.customParticleDirection,
+          clamped.customParticleDensity,
+          clamped.customParticleColor,
+        ],
+        [8, 0.02, 500, 1, 600, ''],
       );
       // (The upload's 20 MB ceiling is a raw-body parser limit and the browser
       // shrinks before sending, so no test here sends a file that big.)

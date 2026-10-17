@@ -11,7 +11,7 @@ export interface BackgroundFile {
 /**
  * How the administrator wants their background framed and lit.
  *
- * The custom background's seven controls are the same fields the personal
+ * The custom background's nine controls are the same fields the personal
  * setting uses; they are optional here because a settings file written before
  * them has none (the server fills defaults in before this reaches the browser).
  */
@@ -59,8 +59,8 @@ export function shownWallpaper(settings: WallpaperSettings, admin: AdminBackgrou
     return { ...settings, kind: 'none', source: 'url', url: '', auroraA: admin.options.auroraA, auroraB: admin.options.auroraB };
   }
   if (admin.kind === 'custom') {
-    // The custom background carries its own sway and particle numbers, and its
-    // own crop: the picture is the wallpaper, so which part of it fills the
+    // The custom background carries its own sway and particle numbers (all
+    // nine), and its own crop: the picture is the wallpaper, so which part of it fills the
     // screen is the administrator's call exactly as it is for a plain image.
     // Blur stays out of it - the picture is drawn through the sway transform and
     // a blurred sway looks like a rendering fault. resolveCustomEffect() fills in
@@ -80,6 +80,8 @@ export function shownWallpaper(settings: WallpaperSettings, admin: AdminBackgrou
       customParticleRise: effect.rise,
       customParticleDrift: effect.drift,
       customParticleDirection: effect.direction,
+      customParticleDensity: effect.density,
+      customParticleColor: effect.color,
     };
   }
   if (!admin.kind) return settings;

@@ -80,6 +80,10 @@ export interface BackgroundSettings {
   customParticleDrift: number;
   /** The engine's drift.forwardRatio, 0 - 1. */
   customParticleDirection: number;
+  /** How many particles the field holds at once, 0 - 600; 0 means none. */
+  customParticleDensity: number;
+  /** "#rrggbb" base colour of the sprites; empty follows the theme accent. */
+  customParticleColor: string;
 }
 
 export interface GuestSettings {
@@ -137,6 +141,8 @@ export const DEFAULT_BACKGROUND: BackgroundSettings = {
   customParticleRise: 240,
   customParticleDrift: 200,
   customParticleDirection: 0.7,
+  customParticleDensity: 300,
+  customParticleColor: '',
 };
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -417,6 +423,10 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
       current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 400, current.customParticleDrift);
     if (b.customParticleDirection !== undefined)
       current.customParticleDirection = clampNumber(b.customParticleDirection, 0, 1, current.customParticleDirection);
+    if (b.customParticleDensity !== undefined)
+      current.customParticleDensity = Math.round(clampNumber(b.customParticleDensity, 0, 600, current.customParticleDensity));
+    // A colour that is not a plain hex string falls back to "follow the theme".
+    if (b.customParticleColor !== undefined) current.customParticleColor = colour(b.customParticleColor, '');
   }
   return out;
 }

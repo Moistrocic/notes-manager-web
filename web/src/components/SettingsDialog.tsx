@@ -76,6 +76,8 @@ const DEFAULT_BACKGROUND: BackgroundSettings = {
   customParticleRise: CUSTOM_EFFECT_DEFAULTS.rise,
   customParticleDrift: CUSTOM_EFFECT_DEFAULTS.drift,
   customParticleDirection: CUSTOM_EFFECT_DEFAULTS.direction,
+  customParticleDensity: CUSTOM_EFFECT_DEFAULTS.density,
+  customParticleColor: CUSTOM_EFFECT_DEFAULTS.color,
 };
 
 /** A file name inside a sentence, so the paths read as paths. */
@@ -469,7 +471,7 @@ export function SettingsDialog() {
             ) : null}
 
             {/* The custom background: a picture the administrator uploads (the
-                browser shrinks it first), plus the same seven controls the
+                browser shrinks it first), plus the same nine controls the
                 appearance dialog offers. */}
             {background.kind === 'custom' ? (
               <div className="space-y-3">

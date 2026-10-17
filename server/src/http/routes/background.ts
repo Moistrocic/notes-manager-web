@@ -61,6 +61,8 @@ export function backgroundRoutes(services: Services): Router {
           customParticleRise: settings.customParticleRise,
           customParticleDrift: settings.customParticleDrift,
           customParticleDirection: settings.customParticleDirection,
+          customParticleDensity: settings.customParticleDensity,
+          customParticleColor: settings.customParticleColor,
         },
         available: files.map((entry) => ({ name: entry.name, kind: entry.kind, bytes: entry.bytes })),
       });

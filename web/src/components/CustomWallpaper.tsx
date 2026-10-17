@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  CUSTOM_EFFECT_COLOR,
   CUSTOM_EFFECT_SLIDERS,
   CUSTOM_EFFECT_TOGGLES,
   FULL_CROP,
@@ -7,7 +8,11 @@ import {
   customBackdrop,
   customColors,
   customSwayCurve,
+  parseParticleColor,
+  particleBrightnessJitter,
+  particleEmissionForDensity,
   resolveCustomEffect,
+  resolveParticleColorValue,
   sceneUnitScale,
   type CropRect,
   type CustomEffectParams,
@@ -334,7 +339,7 @@ export function paintCustomParticles(
 /**
  * The fixed half of the particle system.
  *
- * The seven controls cover what a viewer can tell apart; everything else is a
+ * The nine controls cover what a viewer can tell apart; everything else is a
  * library default with one value, so it is fixed here rather than exposed as a
  * knob nobody wants to touch:
  * - count: 160 for a full-screen field (the emitter's rate/maxcount territory;
@@ -486,11 +491,24 @@ const EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } 
   glow: parseParticleDefinition(EMBER_GLOW_DEFINITION_JSON),
 };
 
-/** The production pair: the flow root and the same glow child. */
-const FLOW_EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } = {
-  root: parseParticleDefinition(FLOW_EMBER_DEFINITION_JSON),
-  glow: EMBER_DEFINITIONS.glow,
-};
+/**
+ * The production pair for a density: the flow root with as many slots and as
+ * many spawns per second as the slider asks for, and the same glow child.
+ *
+ * One slot is one particle on screen, so maxcount is the density itself; the
+ * rate keeps that many alive across the 9-12 s lifetime (density / 10.5).
+ */
+function flowDefinitionsForDensity(density: number): { root: ParticleDefinition; glow: ParticleDefinition } {
+  const emission = particleEmissionForDensity(density);
+  return {
+    root: parseParticleDefinition({
+      ...FLOW_EMBER_DEFINITION_JSON,
+      maxcount: emission.maxCount,
+      emitter: [{ name: 'boxrandom', rate: emission.rate, directions: '0 1 0', distancemax: '1920 1080 0' }],
+    }),
+    glow: EMBER_DEFINITIONS.glow,
+  };
+}
 
 export interface LibraryParticles {
   root: ParticleSystem;
@@ -539,7 +557,7 @@ export function createLibraryParticles(effect: ResolvedCustomEffect): LibraryPar
 export function createFlowParticles(effect: ResolvedCustomEffect): LibraryParticles {
   return buildSystemPair(
     { drift: { rise: effect.rise, speed: 0, spread: 0, turbulence: effect.rise > 0 ? FLOW_TURBULENCE : 0 } },
-    FLOW_EMBER_DEFINITIONS,
+    flowDefinitionsForDensity(effect.density),
   );
 }
 
@@ -583,7 +601,7 @@ export interface ParticleField {
   unit: number;
 }
 
-/** The three numbers the emitter reads (the rest of the look is fixed preset). */
+/** What the emitter reads: the three motion numbers and the sprite colour. */
 export interface ParticleFlow {
   /** Upward speed, scene units per second. */
   rise: number;
@@ -591,6 +609,12 @@ export interface ParticleFlow {
   drift: number;
   /** Probability a particle moves right, 0 - 1. */
   direction: number;
+  /**
+   * Base colour of the halo sprites, 0-1 channels, with a little per-particle
+   * brightness variation around it; null keeps the engine preset's warm colour.
+   * Mutable on purpose: changing the theme accent repaints the live field.
+   */
+  color?: [number, number, number] | null;
 }
 
 /** How far below the bottom edge a particle is born, before its own random extra. */
@@ -675,6 +699,8 @@ export interface ParticleSpawnStats {
 /** What was alive last step, so a respawn (dead -> alive) can be recognised. */
 export interface ParticleFlowState {
   seen: Uint8Array;
+  /** Per-slot brightness factor around the base colour, so a repaint keeps it. */
+  brightness: Float32Array;
   stats: ParticleSpawnStats;
 }
 
@@ -683,7 +709,8 @@ function emptySpawnStats(): ParticleSpawnStats {
 }
 
 export function createParticleFlowState(systems: LibraryParticles): ParticleFlowState {
-  return { seen: new Uint8Array(systems.root.slots.length), stats: emptySpawnStats() };
+  const slots = systems.root.slots.length;
+  return { seen: new Uint8Array(slots), brightness: new Float32Array(slots).fill(1), stats: emptySpawnStats() };
 }
 
 /**
@@ -717,6 +744,11 @@ export function placeSpawnedEmbers(
     particle.position = [ember.x, ember.y, 0];
     particle.velocity = [ember.vx, ember.vy, 0];
     particle.driftVelocity = [ember.vx, ember.vy, 0];
+    if (flow.color) {
+      const brightness = particleBrightnessJitter(random());
+      state.brightness[index] = brightness;
+      particle.color = [flow.color[0] * brightness, flow.color[1] * brightness, flow.color[2] * brightness];
+    }
     stats.spawned += 1;
     if (ember.vx > 1e-6) stats.right += 1;
     else if (ember.vx < -1e-6) stats.left += 1;
@@ -756,6 +788,30 @@ export function recycleEscapedEmbers(
     recycled += 1;
   }
   return recycled;
+}
+
+/**
+ * Paints a base colour onto every live particle, keeping each one's brightness.
+ *
+ * Called when the theme accent changes while the colour follows the theme: the
+ * field is already in the air and repainting it is cheaper and less jarring
+ * than recreating it. The glow child takes a slightly dimmer version so it
+ * still reads as the same light.
+ */
+export function applyParticleColor(
+  systems: LibraryParticles,
+  state: ParticleFlowState,
+  color: [number, number, number] | null | undefined,
+): void {
+  if (!color) return;
+  systems.root.slots.forEach((particle, index) => {
+    if (!particle.alive) return;
+    const brightness = state.brightness[index] ?? 1;
+    particle.color = [color[0] * brightness, color[1] * brightness, color[2] * brightness];
+  });
+  for (const particle of systems.glow.slots) {
+    if (particle.alive) particle.color = [color[0] * 0.9, color[1] * 0.9, color[2] * 0.9];
+  }
 }
 
 /**
@@ -843,7 +899,9 @@ function tintedSprite(base: HTMLCanvasElement, r: number, g: number, b: number):
   const red = Math.max(0, Math.min(255, Math.round(r * 255)));
   const green = Math.max(0, Math.min(255, Math.round(g * 255)));
   const blue = Math.max(0, Math.min(255, Math.round(b * 255)));
-  const key = `${base.width}:${red >> 5}:${green >> 5}:${blue >> 5}`;
+  // Four bits per channel: fine enough that a picked base colour keeps its hue,
+  // coarse enough that the cache stays small.
+  const key = `${base.width}:${red >> 4}:${green >> 4}:${blue >> 4}`;
   const cached = TINTED_SPRITES.get(key);
   if (cached) return cached;
   const canvas = document.createElement('canvas');
@@ -855,7 +913,7 @@ function tintedSprite(base: HTMLCanvasElement, r: number, g: number, b: number):
   // The halo sprite is white with an alpha profile; painting the particle colour
   // "only where it is visible" tints it while keeping the measured falloff.
   context.globalCompositeOperation = 'source-atop';
-  context.fillStyle = `rgb(${red >> 5 << 5}, ${green >> 5 << 5}, ${blue >> 5 << 5})`;
+  context.fillStyle = `rgb(${red >> 4 << 4}, ${green >> 4 << 4}, ${blue >> 4 << 4})`;
   context.fillRect(0, 0, canvas.width, canvas.height);
   if (TINTED_SPRITES.size > 96) {
     const oldest = TINTED_SPRITES.keys().next().value;
@@ -883,8 +941,10 @@ export function drawLibraryParticles(
   height: number,
   unitScale: number,
 ): void {
-  // 300 root embers + the glow child; rounded up so neither can overflow it.
-  if (!quadScratch || quadScratch.length < 9 * 6 * 320) quadScratch = new Float32Array(9 * 6 * 384);
+  // One quad per live particle in both systems; the density slider can ask for
+  // 600, so the scratch is sized from the systems instead of a fixed guess.
+  const needed = 9 * 6 * (systems.root.slots.length + systems.glow.slots.length + 2);
+  if (!quadScratch || quadScratch.length < needed) quadScratch = new Float32Array(needed);
   context.globalCompositeOperation = 'lighter';
   context.globalAlpha = 1;
   const sprites: Array<[ParticleSystem, HTMLCanvasElement | null]> = [
@@ -964,6 +1024,8 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
   const cropped = crop.x !== 0 || crop.y !== 0 || crop.w !== 1 || crop.h !== 1;
   /** Enlarged by twice the swing so the picture's edge never enters the frame. */
   const baseScale = 1 + (2 * effect.amplitude) / 100 + 0.01;
+  /** The particles switch, and a density above zero (0 means none at all). */
+  const particlesActive = effect.particles && effect.density > 0;
 
   // The picture a failed decode replaced is a different wallpaper worth trying.
   useEffect(() => {
@@ -975,7 +1037,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
   useEffect(() => {
     if (!picture) return undefined;
     const frame = frameRef.current;
-    const canvas = effect.particles ? canvasRef.current : null;
+    const canvas = particlesActive ? canvasRef.current : null;
     const context = context2d(canvas);
     // A picture with neither half turned on needs nothing, and neither does one
     // whose only effect is particles in a browser with no 2D context (jsdom,
@@ -992,7 +1054,22 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     // The engine's own particle simulation, with this wallpaper's own emitter:
     // embers are born below the screen and rise into it from the bottom edge.
     const systems = createFlowParticles(effect);
-    const flow: ParticleFlow = { rise: effect.rise, drift: effect.drift, direction: effect.direction };
+    /** The theme's accent as a canvas colour; "跟随主题" resolves through it. */
+    const readAccent = (): string => {
+      if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return '';
+      try {
+        return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      } catch {
+        return '';
+      }
+    };
+    const resolveParticleColor = (): [number, number, number] => resolveParticleColorValue(effect.color, readAccent());
+    const flow: ParticleFlow = {
+      rise: effect.rise,
+      drift: effect.drift,
+      direction: effect.direction,
+      color: resolveParticleColor(),
+    };
     const flowState = createParticleFlowState(systems);
     /** The viewport in scene units; layout() keeps it current. */
     const field: ParticleField = { width: 1280, height: 720, unit: 1 };
@@ -1067,6 +1144,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       // paint already has embers along the bottom-to-top path instead of a blank
       // screen.
       warmUpParticleFlow(systems, flowState, field, flow);
+      applyParticleColor(systems, flowState, flow.color);
       paintParticles();
     }
     // The first pose is written before the first frame, so the picture starts on
@@ -1086,13 +1164,27 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     window.addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', onVisibility);
 
+    // The base colour follows the theme accent unless it was picked by hand:
+    // repaint the live field in place, so a theme change does not remount it.
+    let paletteObserver: MutationObserver | null = null;
+    if (typeof MutationObserver !== 'undefined' && !effect.color) {
+      paletteObserver = new MutationObserver(() => {
+        const next = resolveParticleColor();
+        flow.color = next;
+        applyParticleColor(systems, flowState, next);
+        paintParticles();
+      });
+      paletteObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    }
+
     return () => {
       stop();
       window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibility);
+      paletteObserver?.disconnect();
     };
     // The drift numbers are what shapes the field; a change is a different field.
-  }, [picture, effect.sway, effect.particles, effect.amplitude, effect.frequency, effect.rise, effect.drift, effect.direction]);
+  }, [picture, effect.sway, effect.particles, effect.amplitude, effect.frequency, effect.rise, effect.drift, effect.direction, effect.density, effect.color]);
 
 
   return (
@@ -1101,7 +1193,9 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       data-custom-wallpaper
       data-custom-picture={picture ? 'true' : undefined}
       data-custom-sway={effect.sway ? 'true' : 'false'}
-      data-custom-particles={effect.particles ? 'true' : 'false'}
+      data-custom-particles={particlesActive ? 'true' : 'false'}
+      data-custom-particle-density={effect.density}
+      data-custom-particle-color={effect.color || undefined}
     >
       {picture ? (
         // The sway is written to this box by the loop above; the picture inside
@@ -1134,7 +1228,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
           style={{ background: customBackdrop(customColors('', '')) }}
         />
       )}
-      {picture && effect.particles ? (
+      {picture && particlesActive ? (
         <canvas
           ref={canvasRef}
           className="absolute inset-0 h-full w-full"
@@ -1146,7 +1240,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
   );
 }
 
-/** The internal particle config for the resolved seven controls. */
+/** The internal particle config for the legacy 1.5.x controls. */
 export function particleConfig(effect: ResolvedCustomEffect, unitScale: number): CustomParticleConfig {
   return {
     count: PARTICLE.count,
@@ -1167,6 +1261,17 @@ export function particleConfig(effect: ResolvedCustomEffect, unitScale: number):
 /* The controls both dialogs draw                                             */
 /* -------------------------------------------------------------------------- */
 
+/** The theme accent as a colour an <input type="color"> can show. */
+function currentAccent(): string {
+  if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return CUSTOM_EFFECT_COLOR.fallback;
+  try {
+    const value = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    return parseParticleColor(value) ? value : CUSTOM_EFFECT_COLOR.fallback;
+  } catch {
+    return CUSTOM_EFFECT_COLOR.fallback;
+  }
+}
+
 /** The current value of each slider, from the resolved settings. */
 function resolvedValue(effect: ResolvedCustomEffect, key: string): number {
   switch (key) {
@@ -1180,6 +1285,8 @@ function resolvedValue(effect: ResolvedCustomEffect, key: string): number {
       return effect.drift;
     case 'customParticleDirection':
       return effect.direction;
+    case 'customParticleDensity':
+      return effect.density;
     default:
       return 0;
   }
@@ -1193,7 +1300,7 @@ export interface CustomWallpaperControlsProps {
 }
 
 /**
- * The seven controls, shared by the appearance dialog and the administrator's
+ * The nine controls, shared by the appearance dialog and the administrator's
  * settings dialog so both describe the background in the same terms.
  */
 export function CustomWallpaperControls({ value, onChange, disabled = false }: CustomWallpaperControlsProps) {
@@ -1239,10 +1346,37 @@ export function CustomWallpaperControls({ value, onChange, disabled = false }: C
           );
         })}
       </div>
+      <div className="flex flex-wrap items-center gap-2" data-custom-particle-color-row>
+        <span className="text-[12px] text-[var(--muted)]">{CUSTOM_EFFECT_COLOR.label}</span>
+        <input
+          type="color"
+          aria-label={CUSTOM_EFFECT_COLOR.label}
+          disabled={disabled}
+          value={effect.color || currentAccent()}
+          onChange={(event) => onChange({ customParticleColor: event.target.value } as CustomEffectParams)}
+          className="h-7 w-10 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0.5"
+          data-custom-particle-color-input
+        />
+        {effect.color ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange({ customParticleColor: '' })}
+            className="focus-ring rounded-full border border-[var(--line)] px-2.5 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+          >
+            {CUSTOM_EFFECT_COLOR.followLabel}
+          </button>
+        ) : (
+          <span className="text-[11px] text-[var(--faint)]">
+            {CUSTOM_EFFECT_COLOR.followLabel}（{currentAccent()}）
+          </span>
+        )}
+      </div>
       <p className="text-[11px] leading-relaxed text-[var(--faint)]">
-        粒子在屏幕下方生成、向上飘入画面。漂移速度是左右移动的<em>最大</em>速度，每颗粒子在
-        0 到该值之间随机；方向比例是向右飞行的粒子比例，70% 即 70% 向右、30% 向左。
-        软光晕、加色混合与尺寸/透明度/寿命曲线沿用 wallpaper-scene-layers 的灰烬预设，
+        粒子在屏幕下方生成、向上飘入画面。粒子密度是场上同时存在的粒子数，0 等于关掉粒子；
+        粒子基色决定光晕的色相，「跟随主题强调色」时随主题变化。漂移速度是左右移动的<em>最大</em>
+        速度，每颗粒子在 0 到该值之间随机；方向比例是向右飞行的粒子比例，70% 即 70% 向右、
+        30% 向左。软光晕、加色混合与尺寸/透明度/寿命曲线沿用 wallpaper-scene-layers 的灰烬预设，
         速度以场景单位/秒计（库的 3840×2160 正交视图）。
       </p>
     </div>

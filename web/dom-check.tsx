@@ -5216,14 +5216,22 @@ console.log('\nwallpaper loading (jsdom)');
 console.log('\nthe custom wallpaper (jsdom)');
 {
   const {
+    CUSTOM_EFFECT_COLOR,
     CUSTOM_EFFECT_DEFAULTS,
     CUSTOM_EFFECT_SLIDERS,
     CUSTOM_EFFECT_TOGGLES,
     CUSTOM_IMAGE_MAX_EDGE,
     CUSTOM_IMAGE_QUALITY,
+    CUSTOM_PARTICLE_DENSITY,
     DEFAULT_WALLPAPER,
+    LEGACY_CUSTOM_KEYS,
     customSwayCurve,
+    normaliseParticleColor,
+    parseParticleColor,
+    particleBrightnessJitter,
+    particleEmissionForDensity,
     resolveCustomEffect,
+    resolveParticleColorValue,
     sceneUnitScale,
     shrinkDimensions,
     shrinkWallpaperImage,
@@ -5278,6 +5286,8 @@ console.log('\nthe custom wallpaper (jsdom)');
       rise: CUSTOM_EFFECT_DEFAULTS.rise,
       drift: CUSTOM_EFFECT_DEFAULTS.drift,
       direction: CUSTOM_EFFECT_DEFAULTS.direction,
+      density: CUSTOM_EFFECT_DEFAULTS.density,
+      color: CUSTOM_EFFECT_DEFAULTS.color,
     });
     const wild = resolveCustomEffect({
       customSwayAmplitude: 99,
@@ -5319,18 +5329,58 @@ console.log('\nthe custom wallpaper (jsdom)');
     check('the picture is scaled up to cover the swing', Number(frame.scale.toFixed(2)), 1.06);
   }
 
+/* --- the two particle controls added in 1.7 ------------------------------ */
+  // Density is a slot count; the emitter's rate follows the production lifetime.
+  {
+    check('density 0 is no particles at all', particleEmissionForDensity(0), { density: 0, maxCount: 1, rate: 0 });
+    check('60 slots emit at 60/10.5 a second', particleEmissionForDensity(60), { density: 60, maxCount: 60, rate: 5.714 });
+    check('150 likewise', particleEmissionForDensity(150), { density: 150, maxCount: 150, rate: 14.286 });
+    check('300 is the production field', particleEmissionForDensity(300), { density: 300, maxCount: 300, rate: Number((300 / 10.5).toFixed(3)) });
+    check('600 is the ceiling', particleEmissionForDensity(600), { density: 600, maxCount: 600, rate: Number((600 / 10.5).toFixed(3)) });
+    check('and a wild number is clamped to it', particleEmissionForDensity(9999).maxCount, 600);
+    check('negative density is the off state', particleEmissionForDensity(-5), { density: 0, maxCount: 1, rate: 0 });
+    check('the slider range is the one the model uses', [CUSTOM_PARTICLE_DENSITY.min, CUSTOM_PARTICLE_DENSITY.max, CUSTOM_PARTICLE_DENSITY.default], [0, 600, 300]);
+  }
+
+  // The base colour: a #rrggbb, or empty for "follow the theme accent".
+  {
+    check('a hex colour is normalised', [normaliseParticleColor('#FF4040'), normaliseParticleColor('#f00'), normaliseParticleColor(' #0A0B0C ')], ['#ff4040', '#ff0000', '#0a0b0c']);
+    check('anything else is "not a colour"', [normaliseParticleColor('red'), normaliseParticleColor(null), normaliseParticleColor(42)], ['', '', '']);
+    const orange = parseParticleColor('#ff8000') as number[];
+    check('a colour parses to channels', [orange[0], Number(orange[1].toFixed(3)), orange[2]], [1, 0.502, 0]);
+    check('and a non-colour does not', parseParticleColor('red'), null);
+    check('a picked colour wins over the theme', resolveParticleColorValue('#ff0000', '#00ff00'), [1, 0, 0]);
+    check('empty follows the theme accent', resolveParticleColorValue('', '#00ff00'), [0, 1, 0]);
+    check('and a broken accent falls back to the theme default', resolveParticleColorValue(null, 'not-a-colour').map((channel) => channel.toFixed(3)), parseParticleColor(CUSTOM_EFFECT_COLOR.fallback)?.map((channel) => channel.toFixed(3)));
+    check('the label both dialogs use', CUSTOM_EFFECT_COLOR, { key: 'customParticleColor', label: '粒子基色', followLabel: '跟随主题强调色', fallback: '#6d4cff' });
+    // ±18% brightness per particle, a deterministic function of the random draw.
+    check('brightness varies by ±18%', [particleBrightnessJitter(0), particleBrightnessJitter(0.5), particleBrightnessJitter(1)], [0.82, 1, 1.18]);
+    check('out-of-range draws stay inside it', [particleBrightnessJitter(-1), particleBrightnessJitter(2)], [0.82, 1.18]);
+    check('the old keys list no longer drops the colour', LEGACY_CUSTOM_KEYS.includes('customParticleColor' as never), false);
+  }
+
+  // resolveCustomEffect fills and clamps the new pair.
+  {
+    const clamped = resolveCustomEffect({ customParticleDensity: 9999, customParticleColor: '#FF4040' });
+    check('a wild density is clamped and rounded', resolveCustomEffect({ customParticleDensity: 9999 }).density, 600);
+    check('and a fractional one is rounded', resolveCustomEffect({ customParticleDensity: 12.4 }).density, 12);
+    check('the colour is normalised', clamped.color, '#ff4040');
+    check('and a non-colour becomes "follow the theme"', resolveCustomEffect({ customParticleColor: 'red' }).color, '');
+    check('an older settings object gets the two defaults', resolveCustomEffect({ customSway: true }).density === 300 && resolveCustomEffect({ customSway: true }).color === '', true);
+  }
   // One list of sliders and one of switches, drawn by both dialogs.
-  check('five sliders shape the effect', CUSTOM_EFFECT_SLIDERS.map((control: { key: string }) => control.key), [
+  check('six sliders shape the effect', CUSTOM_EFFECT_SLIDERS.map((control: { key: string }) => control.key), [
     'customSwayAmplitude',
     'customSwayFrequency',
     'customParticleRise',
     'customParticleDrift',
     'customParticleDirection',
+    'customParticleDensity',
   ]);
   check(
     'each named in the user\'s words',
     CUSTOM_EFFECT_SLIDERS.map((control: { label: string }) => control.label),
-    ['背景晃动幅度', '背景晃动频率', '粒子上升速度', '粒子漂移速度', '粒子方向比例'],
+    ['背景晃动幅度', '背景晃动频率', '粒子上升速度', '粒子漂移速度', '粒子方向比例', '粒子密度'],
   );
   check('and two switches turn the halves on or off', CUSTOM_EFFECT_TOGGLES.map((toggle: { key: string; label: string }) => [toggle.key, toggle.label]), [
     ['customSway', '背景晃动'],
@@ -5343,9 +5393,10 @@ console.log('\nthe custom wallpaper (jsdom)');
       if (control.key === 'customParticleDrift') return control.format(200);
       if (control.key === 'customParticleDirection') return control.format(0.7);
       if (control.key === 'customParticleRise') return control.format(240);
+      if (control.key === 'customParticleDensity') return control.format(300);
       return null;
     }),
-    [null, null, '240 单位/秒', '最大 200 单位/秒', '向右 70%'],
+    [null, null, '240 单位/秒', '最大 200 单位/秒', '向右 70%', '300 颗'],
   );
 
   /* --- the particles, with a seeded random --------------------------------- */
@@ -5785,6 +5836,43 @@ console.log('\nthe custom wallpaper (jsdom)');
     }
   }
 
+  /* --- density and colour on the layer itself ------------------------------ */
+  {
+    const { Wallpaper } = await import('./src/components/Wallpaper');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const render = async (wallpaper: Record<string, unknown>) => {
+      appStore.setState({ appearanceOpen: false, wallpaperUrl: null, adminBackground: null, wallpaper } as never);
+      await act(async () => {
+        root.render(React.createElement(Wallpaper));
+      });
+      await flush();
+    };
+    const layer = () => host.querySelector<HTMLElement>('[data-custom-wallpaper]');
+    try {
+      await render({ ...DEFAULT_WALLPAPER, kind: 'custom' });
+      check('the layer reports its density', layer()?.getAttribute('data-custom-particle-density'), '300');
+      check('with no picked colour yet', layer()?.hasAttribute('data-custom-particle-color'), false);
+      check('and particles on', layer()?.getAttribute('data-custom-particles'), 'true');
+      await render({ ...DEFAULT_WALLPAPER, kind: 'custom', customParticleColor: '#FF4040' });
+      check('a picked colour is reported normalised', layer()?.getAttribute('data-custom-particle-color'), '#ff4040');
+      await render({ ...DEFAULT_WALLPAPER, kind: 'custom', customParticleDensity: 0 });
+      check('density 0 is particles off', layer()?.getAttribute('data-custom-particles'), 'false');
+      check('and no canvas is built', Boolean(host.querySelector('[data-custom-particles-canvas]')), false);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
 /* --- and it is framed in the dialogs too --------------------------------- */
   {
     const { AppearanceDialog } = await import('./src/components/AppearanceDialog');
@@ -5951,6 +6039,36 @@ console.log('\nthe custom wallpaper (jsdom)');
     await flush();
     check('a slider writes its setting', appStore.getState().wallpaper.customParticleRise, 180);
     check('and the wallpaper stays the custom one', appStore.getState().wallpaper.kind, 'custom');
+    // The density slider is the sixth control.
+    const density = host.querySelector<HTMLInputElement>('input[aria-label="粒子密度"]') as HTMLInputElement;
+    check('the density slider is a slider of the same family', [density?.type, density?.min, density?.max, density?.step], ['range', '0', '600', '10']);
+    check('showing the default as a count', (host.textContent ?? '').includes('300 颗'), true);
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(density, '60');
+      density.dispatchEvent(new w.Event('input', { bubbles: true }));
+    });
+    await flush();
+    check('and it writes the density', appStore.getState().wallpaper.customParticleDensity, 60);
+    // The base colour: the theme accent until picked, then a hex, then back.
+    const colorInput = host.querySelector<HTMLInputElement>('[data-custom-particle-color-input]') as HTMLInputElement;
+    check('the base colour is a colour field', [colorInput?.type, colorInput?.getAttribute('aria-label')], ['color', '粒子基色']);
+    check('which shows the theme accent while following it', colorInput?.value, '#6d4cff');
+    check('and says it is following the theme', (host.textContent ?? '').includes('跟随主题强调色'), true);
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+      setter?.call(colorInput, '#ff4040');
+      colorInput.dispatchEvent(new w.Event('input', { bubbles: true }));
+      colorInput.dispatchEvent(new w.Event('change', { bubbles: true }));
+    });
+    await flush();
+    check('picking a colour writes it', appStore.getState().wallpaper.customParticleColor, '#ff4040');
+    const follow = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === '跟随主题强调色');
+    await act(async () => {
+      follow?.click();
+    });
+    await flush();
+    check('and the reset button goes back to the theme', appStore.getState().wallpaper.customParticleColor, '');
     await act(async () => {
       root.unmount();
     });

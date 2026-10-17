@@ -77,16 +77,16 @@ export interface WallpaperSettings {
   accentColor: string;
 
   /*
-   * The custom wallpaper's seven controls (1.6).
+   * The custom wallpaper's nine controls (1.7).
    *
-   * Four numbers and two switches: the picture's sway, and a particle field that
-   * is born below the screen and rises into it. The motion numbers are in scene
-   * units per second (the library's 3840x2160 orthographic volume, see
-   * sceneUnitScale), the sway follows the library's `oscillateposition` curve,
-   * and the two booleans turn the two halves off. They are optional because
-   * settings files written before each version have fewer fields than the
-   * current ones: resolveCustomEffect() is the one place that fills and clamps
-   * them.
+   * Six numbers, two switches and one colour: the picture's sway, and a particle
+   * field that is born below the screen and rises into it. The motion numbers
+   * are in scene units per second (the library's 3840x2160 orthographic volume,
+   * see sceneUnitScale), the sway follows the library's `oscillateposition`
+   * curve, and the two booleans turn the two halves off. They are optional
+   * because settings files written before each version have fewer fields than
+   * the current ones: resolveCustomEffect() is the one place that fills and
+   * clamps them.
    */
   /** Draw the picture's slow sway at all. */
   customSway?: boolean;
@@ -109,6 +109,17 @@ export interface WallpaperSettings {
    * "probability of moving right", not the library's forwardRatio.
    */
   customParticleDirection?: number;
+  /**
+   * How many particles the field holds at once, 0 - 600; 0 means no particles
+   * at all. It maps to the emitter's slot count and its spawn rate.
+   */
+  customParticleDensity?: number;
+  /**
+   * Base colour of the halo sprites as "#rrggbb"; empty follows the theme's
+   * accent colour. The sprites keep a little per-particle brightness variation
+   * around it; the hue is this colour's.
+   */
+  customParticleColor?: string;
   /*
    * The 1.5.x knobs. Kept in the type (all optional) so an old settings file
    * still parses and the existing tests still compile; the UI and the store no
@@ -134,8 +145,6 @@ export interface WallpaperSettings {
   customParticleSpeed?: number;
   /** @deprecated 1.5.x particle knobs. */
   customParticleTurbulence?: number;
-  /** @deprecated 1.5.x particle knobs. */
-  customParticleColor?: string;
   /** @deprecated 1.5.x particle knobs. */
   customParticleWind?: number;
 }
@@ -193,12 +202,11 @@ export const LEGACY_CUSTOM_KEYS = [
   'customParticleLife',
   'customParticleSpeed',
   'customParticleTurbulence',
-  'customParticleColor',
   'customParticleWind',
 ] as const;
 
 /* -------------------------------------------------------------------------- */
-/* The custom wallpaper's seven controls (1.6)                                */
+/* The custom wallpaper's nine controls (1.7)                                */
 /* -------------------------------------------------------------------------- */
 
 /**
@@ -222,6 +230,8 @@ export interface CustomEffectParams {
   customParticleRise?: number;
   customParticleDrift?: number;
   customParticleDirection?: number;
+  customParticleDensity?: number;
+  customParticleColor?: string;
 }
 
 /** The custom wallpaper with every number filled in and clamped. */
@@ -238,6 +248,10 @@ export interface ResolvedCustomEffect {
   drift: number;
   /** Probability a particle moves right, 0 - 1 (0.7 = 70% right, 30% left). */
   direction: number;
+  /** How many particles the field holds, 0 - 600; 0 means none at all. */
+  density: number;
+  /** "#rrggbb" of the halo sprites, or "" to follow the theme accent. */
+  color: string;
 }
 
 /** The custom wallpaper's defaults, taken from the library's Rossi preset. */
@@ -254,6 +268,10 @@ export const CUSTOM_EFFECT_DEFAULTS = {
   drift: 200,
   /** ROSSI_WALLPAPER.particles.drift.forwardRatio. */
   direction: 0.7,
+  /** The production emitter held 300 slots; the slider's defaults match it. */
+  density: 300,
+  /** Empty: the halo sprites take the theme's accent colour. */
+  color: '',
 } as const;
 
 /**
@@ -273,7 +291,7 @@ export function sceneUnitScale(width: number, height: number): number {
   return Math.max(w / CUSTOM_ORTHO.width, h / CUSTOM_ORTHO.height);
 }
 
-/** Fills in and clamps the seven controls; the one reader of these fields. */
+/** Fills in and clamps the nine controls; the one reader of these fields. */
 export function resolveCustomEffect(settings: CustomEffectParams): ResolvedCustomEffect {
   return {
     sway: settings.customSway !== false,
@@ -283,7 +301,91 @@ export function resolveCustomEffect(settings: CustomEffectParams): ResolvedCusto
     rise: between(settings.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
     drift: between(settings.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
     direction: between(settings.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
+    density: Math.round(between(settings.customParticleDensity, 0, 600, CUSTOM_EFFECT_DEFAULTS.density)),
+    color: normaliseParticleColor(settings.customParticleColor),
   };
+}
+
+/* -------------------------------------------------------------------------- */
+/* The two particle controls added in 1.7: density and base colour           */
+/* -------------------------------------------------------------------------- */
+
+/** The density slider's range; the default fills the production emitter. */
+export const CUSTOM_PARTICLE_DENSITY = { min: 0, max: 600, step: 10, default: 300 } as const;
+
+/**
+ * The particle colour field, for both dialogs.
+ *
+ * Empty means the theme's accent; the reset button says so and the colour
+ * input shows the accent until the user picks something.
+ */
+export const CUSTOM_EFFECT_COLOR = {
+  key: 'customParticleColor',
+  label: '粒子基色',
+  followLabel: '跟随主题强调色',
+  fallback: '#6d4cff',
+} as const;
+
+/**
+ * A "#rrggbb" colour, or "" for "not a colour".
+ *
+ * Settings files and older clients can hold anything; only a six digit hex
+ * (or the three digit shorthand) is accepted, and everything else falls back
+ * to the theme. Pure, so the parser is asserted directly.
+ */
+export function normaliseParticleColor(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(trimmed);
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`.toLowerCase();
+  return /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed.toLowerCase() : '';
+}
+
+/** A colour as 0-1 channels, for the particle sprites; null when it is not one. */
+export function parseParticleColor(value: unknown): [number, number, number] | null {
+  const normalised = normaliseParticleColor(value);
+  if (!normalised) return null;
+  return [
+    Number.parseInt(normalised.slice(1, 3), 16) / 255,
+    Number.parseInt(normalised.slice(3, 5), 16) / 255,
+    Number.parseInt(normalised.slice(5, 7), 16) / 255,
+  ];
+}
+
+/**
+ * How many emitter slots and how many spawns per second a density means.
+ *
+ * One slot is one particle on screen (the field's steady state), so the slot
+ * count is the density itself. The rate follows from the production lifetime:
+ * slots / mean life keeps the field full. Density 0 keeps one slot (the library
+ * needs one) but a rate of 0, so nothing is ever born - the same visual result
+ * as switching the particles off.
+ */
+export function particleEmissionForDensity(density: number): { density: number; maxCount: number; rate: number } {
+  const value = Math.round(between(density, 0, CUSTOM_PARTICLE_DENSITY.max, CUSTOM_PARTICLE_DENSITY.default));
+  if (value <= 0) return { density: 0, maxCount: 1, rate: 0 };
+  return { density: value, maxCount: value, rate: Number((value / 10.5).toFixed(3)) };
+}
+
+
+/**
+ * The colour the halo sprites are painted with.
+ *
+ * A picked "#rrggbb" wins; otherwise the theme accent (the value of --accent),
+ * otherwise the theme default. Pure, so "follow the theme" is asserted without
+ * a browser: resolveParticleColorValue("", "#00ff00") is the green triplet.
+ */
+export function resolveParticleColorValue(
+  customColor: unknown,
+  accentColor: unknown,
+  fallback: string = CUSTOM_EFFECT_COLOR.fallback,
+): [number, number, number] {
+  return parseParticleColor(customColor) ?? parseParticleColor(accentColor) ?? parseParticleColor(fallback) ?? [1, 1, 1];
+}
+
+/** Brightness variation around the base colour: ±18%, drawn per particle. */
+export function particleBrightnessJitter(random: number): number {
+  return 0.82 + Math.min(1, Math.max(0, random)) * 0.36;
 }
 
 /**
@@ -299,7 +401,7 @@ export function customSwayCurve(frequency: number, seconds: number): { x: number
   return { x: Math.sin(angle), y: Math.cos(angle) };
 }
 
-/** One slider of the seven controls (the two booleans are toggles). */
+/** One slider of the nine controls (two booleans, one colour, six numbers). */
 export interface CustomEffectControl {
   key: keyof CustomEffectParams;
   label: string;
@@ -315,13 +417,14 @@ export const CUSTOM_EFFECT_TOGGLES: readonly { key: 'customSway' | 'customShowPa
   { key: 'customShowParticles', label: '显示粒子' },
 ];
 
-/** The five sliders, in the user's words. */
+/** The six sliders, in the user's words. */
 export const CUSTOM_EFFECT_SLIDERS: readonly CustomEffectControl[] = [
   { key: 'customSwayAmplitude', label: '背景晃动幅度', min: 0, max: 8, step: 0.25, format: (v) => `${v.toFixed(2)}%` },
   { key: 'customSwayFrequency', label: '背景晃动频率', min: 0.02, max: 0.5, step: 0.01, format: (v) => `${v.toFixed(2)} Hz` },
   { key: 'customParticleRise', label: '粒子上升速度', min: 0, max: 500, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
   { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 400, step: 10, format: (v) => `最大 ${Math.round(v)} 单位/秒` },
   { key: 'customParticleDirection', label: '粒子方向比例', min: 0, max: 1, step: 0.05, format: (v) => `向右 ${Math.round(v * 100)}%` },
+  { key: 'customParticleDensity', label: '粒子密度', min: 0, max: 600, step: 10, format: (v) => `${Math.round(v)} 颗` },
 ];
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
@@ -344,6 +447,8 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   customParticleRise: CUSTOM_EFFECT_DEFAULTS.rise,
   customParticleDrift: CUSTOM_EFFECT_DEFAULTS.drift,
   customParticleDirection: CUSTOM_EFFECT_DEFAULTS.direction,
+  customParticleDensity: CUSTOM_EFFECT_DEFAULTS.density,
+  customParticleColor: CUSTOM_EFFECT_DEFAULTS.color,
 };
 
 /** The two colours the custom wallpaper is drawn with. */
@@ -848,6 +953,8 @@ export function loadWallpaperSettings(): WallpaperSettings {
       customParticleRise: between(parsed.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
       customParticleDrift: between(parsed.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
       customParticleDirection: between(parsed.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
+      customParticleDensity: Math.round(between(parsed.customParticleDensity, 0, 600, CUSTOM_EFFECT_DEFAULTS.density)),
+      customParticleColor: normaliseParticleColor(parsed.customParticleColor),
     };
     // The 1.5.x knobs are gone from the UI and from new saves; an old settings
     // file is migrated by dropping them, not by carrying them around forever.
