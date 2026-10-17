@@ -492,3 +492,24 @@ select optgroup {
 }
 .blog-summary > *:first-child { margin-top: 0; }
 .blog-summary > *:last-child { margin-bottom: 0; }
+
+/* ------------------------------------------------------------------ */
+/* Formulas (KaTeX)                                                    */
+/* ------------------------------------------------------------------ */
+/* KaTeX brings its own metrics, fonts and spacing; what is left to the page is
+   the colour it draws in, a display formula too wide for the pane, and the
+   error case - where KaTeX's own red is an inline style, and the sanitiser
+   strips those from everywhere but the formula itself. */
+.markdown-body .katex { color: var(--text); }
+.markdown-body .katex-display {
+  /* A wide formula scrolls inside its own block rather than dragging the note
+     sideways. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.15em;
+}
+.markdown-body .katex-error {
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}

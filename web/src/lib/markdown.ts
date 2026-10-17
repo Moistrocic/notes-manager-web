@@ -1,20 +1,201 @@
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js/lib/common';
+import katex from 'katex';
 import { Marked } from 'marked';
+import type { RendererExtension, TokenizerExtension, Tokens } from 'marked';
 
 import { fileUrl } from './api';
+
+/**
+ * How a formula is typeset.
+ *
+ * `throwOnError` off on purpose: half a formula is a normal thing to see while
+ * one is being written, and it has to render as what was typed rather than take
+ * the rest of the note down with it. `strict` off too - notes are not LaTeX
+ * documents, and the warnings would only ever reach the console.
+ */
+const KATEX_OPTIONS = { throwOnError: false, strict: 'ignore' } as const;
+
+/** Text as it can be put in HTML, for when a formula has to fall back to its source. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** A formula as HTML, or the source it came from when it cannot be typeset. */
+function typesetFormula(tex: string, displayMode: boolean): string {
+  try {
+    return katex.renderToString(tex, { ...KATEX_OPTIONS, displayMode });
+  } catch {
+    // KaTeX normally renders its own complaint in place; if it refuses outright,
+    // what was written is still the honest thing to show.
+    return escapeHtml(displayMode ? `\\[${tex}\\]` : `\\(${tex}\\)`);
+  }
+}
+
+/** A formula the extensions below have already taken out of the source. */
+interface LatexToken extends Tokens.Generic {
+  type: 'blockDisplay' | 'blockLatex' | 'inlineDisplay' | 'inlineDollar' | 'inlineLatex';
+  text: string;
+  displayMode: boolean;
+}
+
+/**
+ * Formulas, in the delimiters people actually write.
+ *
+ * `marked-katex-extension` would have been the natural dependency, but its peer
+ * range stops at KaTeX 0.18 and the last 0.18 release was published by mistake
+ * and deprecated ("use 0.19.0 instead"). Taking it would have meant either
+ * shipping a deprecated KaTeX or bundling two copies of it, so the five rules
+ * below are written here instead - they are short, and each one is needed to say
+ * what a delimiter means in a note.
+ *
+ * All of them render through `typesetFormula`, which never throws: a formula
+ * that will not typeset is shown as it was written rather than taking the note
+ * down with it.
+ */
+const blockDisplay: TokenizerExtension & RendererExtension = {
+  name: 'blockDisplay',
+  level: 'block',
+  tokenizer(src: string) {
+    // The delimiters on their own lines, the way LaTeX and every markdown editor
+    // writes a display formula.
+    const match = /^\$\$\n((?:\\[^]|[^\\])+?)\n\$\$[ \t]*(?:\n+|$)/.exec(src);
+    if (!match) return undefined;
+    return { type: 'blockDisplay', raw: match[0], text: match[1].trim(), displayMode: true } as LatexToken;
+  },
+  renderer(token) {
+    return `${typesetFormula((token as LatexToken).text, true)}\n`;
+  },
+};
+
+/** A display formula written on one line, between double dollars. */
+const inlineDisplay: TokenizerExtension & RendererExtension = {
+  name: 'inlineDisplay',
+  level: 'inline',
+  start(src: string) {
+    const at = src.indexOf('$$');
+    return at < 0 ? undefined : at;
+  },
+  tokenizer(src: string) {
+    const match = /^\$\$(?!\$)((?:\\.|[^\\\n$])+?)\$\$(?!\$)/.exec(src);
+    if (!match) return undefined;
+    return { type: 'inlineDisplay', raw: match[0], text: match[1].trim(), displayMode: true } as LatexToken;
+  },
+  renderer(token) {
+    return typesetFormula((token as LatexToken).text, true);
+  },
+};
+
+/**
+ * An inline formula between single dollars.
+ *
+ * This is the rule with judgement in it, because the two obvious ones both get
+ * notes wrong. Wanting a space before the opening dollar leaves 当$x=1$时
+ * unrendered, since a Chinese sentence puts the math right against the
+ * characters; opening one anywhere turns the two prices in 价格 $5 和 $6 元 into
+ * a formula. This is the middle: the opening dollar cannot be followed by a
+ * space, the closing one cannot be preceded by one, and a lone dollar stays a
+ * lone dollar. \$ still writes a literal one.
+ */
+const DOLLAR_FORMULA = /^\$(?![$\s])((?:\\.|[^\\\n$])*?(?:\\.|[^\\\n$\s]))\$(?!\$)/;
+
+const inlineDollar: TokenizerExtension & RendererExtension = {
+  name: 'inlineDollar',
+  level: 'inline',
+  start(src: string) {
+    const at = src.indexOf('$');
+    return at < 0 ? undefined : at;
+  },
+  tokenizer(src: string) {
+    // marked offers every position to this rule; only a lone dollar is ours.
+    if (!src.startsWith('$') || src.startsWith('$$')) return undefined;
+    const match = DOLLAR_FORMULA.exec(src);
+    if (!match) return undefined;
+    return { type: 'inlineDollar', raw: match[0], text: match[1].trim(), displayMode: false } as LatexToken;
+  },
+  renderer(token) {
+    return typesetFormula((token as LatexToken).text, false);
+  },
+};
+
+/** A display formula between the delimiters a pasted LaTeX passage arrives with. */
+const blockLatex: TokenizerExtension & RendererExtension = {
+  name: 'blockLatex',
+  level: 'block',
+  tokenizer(src: string) {
+    const match = /^\\\[([\s\S]+?)\\\][ \t]*(?:\n+|$)/.exec(src);
+    if (!match) return undefined;
+    return { type: 'blockLatex', raw: match[0], text: match[1].trim(), displayMode: true } as LatexToken;
+  },
+  renderer(token) {
+    return `${typesetFormula((token as LatexToken).text, true)}\n`;
+  },
+};
+
+/** An inline formula between the paren delimiters of the same convention. */
+const inlineLatex: TokenizerExtension & RendererExtension = {
+  name: 'inlineLatex',
+  level: 'inline',
+  start(src: string) {
+    const at = src.indexOf('\\(');
+    return at < 0 ? undefined : at;
+  },
+  tokenizer(src: string) {
+    const match = /^\\\(([\s\S]+?)\\\)/.exec(src);
+    if (!match) return undefined;
+    return { type: 'inlineLatex', raw: match[0], text: match[1].trim(), displayMode: false } as LatexToken;
+  },
+  renderer(token) {
+    return typesetFormula((token as LatexToken).text, false);
+  },
+};
 
 const marked = new Marked({
   gfm: true,
   breaks: true,
 });
+// One call, for one list of rules. marked unshifts each tokenizer, so the order
+// within this array is reversed when they are tried; none of them overlap (a
+// rule declines when the text is not its delimiter), so the order only matters
+// for reading this line.
+marked.use({ extensions: [inlineDollar, inlineLatex, inlineDisplay, blockLatex, blockDisplay] });
 
 const PURIFY_CONFIG = {
+  // KaTeX emits two things the default allow-list does not carry: MathML (the
+  // accessible copy of every formula) and the occasional inline SVG for a
+  // stretched glyph.
+  USE_PROFILES: { html: true, mathMl: true, svg: true },
   ADD_ATTR: ['target', 'rel', 'class', 'id', 'align', 'colspan', 'rowspan'],
   ADD_TAGS: ['input'],
   FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form'],
-  FORBID_ATTR: ['onerror', 'onload', 'onclick', 'style'],
+  // `style` is not forbidden here because a formula is positioned entirely with
+  // inline metrics. The hook below hands the attribute back only inside KaTeX's
+  // own output, so a note cannot use it to lie about the page.
+  FORBID_ATTR: ['onerror', 'onload', 'onclick'],
 };
+
+/**
+ * Inline styles, allowed for formulas and nowhere else.
+ *
+ * KaTeX places every glyph with a `style` attribute and the page would be wrong
+ * without them; a note could also use one to cover the interface. This hook is
+ * the only place the two are told apart.
+ *
+ * DOMPurify has no sanitizer at all until it has a window - the server renderer
+ * imports this module but never renders a note - so the hook is only installed
+ * where there is one.
+ */
+if (typeof DOMPurify.addHook === 'function') {
+  DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+    if (data.attrName !== 'style') return;
+    const element = node as Element;
+    if (typeof element.closest === 'function' && element.closest('.katex')) {
+      data.forceKeepAttr = true;
+      return;
+    }
+    data.keepAttr = false;
+  });
+}
 
 /** Renders markdown to sanitised HTML. */
 export function renderMarkdown(source: string): string {
