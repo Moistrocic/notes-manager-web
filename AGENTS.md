@@ -253,6 +253,26 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   `data-testid="background-delete-<name>"`（第一次只 arm、不发请求，4s 自动复位；第二次变成
   `background-delete-confirm-<name>`，请求中 disabled 且文案「删除中…」），`reset: true` 时表单直接
   落到 off 并 toast「正在使用的背景已切换为关闭」——否则保存会把已删文件写回去。
+- **管理员背景预设是「快照 + 不可变」**：预设只存在 `settings.json` 的 `backgroundPresets`
+  （`{id, name, createdAt, background}`，background 是整份 `BackgroundSettings` 快照），
+  只有两个端点：`POST /api/system/background-presets`（body `{name?, background?}`；不带
+  background 就快照当前 settings.background，文件存在性/种类校验与 PUT settings 同一套；
+  空名自动「预设 N」；满 50 个回 400 `preset_limit`；201 `{preset, presets}`）与
+  `DELETE /api/system/background-presets/:id`（200 `{presets}`；未知 id → 404
+  `preset_not_found`）。**没有修改端点，`PUT /api/system/settings` 会先
+  `delete body.backgroundPresets` 再保存**——无论 body 怎么塞都改不到预设；想让预设变只能删了重加。
+  **「使用预设」不是服务端操作**：前端把 `preset.background` 原样 `PUT /api/system/settings`
+  （body 只有 `{background}`），成功后把表单同步成快照、刷新背景层。所以预设引用的背景文件
+  被删掉后再点它，服务器回 400 `background_missing`，前端 toast 报错、表单不切换（有断言）。
+  归一化在 `config.ts` 的 `mergeSettings` / `readBackgroundPresets`（读文件与每次 update 都跑）：
+  非数组忽略；坏条目（不是对象 / background 不是对象）丢弃；id 缺失生成、重复丢弃；name trim
+  后取前 40 字、空名回退「预设 N」（N 是**归一化后**的位置）；createdAt 缺失补当前时间；
+  background 用 `applyBackground` 从默认值补齐并夹取；超过 50 条截断；旧 settings.json 无该字段 → `[]`。
+  前端钩子在 `SettingsDialog.tsx`：`preset-add` / `preset-name-input` / `preset-save` /
+  `preset-cancel` / `preset-row` / `preset-use-<id>` / `preset-delete-<id>` /
+  `preset-delete-confirm-<id>` / `preset-name`；删除沿用背景文件的两步确认（第一次只 arm、
+  不发请求，4s 复位；删的是预设，当前背景不动）；行内没有输入框——**预设不可改名是约定，
+  不是漏做**。
 - **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
   博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
   状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
