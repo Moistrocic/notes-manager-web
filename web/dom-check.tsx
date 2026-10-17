@@ -5005,6 +5005,157 @@ console.log('\ndefault background (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- deleting a background file ------------------------------------------- */
+console.log('\ndeleting a background file (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  const jsonResponse = (payload: unknown) =>
+    new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  const admin = {
+    configured: true,
+    kind: 'image' as const,
+    file: 'still.png',
+    bytes: 1024,
+    hash: 'abc123',
+    url: '/api/background/file?name=still.png',
+    note: null,
+    options: { crop: { x: 0, y: 0, w: 1, h: 1 }, blur: 0, dim: 0.35, dynamic: false, auroraA: '', auroraB: '' },
+    available: [
+      { name: 'still.png', kind: 'image' as const, bytes: 1024 },
+      { name: 'other.png', kind: 'image' as const, bytes: 2048 },
+    ],
+  };
+  let available = admin.available.slice();
+  const settings = {
+    storage: {
+      driver: 'local',
+      openlist: { url: '', token: '', root: '/notes', perUser: false, timeoutMs: 15000 },
+      local: { root: '' },
+    },
+    background: {
+      kind: 'image',
+      file: 'still.png',
+      note: '',
+      crop: { x: 0, y: 0, w: 1, h: 1 },
+      blur: 0,
+      dim: 0.35,
+      dynamic: false,
+      auroraA: '',
+      auroraB: '',
+    },
+    guest: { enabled: true },
+    blog: { enabled: false },
+  };
+  const requests: Array<{ method: string; url: string; body?: string }> = [];
+  let pendingDelete = false;
+  let releaseDelete: (() => void) | null = null;
+  let deleteResponse: unknown = null;
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = (init.method ?? 'GET').toUpperCase();
+    requests.push({ method, url, body: typeof init.body === 'string' ? init.body : undefined });
+    if (url.includes('/api/system/settings') && method === 'GET') {
+      return jsonResponse({ settings, effective: { ...settings }, paths: {}, env: {} });
+    }
+    if (url.includes('/api/system/settings') && method === 'PUT') {
+      return jsonResponse({ settings, effective: { ...settings }, status: {} });
+    }
+    if (url.endsWith('/api/background') && method === 'GET') return jsonResponse({ ...admin, available });
+    if (url.includes('/api/background?') && method === 'DELETE') {
+      if (pendingDelete) {
+        await new Promise<void>((resolve) => {
+          releaseDelete = resolve;
+        });
+      }
+      return jsonResponse(deleteResponse);
+    }
+    return jsonResponse({});
+  }) as typeof fetch;
+  appStore.setState({ settingsOpen: true, adminBackground: admin, toasts: [] } as never);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const deleteCalls = () => requests.filter((request) => request.method === 'DELETE');
+  const toasts = () => (appStore.getState() as unknown as { toasts: Array<{ title: string }> }).toasts.map((toast) => toast.title);
+  const button = (selector: string) => host.querySelector<HTMLButtonElement>(selector);
+  try {
+    await act(async () => {
+      root.render(React.createElement(SettingsDialog));
+    });
+    await flush();
+    check('the background files are rows', host.querySelectorAll('[data-testid="background-file-row"]').length, 2);
+    check(
+      'each row has a delete button of its own',
+      button('[data-testid="background-delete-other.png"]')?.getAttribute('aria-label'),
+      '删除背景文件 other.png',
+    );
+    // First click only arms: no request, and it says what the next click does.
+    await act(async () => {
+      button('[data-testid="background-delete-other.png"]')?.click();
+    });
+    await flush();
+    check('the first click sends nothing', deleteCalls().length, 0);
+    check('and turns the bin into a confirmation', Boolean(button('[data-testid="background-delete-confirm-other.png"]')), true);
+    check('which says what it will do', button('[data-testid="background-delete-confirm-other.png"]')?.textContent?.includes('确认删除？'), true);
+    // Four seconds without a second click puts the bin back.
+    await settled(4200);
+    check('left alone it goes back to the bin', [Boolean(button('[data-testid="background-delete-confirm-other.png"]')), Boolean(button('[data-testid="background-delete-other.png"]'))], [false, true]);
+    check('still without sending anything', deleteCalls().length, 0);
+
+    // The real delete: disabled while it runs, one request, row goes away.
+    await act(async () => {
+      button('[data-testid="background-delete-other.png"]')?.click();
+    });
+    await flush();
+    pendingDelete = true;
+    deleteResponse = { removed: 'other.png', available: [{ name: 'still.png', kind: 'image', bytes: 1024 }], configured: true, kind: 'image', reset: false };
+    await act(async () => {
+      button('[data-testid="background-delete-confirm-other.png"]')?.click();
+    });
+    await flush();
+    check('the confirmation is disabled while it runs', button('[data-testid="background-delete-confirm-other.png"]')?.disabled, true);
+    check('and says it is deleting', button('[data-testid="background-delete-confirm-other.png"]')?.textContent?.includes('删除中…'), true);
+    available = [{ name: 'still.png', kind: 'image', bytes: 1024 }];
+    pendingDelete = false;
+    await act(async () => {
+      releaseDelete?.();
+    });
+    await flush();
+    check('one request is sent, for the right file', [deleteCalls().length, deleteCalls()[0]?.url.includes('name=other.png')], [1, true]);
+    check('the row is gone', host.querySelectorAll('[data-testid="background-file-row"]').length, 1);
+    check('and a toast says it was deleted', toasts().includes('背景文件已删除'), true);
+
+    // Deleting the file in use: the server resets, the form follows to off.
+    await act(async () => {
+      button('[data-testid="background-delete-still.png"]')?.click();
+    });
+    await flush();
+    deleteResponse = { removed: 'still.png', available: [], configured: false, kind: null, reset: true };
+    await act(async () => {
+      button('[data-testid="background-delete-confirm-still.png"]')?.click();
+    });
+    await flush();
+    check('a reset is said out loud', toasts().includes('正在使用的背景已切换为关闭'), true);
+    // The save must not write the deleted file back.
+    const save = [...host.querySelectorAll('button')].find((item) => item.textContent?.trim().includes('保存设置'));
+    await act(async () => {
+      save?.click();
+    });
+    await flush();
+    const saved = requests.filter((request) => request.method === 'PUT').pop();
+    const savedBackground = saved ? (JSON.parse(saved.body ?? '{}') as { background?: { kind?: string; file?: string } }).background : undefined;
+    check('the form saves nothing, not the deleted file', [savedBackground?.kind, savedBackground?.file], ['off', '']);
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+    globalThis.fetch = realFetch;
+    appStore.setState(hold);
+  }
+}
+
 /* --- browsing without an account ------------------------------------------- */
 console.log('\nguest browsing (jsdom)');
 {
@@ -5230,6 +5381,7 @@ console.log('\nthe custom wallpaper (jsdom)');
     parseParticleColor,
     particleBrightnessJitter,
     particleEmissionForDensity,
+    particleVisibilityModel,
     resolveCustomEffect,
     resolveParticleColorValue,
     sceneUnitScale,
@@ -5299,7 +5451,15 @@ console.log('\nthe custom wallpaper (jsdom)');
     check(
       'out-of-range numbers are clamped',
       [wild.amplitude, wild.frequency, wild.rise, wild.drift, wild.direction],
-      [8, 0.02, 500, 0, 1],
+      [8, 0.02, 1000, 0, 1],
+    );
+    // The two speed sliders now go to 1000 each.
+    check(
+      'the speed sliders reach 1000',
+      CUSTOM_EFFECT_SLIDERS.filter(
+        (control: { key: string }) => control.key === 'customParticleRise' || control.key === 'customParticleDrift',
+      ).map((control: { max: number }) => control.max),
+      [1000, 1000],
     );
     // A switch has one job: false means off, however the number is set.
     const off = resolveCustomEffect({ customSway: false, customShowParticles: false });
@@ -5332,13 +5492,38 @@ console.log('\nthe custom wallpaper (jsdom)');
 /* --- the two particle controls added in 1.7 ------------------------------ */
   // Density is a slot count; the emitter's rate follows the production lifetime.
   {
-    check('density 0 is no particles at all', particleEmissionForDensity(0), { density: 0, maxCount: 1, rate: 0 });
-    check('60 slots emit at 60/10.5 a second', particleEmissionForDensity(60), { density: 60, maxCount: 60, rate: 5.714 });
-    check('150 likewise', particleEmissionForDensity(150), { density: 150, maxCount: 150, rate: 14.286 });
-    check('300 is the production field', particleEmissionForDensity(300), { density: 300, maxCount: 300, rate: Number((300 / 10.5).toFixed(3)) });
-    check('600 is the ceiling', particleEmissionForDensity(600), { density: 600, maxCount: 600, rate: Number((600 / 10.5).toFixed(3)) });
-    check('and a wild number is clamped to it', particleEmissionForDensity(9999).maxCount, 600);
-    check('negative density is the off state', particleEmissionForDensity(-5), { density: 0, maxCount: 1, rate: 0 });
+    // Density is the number on screen, so the pool is density / visible fraction
+    // and the rate refills slots as they die or leave through the top.
+    const field300 = particleEmissionForDensity(300);
+    check(
+      'the default pool is bigger than the density (slots wait off screen)',
+      [field300.maxCount > 300, field300.visibleFraction > 0.5 && field300.visibleFraction < 1],
+      [true, true],
+    );
+    check('the pool rounds to the production 404', Math.abs(field300.maxCount - 404) <= 3, true);
+    check('with a rate that refills it', Math.abs(field300.rate - 38.617) <= 0.5, true);
+    const fast = particleEmissionForDensity(300, 1000);
+    // A fast field lives in shorter slots (it leaves through the top), so a
+    // larger share of each slot is spent on screen and the pool can be smaller.
+    check('a fast field spends a larger share of its slot on screen', fast.visibleFraction > field300.visibleFraction, true);
+    check('and it needs a faster refill', fast.rate > field300.rate * 2, true);
+    check('the fast pool is the measured 346', Math.abs(fast.maxCount - 346) <= 3, true);
+    check('and its rate the measured 96.87', Math.abs(fast.rate - 96.87) <= 1, true);
+    check(
+      'density 0 is no particles at all',
+      [particleEmissionForDensity(0).maxCount, particleEmissionForDensity(0).rate],
+      [1, 0],
+    );
+    check('600 asks for twice the pool of 300', Math.abs(particleEmissionForDensity(600).maxCount - field300.maxCount * 2) <= 3, true);
+    check('and a wild number is clamped to the ceiling', particleEmissionForDensity(9999).density, 600);
+    const model = particleVisibilityModel(240, 200, 0.7);
+    check('the model is deterministic', particleVisibilityModel(240, 200, 0.7), model);
+    check('a still field never reaches the screen', particleVisibilityModel(0, 200, 0.7).visibleFraction, 0);
+    check('a shorter scene is left sooner', particleVisibilityModel(240, 200, 0.7, 1920, 1080).slotSeconds < model.slotSeconds, true);
+    check('emission reports the model it used', [field300.visibleSeconds, field300.visibleFraction], [model.slotSeconds, model.visibleFraction]);
+    check('and the rate is the pool over the slot time', Math.abs(field300.rate - field300.maxCount / field300.visibleSeconds) <= 0.01, true);
+    const none = particleEmissionForDensity(-5);
+    check('negative density is the off state', [none.density, none.maxCount, none.rate], [0, 1, 0]);
     check('the slider range is the one the model uses', [CUSTOM_PARTICLE_DENSITY.min, CUSTOM_PARTICLE_DENSITY.max, CUSTOM_PARTICLE_DENSITY.default], [0, 600, 300]);
   }
 
@@ -5761,6 +5946,10 @@ console.log('\nthe custom wallpaper (jsdom)');
         (reduced.host.querySelector<HTMLElement>('[data-custom-image-frame]')?.style.transform ?? '').includes('translate3d'),
         true,
       );
+      // The density says "on screen", and the canvas says how many there are now.
+      const particleCanvas = reduced.host.querySelector<HTMLElement>('[data-custom-particles-canvas]');
+      const visibleNow = Number(particleCanvas?.getAttribute('data-visible-particles') ?? '-1');
+      check('the canvas reports the visible particle count', [Boolean(particleCanvas), Number.isFinite(visibleNow), visibleNow > 0], [true, true, true]);
       await act(async () => {
         reduced.root.unmount();
       });
@@ -6494,6 +6683,7 @@ console.log('\nthe boot screen and the error boundaries (jsdom)');
 console.log('\nthe ember emitter (jsdom)');
 {
   const {
+    countVisibleEmbers,
     createFlowParticles,
     createParticleFlowState,
     placeSpawnedEmbers,
@@ -6539,6 +6729,8 @@ console.log('\nthe ember emitter (jsdom)');
       let sumAbs = 0;
       let maxAbs = 0;
       let sumVy = 0;
+      let minVy = Number.POSITIVE_INFINITY;
+      let maxVy = 0;
       const count = 20000;
       for (let index = 0; index < count; index += 1) {
         const { vx, vy } = spawnEmberVelocity(flow, random);
@@ -6547,8 +6739,10 @@ console.log('\nthe ember emitter (jsdom)');
         sumAbs += abs;
         maxAbs = Math.max(maxAbs, abs);
         sumVy += vy;
+        minVy = Math.min(minVy, vy);
+        maxVy = Math.max(maxVy, vy);
       }
-      return { right: right / count, meanAbs: sumAbs / count, maxAbs, meanVy: sumVy / count };
+      return { right: right / count, meanAbs: sumAbs / count, maxAbs, meanVy: sumVy / count, minVy, maxVy };
     };
     const flow = { rise: 240, drift: 200, direction: 0.7 };
     const stats = sample(flow);
@@ -6556,7 +6750,11 @@ console.log('\nthe ember emitter (jsdom)');
     check('sideways speed never passes the maximum', stats.maxAbs <= 200, true);
     check('and the maximum is reachable', stats.maxAbs > 190, true);
     check('with a mean of half of it', Math.abs(stats.meanAbs - 100) <= 6, true);
-    check('the rise is the upward speed, jittered around it', Math.abs(stats.meanVy - 240) <= 6, true);
+    // Upward: vy = rise * random(0.5, 1), so the slider is the maximum.
+    check('the rise is a maximum, not the speed', [stats.minVy >= 120, stats.maxVy <= 240, stats.maxVy > 235], [true, true, true]);
+    check('with a mean of three quarters of it', Math.abs(stats.meanVy - 180) <= 6, true);
+    const fastRise = sample({ ...flow, rise: 1000 });
+    check('rise 1000 is [500, 1000] with a mean of 750', [fastRise.minVy >= 500, fastRise.maxVy <= 1000, Math.abs(fastRise.meanVy - 750) <= 10], [true, true, true]);
     check('0 sends every ember left', sample({ ...flow, direction: 0 }).right, 0);
     check('1 sends every ember right', sample({ ...flow, direction: 1 }).right, 1);
     check('0.5 splits them', Math.abs(sample({ ...flow, direction: 0.5 }).right - 0.5) <= 0.05, true);
@@ -6577,6 +6775,9 @@ console.log('\nthe ember emitter (jsdom)');
       (slot: { position: number[] }) => Math.abs(slot.position[1]) < top && Math.abs(slot.position[0]) < field.width / 2,
     );
     check('after the warm-up there are embers on screen', inside.length > 0, true);
+    // The same count the canvas reports through data-visible-particles.
+    const visible = countVisibleEmbers(systems, field);
+    check('the visible count is what the field holds on screen', [visible > 0, visible <= alive.length], [true, true]);
 
     // The emitter owns the velocity: the library's drift is only the rise.
     const fresh = createFlowParticles(resolveCustomEffect({}));

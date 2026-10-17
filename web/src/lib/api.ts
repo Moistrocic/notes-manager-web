@@ -270,6 +270,23 @@ export const api = {
     return payload as unknown as { file: BackgroundFile; available: BackgroundFile[] };
   },
 
+  /**
+   * Deletes a file from the administrator's background folder.
+   *
+   * The server refuses a name it does not manage (400) and answers 404 when the
+   * file is already gone. When the deleted file was the configured background,
+   * the server resets the setting to "off" and says `reset: true` - the dialog
+   * follows that answer instead of guessing.
+   */
+  removeBackground: (name: string) =>
+    request<{
+      removed: string;
+      available: BackgroundFile[];
+      configured: boolean;
+      kind: 'aurora' | 'image' | 'video' | 'scene' | 'custom' | null;
+      reset: boolean;
+    }>(`/background?name=${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
   listTrash: () => request<{ notes: NoteSummary[]; folders: TrashedFolder[] }>('/notes/trash'),
   deleteTrashFolder: (path: string) =>
     request<{ ok: boolean }>(`/notes/trash/folders?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),

@@ -10,6 +10,7 @@ import {
   KeyRound,
   RefreshCw,
   Save,
+  Trash2,
   Upload,
   UserRound,
   Wand2,
@@ -123,6 +124,12 @@ export function SettingsDialog() {
   const [uploadingBackground, setUploadingBackground] = useState(false);
   /** What the custom background import is doing right now. */
   const [backgroundNote, setBackgroundNote] = useState<string | null>(null);
+  /** The background file whose bin is waiting for its second press. */
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  /** The file being deleted right now, so its row cannot be pressed twice. */
+  const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  /** Puts an armed bin back after a few seconds, so a stray click cannot delete. */
+  const confirmTimer = useRef<number | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
   const version = useAppStore((s) => s.status?.version);
 
@@ -144,6 +151,14 @@ export function SettingsDialog() {
       })
       .catch((err: Error) => pushToast({ title: '读取设置失败', message: err.message, tone: 'error' }));
   }, [open, pushToast]);
+
+  // A dialog that closes with a bin armed must not fire later.
+  useEffect(
+    () => () => {
+      if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
+    },
+    [],
+  );
 
   const save = async () => {
     setBusy(true);
@@ -205,6 +220,59 @@ export function SettingsDialog() {
       const first = kept ?? available.find((entry) => entry.kind === fileKind);
       return { ...current, kind, file: first?.name ?? '' };
     });
+  };
+
+  /** Turns a row's bin into "确认删除？", or back into a bin after a moment. */
+  const armDelete = (name: string) => {
+    if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
+    setPendingDelete(name);
+    confirmTimer.current = window.setTimeout(() => {
+      confirmTimer.current = null;
+      setPendingDelete(null);
+    }, 4000);
+  };
+
+  /**
+   * Deletes a background file, then follows what the server did about it.
+   *
+   * The file can be the configured background: the server then resets the
+   * setting to off itself and answers `reset`. The form has to move to off with
+   * it, or the save button would write the deleted file back; the returned
+   * `available` list is what the rows are redrawn from.
+   */
+  const deleteBackground = async (name: string) => {
+    // The armed button stays on screen while the request runs - it is the thing
+    // that says what is happening - but its timer must not unarm it halfway.
+    if (confirmTimer.current !== null) {
+      window.clearTimeout(confirmTimer.current);
+      confirmTimer.current = null;
+    }
+    setDeletingFile(name);
+    try {
+      const result = await api.removeBackground(name);
+      setBackground((current) => {
+        if (result.reset) return { ...current, kind: 'off', file: '', note: '' };
+        return current.file === name ? { ...current, file: '' } : current;
+      });
+      if (result.reset) {
+        pushToast({
+          title: '正在使用的背景已切换为关闭',
+          message: `${name} 已删除，所有人改用自己的外观设置`,
+          tone: 'info',
+        });
+      } else {
+        pushToast({ title: '背景文件已删除', message: name, tone: 'success' });
+      }
+      await refreshAdminBackground();
+    } catch (err) {
+      pushToast({ title: '删除背景文件失败', message: (err as Error).message || '未知错误', tone: 'error' });
+      // The list may have changed under us (another tab, a hand copy), so read it
+      // again rather than showing a row that is no longer there.
+      await refreshAdminBackground();
+    } finally {
+      setDeletingFile(null);
+      setPendingDelete(null);
+    }
   };
 
   /**
@@ -441,22 +509,58 @@ export function SettingsDialog() {
                 </div>
                 {matchingFiles.length > 0 ? (
                   <div className="max-h-40 space-y-1 overflow-y-auto">
-                    {matchingFiles.map((entry) => (
-                      <button
-                        key={entry.name}
-                        type="button"
-                        onClick={() => setBackground((current) => ({ ...current, file: entry.name }))}
-                        className={cn(
-                          'focus-ring flex w-full items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left text-[12px] transition-colors',
-                          background.file === entry.name
-                            ? 'border-[color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[var(--accent-soft)] text-[var(--text)]'
-                            : 'border-[var(--line)] text-[var(--muted)] hover:text-[var(--text)]',
-                        )}
-                      >
-                        <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
-                        <span className="shrink-0 text-[11px] text-[var(--faint)]">{formatBytes(entry.bytes)}</span>
-                      </button>
-                    ))}
+                    {matchingFiles.map((entry) => {
+                      const chosen = background.file === entry.name;
+                      const armed = pendingDelete === entry.name;
+                      const deleting = deletingFile === entry.name;
+                      return (
+                        <div
+                          key={entry.name}
+                          data-testid="background-file-row"
+                          className={cn(
+                            'flex items-center gap-1 rounded-xl border px-2 py-1 text-[12px] transition-colors',
+                            chosen
+                              ? 'border-[color-mix(in_srgb,var(--accent)_55%,transparent)] bg-[var(--accent-soft)] text-[var(--text)]'
+                              : 'border-[var(--line)] text-[var(--muted)]',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setBackground((current) => ({ ...current, file: entry.name }))}
+                            aria-label={`选择背景文件 ${entry.name}`}
+                            className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:text-[var(--text)]"
+                          >
+                            <span className="min-w-0 flex-1 truncate font-mono">{entry.name}</span>
+                            <span className="shrink-0 text-[11px] text-[var(--faint)]">{formatBytes(entry.bytes)}</span>
+                          </button>
+                          {armed ? (
+                            <button
+                              type="button"
+                              data-testid={`background-delete-confirm-${entry.name}`}
+                              disabled={deleting}
+                              onClick={() => void deleteBackground(entry.name)}
+                              title="再点一次才会真的删除"
+                              className="focus-ring flex shrink-0 items-center gap-1 rounded-lg border border-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] px-2 py-1 text-[11px] text-[var(--danger)] transition-colors disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              {deleting ? '删除中…' : '确认删除？'}
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              data-testid={`background-delete-${entry.name}`}
+                              disabled={deleting}
+                              aria-label={`删除背景文件 ${entry.name}`}
+                              title="删除这个背景文件"
+                              onClick={() => armDelete(entry.name)}
+                              className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--faint)] transition-colors hover:text-[var(--danger)] disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="flex items-start gap-2 text-[11.5px] leading-relaxed text-[var(--warn)]">

@@ -357,6 +357,13 @@ console.log('custom background');
       });
       return { status: response.status, payload: await response.json().catch(() => null) };
     };
+    const del = async (name) => {
+      const response = await fetch(
+        origin + '/api/background?name=' + encodeURIComponent(name),
+        { method: 'DELETE' },
+      );
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
     try {
       // The bytes decide the format; the name only supplies a label.
       const webp = Buffer.concat([
@@ -456,6 +463,7 @@ console.log('custom background');
           customSwayAmplitude: 99,
           customSwayFrequency: 0,
           customParticleRise: 9999,
+          customParticleDrift: 9999,
           customParticleDirection: 9,
           customParticleDensity: 9999,
           customParticleColor: 'red',
@@ -468,12 +476,57 @@ console.log('custom background');
           clamped.customSwayAmplitude,
           clamped.customSwayFrequency,
           clamped.customParticleRise,
+          clamped.customParticleDrift,
           clamped.customParticleDirection,
           clamped.customParticleDensity,
           clamped.customParticleColor,
         ],
-        [8, 0.02, 500, 1, 600, ''],
+        [8, 0.02, 1000, 1000, 1, 600, ''],
       );
+      /* ---- Deleting background files ------------------------------------- */
+      anonymous = true;
+      check('an anonymous delete is refused', (await del('x.png')).status, 401);
+      anonymous = false;
+      session.role = 'guest';
+      check('a guest may not delete a background', (await del('x.png')).status, 403);
+      session.role = 'admin';
+      for (const name of ['', '../settings.json', 'sub/x.png', '.hidden.png', 'background.json']) {
+        const refused = await del(name);
+        check(
+          'a name the folder may never delete is refused: ' + (name || '(empty)'),
+          [refused.status, refused.payload?.error?.code],
+          [400, 'invalid_background_name'],
+        );
+      }
+      check('a name that is not there is a 404', (await del('nothing.png')).status, 404);
+      // Two real pictures, so one can be removed without touching the other.
+      const delA = await post(Buffer.concat([webp, Buffer.from([1])]), { 'X-Background-Filename': encodeURIComponent('删一.png') });
+      const delB = await post(Buffer.concat([webp, Buffer.from([2])]), { 'X-Background-Filename': encodeURIComponent('删二.png') });
+      check('two pictures for the delete suite', [delA.status, delA.payload.file.name, delB.payload.file.name], [201, '删一.webp', '删二.webp']);
+      const removedA = await del('删一.webp');
+      check('a file can be deleted', [removedA.status, removedA.payload.removed, removedA.payload.reset], [200, '删一.webp', false]);
+      check('and it leaves the list', removedA.payload.available.some((file) => file.name === '删一.webp'), false);
+      check('while the other one is still there', removedA.payload.available.some((file) => file.name === '删二.webp'), true);
+      check('deleting it again is a 404', (await del('删一.webp')).status, 404);
+      writeFileSync(path.join(store.dir, 'manual.png'), Buffer.concat([webp, Buffer.from([3])]));
+      check('a hand-copied file is deletable too', (await del('manual.png')).payload?.removed, 'manual.png');
+      // Deleting the file that is in use must switch the setting off, in the
+      // same request, and say so.
+      check('the second picture is made current', (await putSettings({ ...settings.effective().background, kind: 'custom', file: '删二.webp' })).status, 200);
+      const reset = await del('删二.webp');
+      check(
+        'deleting the current background resets it',
+        [reset.status, reset.payload.reset, reset.payload.configured, reset.payload.kind],
+        [200, true, false, null],
+      );
+      check('the setting is off in memory', [settings.effective().background.kind, settings.effective().background.file], ['off', '']);
+      const { readFileSync } = await import('node:fs');
+      const settingsOnDisk = JSON.parse(readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+      check('and on disk', [settingsOnDisk.background.kind, settingsOnDisk.background.file], ['off', '']);
+      const afterDelete = await (await fetch(origin + '/api/background')).json();
+      check('the endpoint reports nothing configured', [afterDelete.configured, afterDelete.kind, afterDelete.file], [false, null, null]);
+      const gone = await fetch(origin + '/api/background/file?name=' + encodeURIComponent('删二.webp'));
+      check('and the file is gone', [gone.status, (await gone.json()).error.code], [404, 'no_background']);
       // (The upload's 20 MB ceiling is a raw-body parser limit and the browser
       // shrinks before sending, so no test here sends a file that big.)
     } finally {

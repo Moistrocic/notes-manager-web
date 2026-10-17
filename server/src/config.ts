@@ -418,9 +418,9 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
       current.customSwayFrequency = clampNumber(b.customSwayFrequency, 0.02, 0.5, current.customSwayFrequency);
     if (typeof b.customShowParticles === 'boolean') current.customShowParticles = b.customShowParticles;
     if (b.customParticleRise !== undefined)
-      current.customParticleRise = clampNumber(b.customParticleRise, 0, 500, current.customParticleRise);
+      current.customParticleRise = clampNumber(b.customParticleRise, 0, 1000, current.customParticleRise);
     if (b.customParticleDrift !== undefined)
-      current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 400, current.customParticleDrift);
+      current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 1000, current.customParticleDrift);
     if (b.customParticleDirection !== undefined)
       current.customParticleDirection = clampNumber(b.customParticleDirection, 0, 1, current.customParticleDirection);
     if (b.customParticleDensity !== undefined)

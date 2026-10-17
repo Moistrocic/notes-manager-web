@@ -21,6 +21,23 @@ const MANIFEST_ADOPTED = 'background.json.imported';
 /** What a file in the folder is, from its extension. */
 export type BackgroundFileKind = 'image' | 'video' | 'scene';
 
+/** Why a background file could not be deleted, in the words the route answers with. */
+export type BackgroundRemoveErrorCode = 'invalid_background_name' | 'background_not_found';
+
+/**
+ * A refused delete: the name is not something this folder may delete, or there
+ * is nothing there any more. The route turns the code into 400 or 404.
+ */
+export class BackgroundRemoveError extends Error {
+  readonly code: BackgroundRemoveErrorCode;
+
+  constructor(message: string, code: BackgroundRemoveErrorCode) {
+    super(message);
+    this.name = 'BackgroundRemoveError';
+    this.code = code;
+  }
+}
+
 export interface BackgroundFile {
   /** File name inside the directory. */
   name: string;
@@ -98,6 +115,23 @@ export function kindOf(name: string): BackgroundFileKind | null {
 }
 
 /**
+ * Whether a name is one this folder may delete.
+ *
+ * A bare file name with a background extension, and nothing that means "some
+ * other path": no separators, no leading dot (the manifest and dot files stay
+ * hidden), no control characters. `path.basename` is the guard against the
+ * separators, and the extension check keeps the folder's own bookkeeping files
+ * out of reach.
+ */
+function isRemovableName(name: string): boolean {
+  if (!name || name.length > 255) return false;
+  if (name.startsWith('.') || name.includes('/') || name.includes('\\')) return false;
+  if (/[\u0000-\u001f]/.test(name)) return false;
+  if (path.basename(name) !== name) return false;
+  return kindOf(name) !== null;
+}
+
+/**
  * The administrator's default background.
  *
  * Files, not uploads: a scene wallpaper is 45 MB, it is the administrator's own
@@ -153,6 +187,49 @@ export class BackgroundStore {
     if (!name || name.includes('/') || name.includes('\\') || name.startsWith('.')) return null;
     const found = this.find(name);
     return found ? path.join(this.dir, found.name) : null;
+  }
+
+  /**
+   * Deletes a file from the folder.
+   *
+   * A file the listing would show, and only that: the name has to be a bare file
+   * name with a background extension, so a crafted query cannot reach outside
+   * `backgrounds/` or delete the folder's own bookkeeping. Symlinks are refused
+   * too - they are not the file they appear to be.
+   *
+   * Throws `BackgroundRemoveError`: `invalid_background_name` for a name this
+   * folder may never delete, `background_not_found` when there is nothing there.
+   * A permission failure is left as a plain error (it is a 500, not a 404).
+   */
+  remove(name: string): BackgroundFile {
+    if (!isRemovableName(name)) {
+      throw new BackgroundRemoveError(`不是可删除的背景文件名：${name || '(空)'}`, 'invalid_background_name');
+    }
+    const absolute = path.join(this.dir, name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(absolute);
+    } catch {
+      throw new BackgroundRemoveError(`背景文件不存在：${name}`, 'background_not_found');
+    }
+    if (!stat.isFile()) {
+      throw new BackgroundRemoveError(`背景文件不存在：${name}`, 'background_not_found');
+    }
+    try {
+      fs.unlinkSync(absolute);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new BackgroundRemoveError(`背景文件不存在：${name}`, 'background_not_found');
+      }
+      throw err;
+    }
+    // The hash cache is keyed by name + size + mtime; the name may come back as
+    // another file, so nothing about this one is worth remembering.
+    for (const key of this.hashes.keys()) {
+      if (key.startsWith(`${name}:`)) this.hashes.delete(key);
+    }
+    log.info(`background removed: ${name} (${stat.size} bytes)`);
+    return { name, kind: kindOf(name) ?? 'image', bytes: stat.size };
   }
 
   /**

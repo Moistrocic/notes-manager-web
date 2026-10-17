@@ -96,11 +96,11 @@ export interface WallpaperSettings {
   customSwayFrequency?: number;
   /** Draw particles at all. */
   customShowParticles?: boolean;
-  /** Upward speed of a particle, scene units per second (0 - 500). */
+  /** Upward speed of a particle, scene units per second (0 - 1000). */
   customParticleRise?: number;
   /**
    * The largest sideways speed a particle may be given, scene units per second
-   * (0 - 400). Each particle picks its own magnitude from [0, this].
+   * (0 - 1000). Each particle picks its own magnitude from [0, this].
    */
   customParticleDrift?: number;
   /**
@@ -298,8 +298,8 @@ export function resolveCustomEffect(settings: CustomEffectParams): ResolvedCusto
     amplitude: between(settings.customSwayAmplitude, 0, 8, CUSTOM_EFFECT_DEFAULTS.amplitude),
     frequency: between(settings.customSwayFrequency, 0.02, 0.5, CUSTOM_EFFECT_DEFAULTS.frequency),
     particles: settings.customShowParticles !== false,
-    rise: between(settings.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
-    drift: between(settings.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
+    rise: between(settings.customParticleRise, 0, 1000, CUSTOM_EFFECT_DEFAULTS.rise),
+    drift: between(settings.customParticleDrift, 0, 1000, CUSTOM_EFFECT_DEFAULTS.drift),
     direction: between(settings.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
     density: Math.round(between(settings.customParticleDensity, 0, 600, CUSTOM_EFFECT_DEFAULTS.density)),
     color: normaliseParticleColor(settings.customParticleColor),
@@ -312,6 +312,17 @@ export function resolveCustomEffect(settings: CustomEffectParams): ResolvedCusto
 
 /** The density slider's range; the default fills the production emitter. */
 export const CUSTOM_PARTICLE_DENSITY = { min: 0, max: 600, step: 10, default: 300 } as const;
+
+/** The production emitter's particle lifetime: lifetimerandom min/max, seconds. */
+export const CUSTOM_PARTICLE_LIFETIME = { min: 9, max: 12 } as const;
+
+/** The emitter's spawn geometry, in scene units: sprite sizes and the gap below the edge. */
+export const CUSTOM_PARTICLE_SPAWN = {
+  sizeMin: 140,
+  sizeMax: 560,
+  gap: 20,
+  jitter: 80,
+} as const;
 
 /**
  * The particle colour field, for both dialogs.
@@ -353,18 +364,102 @@ export function parseParticleColor(value: unknown): [number, number, number] | n
 }
 
 /**
+ * The average particle as seen from the screen, from deterministic sampling.
+ *
+ * The density slider promises "particles on screen", not "slots in the
+ * emitter": a slot spends its first moment below the bottom edge and can drift
+ * out through a side edge before it dies, so a field of exactly `density`
+ * slots shows fewer particles than that. This samples the real path (uniform
+ * speeds, uniform horizontal start, lifetime range, entry delay, top and side
+ * exits) with a fixed PRNG, so the numbers are deterministic and the emitter
+ * can size the slot pool as density / visibleFraction.
+ *
+ * Returns the fraction of a slot's life during which it is visible, and how
+ * long a slot is occupied on average (the reciprocal is the refill rate).
+ */
+export function particleVisibilityModel(
+  rise: number,
+  drift: number,
+  direction: number,
+  sceneWidthUnits: number = CUSTOM_ORTHO.width,
+  sceneHeightUnits: number = CUSTOM_ORTHO.height,
+): { visibleFraction: number; slotSeconds: number } {
+  const speed = Math.max(0, Number(rise) || 0);
+  const sway = Math.max(0, Number(drift) || 0);
+  const rightShare = Math.min(1, Math.max(0, Number(direction) || 0));
+  const halfWidth = Math.max(1, Number(sceneWidthUnits) || 0) / 2;
+  const height = Math.max(1, Number(sceneHeightUnits) || 0);
+  const lifeMin = CUSTOM_PARTICLE_LIFETIME.min;
+  const lifeMax = CUSTOM_PARTICLE_LIFETIME.max;
+  if (speed <= 0) return { visibleFraction: 0, slotSeconds: (lifeMin + lifeMax) / 2 };
+  let state = 0x9e3779b9 >>> 0;
+  const random = (): number => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+  const samples = 1200;
+  let fractionSum = 0;
+  let slotSum = 0;
+  for (let index = 0; index < samples; index += 1) {
+    const vy = speed * (0.5 + random() * 0.5);
+    const vx = (random() < rightShare ? 1 : -1) * random() * sway;
+    const size = CUSTOM_PARTICLE_SPAWN.sizeMin + random() * (CUSTOM_PARTICLE_SPAWN.sizeMax - CUSTOM_PARTICLE_SPAWN.sizeMin);
+    const clearance = size / 2 + CUSTOM_PARTICLE_SPAWN.gap + random() * CUSTOM_PARTICLE_SPAWN.jitter;
+    const life = lifeMin + random() * (lifeMax - lifeMin);
+    const x0 = (random() * 2 - 1) * halfWidth;
+    const entry = clearance / vy;
+    // The slot ends at death or when the whole sprite is above the top edge.
+    const topExit = (height + size + CUSTOM_PARTICLE_SPAWN.gap + random() * CUSTOM_PARTICLE_SPAWN.jitter) / vy;
+    const sideExit = Math.abs(vx) < 1e-6 ? Number.POSITIVE_INFINITY : (halfWidth - Math.sign(vx) * x0) / Math.abs(vx);
+    const slotSeconds = Math.min(life, topExit);
+    const visibleSeconds = Math.max(0, Math.min(slotSeconds, sideExit) - entry);
+    fractionSum += visibleSeconds / slotSeconds;
+    slotSum += slotSeconds;
+  }
+  return {
+    visibleFraction: Number((fractionSum / samples).toFixed(4)),
+    slotSeconds: Number((slotSum / samples).toFixed(4)),
+  };
+}
+
+/**
  * How many emitter slots and how many spawns per second a density means.
  *
- * One slot is one particle on screen (the field's steady state), so the slot
- * count is the density itself. The rate follows from the production lifetime:
- * slots / mean life keeps the field full. Density 0 keeps one slot (the library
- * needs one) but a rate of 0, so nothing is ever born - the same visual result
- * as switching the particles off.
+ * The density slider is "particles on screen", so the slot pool is
+ * density / visibleFraction (particleVisibilityModel) and the spawn rate is
+ * poolSize / slotSeconds: slots are refilled as fast as death or a top-edge
+ * exit frees them, which keeps the visible count at the slider value whether
+ * the rise slider is slow (particles live their 9-12 s) or fast (they climb
+ * out in two or three seconds). Density 0 keeps one slot (the library needs
+ * one) but spawns nothing.
  */
-export function particleEmissionForDensity(density: number): { density: number; maxCount: number; rate: number } {
+export function particleEmissionForDensity(
+  density: number,
+  rise: number = CUSTOM_EFFECT_DEFAULTS.rise,
+  drift: number = CUSTOM_EFFECT_DEFAULTS.drift,
+  direction: number = CUSTOM_EFFECT_DEFAULTS.direction,
+  sceneWidthUnits: number = CUSTOM_ORTHO.width,
+  sceneHeightUnits: number = CUSTOM_ORTHO.height,
+): { density: number; maxCount: number; rate: number; visibleSeconds: number; visibleFraction: number } {
   const value = Math.round(between(density, 0, CUSTOM_PARTICLE_DENSITY.max, CUSTOM_PARTICLE_DENSITY.default));
-  if (value <= 0) return { density: 0, maxCount: 1, rate: 0 };
-  return { density: value, maxCount: value, rate: Number((value / 10.5).toFixed(3)) };
+  const model = particleVisibilityModel(rise, drift, direction, sceneWidthUnits, sceneHeightUnits);
+  if (value <= 0) return { density: 0, maxCount: 1, rate: 0, visibleSeconds: model.slotSeconds, visibleFraction: model.visibleFraction };
+  if (model.visibleFraction <= 0.02) {
+    // No particle reaches the screen (rise 0): keep the old pool, nothing visible.
+    return { density: value, maxCount: value, rate: Number((value / model.slotSeconds).toFixed(3)), visibleSeconds: model.slotSeconds, visibleFraction: model.visibleFraction };
+  }
+  const maxCount = Math.min(2000, Math.max(1, Math.round(value / model.visibleFraction)));
+  const rate = Math.min(2000, Number((maxCount / model.slotSeconds).toFixed(3)));
+  return {
+    density: value,
+    maxCount,
+    rate,
+    visibleSeconds: model.slotSeconds,
+    visibleFraction: model.visibleFraction,
+  };
 }
 
 
@@ -421,8 +516,8 @@ export const CUSTOM_EFFECT_TOGGLES: readonly { key: 'customSway' | 'customShowPa
 export const CUSTOM_EFFECT_SLIDERS: readonly CustomEffectControl[] = [
   { key: 'customSwayAmplitude', label: '背景晃动幅度', min: 0, max: 8, step: 0.25, format: (v) => `${v.toFixed(2)}%` },
   { key: 'customSwayFrequency', label: '背景晃动频率', min: 0.02, max: 0.5, step: 0.01, format: (v) => `${v.toFixed(2)} Hz` },
-  { key: 'customParticleRise', label: '粒子上升速度', min: 0, max: 500, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
-  { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 400, step: 10, format: (v) => `最大 ${Math.round(v)} 单位/秒` },
+  { key: 'customParticleRise', label: '粒子上升速度', min: 0, max: 1000, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
+  { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 1000, step: 10, format: (v) => `最大 ${Math.round(v)} 单位/秒` },
   { key: 'customParticleDirection', label: '粒子方向比例', min: 0, max: 1, step: 0.05, format: (v) => `向右 ${Math.round(v * 100)}%` },
   { key: 'customParticleDensity', label: '粒子密度', min: 0, max: 600, step: 10, format: (v) => `${Math.round(v)} 颗` },
 ];
@@ -950,8 +1045,8 @@ export function loadWallpaperSettings(): WallpaperSettings {
       customSwayAmplitude: between(parsed.customSwayAmplitude, 0, 8, CUSTOM_EFFECT_DEFAULTS.amplitude),
       customSwayFrequency: between(parsed.customSwayFrequency, 0.02, 0.5, CUSTOM_EFFECT_DEFAULTS.frequency),
       customShowParticles: parsed.customShowParticles !== false,
-      customParticleRise: between(parsed.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
-      customParticleDrift: between(parsed.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
+      customParticleRise: between(parsed.customParticleRise, 0, 1000, CUSTOM_EFFECT_DEFAULTS.rise),
+      customParticleDrift: between(parsed.customParticleDrift, 0, 1000, CUSTOM_EFFECT_DEFAULTS.drift),
       customParticleDirection: between(parsed.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
       customParticleDensity: Math.round(between(parsed.customParticleDensity, 0, 600, CUSTOM_EFFECT_DEFAULTS.density)),
       customParticleColor: normaliseParticleColor(parsed.customParticleColor),

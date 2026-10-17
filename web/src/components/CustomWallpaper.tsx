@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   CUSTOM_EFFECT_COLOR,
   CUSTOM_EFFECT_SLIDERS,
+  CUSTOM_PARTICLE_LIFETIME,
+  CUSTOM_PARTICLE_SPAWN,
   CUSTOM_EFFECT_TOGGLES,
   FULL_CROP,
   cropMediaStyle,
@@ -478,8 +480,8 @@ const FLOW_EMBER_DEFINITION_JSON: Record<string, unknown> = {
   // the bottom edge to (and past) the top edge. The other keys are the engine
   // preset's own - sprite sizes, colours, fade and size ramp are unchanged.
   initializer: [
-    { name: 'lifetimerandom', min: 9, max: 12 },
-    { name: 'sizerandom', min: 140, max: 560 },
+    { name: 'lifetimerandom', min: CUSTOM_PARTICLE_LIFETIME.min, max: CUSTOM_PARTICLE_LIFETIME.max },
+    { name: 'sizerandom', min: CUSTOM_PARTICLE_SPAWN.sizeMin, max: CUSTOM_PARTICLE_SPAWN.sizeMax },
     { name: 'colorrandom', min: '255 143 102', max: '255 218 108' },
     { name: 'turbulentvelocityrandom', offset: -0.5, scale: 0.1 },
   ],
@@ -492,14 +494,22 @@ const EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } 
 };
 
 /**
- * The production pair for a density: the flow root with as many slots and as
- * many spawns per second as the slider asks for, and the same glow child.
+ * The production pair for a density and a rise: the flow root with as many slots
+ * as the slider asks for and enough spawns per second to keep them filled.
  *
- * One slot is one particle on screen, so maxcount is the density itself; the
- * rate keeps that many alive across the 9-12 s lifetime (density / 10.5).
+ * One slot is one particle on screen, so maxcount is the density itself. The
+ * rate is density / expected time on screen (particleEmissionForDensity): at a
+ * low rise that is the 9-12 s lifetime, at a high rise it is the two or three
+ * seconds it takes to climb out through the top, so "visible count = density"
+ * holds at both ends of the speed slider.
  */
-function flowDefinitionsForDensity(density: number): { root: ParticleDefinition; glow: ParticleDefinition } {
-  const emission = particleEmissionForDensity(density);
+function flowDefinitionsForDensity(
+  density: number,
+  rise: number,
+  drift: number,
+  direction: number,
+): { root: ParticleDefinition; glow: ParticleDefinition } {
+  const emission = particleEmissionForDensity(density, rise, drift, direction);
   return {
     root: parseParticleDefinition({
       ...FLOW_EMBER_DEFINITION_JSON,
@@ -557,7 +567,7 @@ export function createLibraryParticles(effect: ResolvedCustomEffect): LibraryPar
 export function createFlowParticles(effect: ResolvedCustomEffect): LibraryParticles {
   return buildSystemPair(
     { drift: { rise: effect.rise, speed: 0, spread: 0, turbulence: effect.rise > 0 ? FLOW_TURBULENCE : 0 } },
-    flowDefinitionsForDensity(effect.density),
+    flowDefinitionsForDensity(effect.density, effect.rise, effect.drift, effect.direction),
   );
 }
 
@@ -617,9 +627,7 @@ export interface ParticleFlow {
   color?: [number, number, number] | null;
 }
 
-/** How far below the bottom edge a particle is born, before its own random extra. */
-const SPAWN_GAP = 20;
-const SPAWN_JITTER = 80;
+
 
 /** One particle's birth, in scene units. */
 export interface SpawnedEmber {
@@ -645,7 +653,7 @@ export function spawnEmberPosition(
   const unit = Math.max(0.0001, field.unit);
   const halfWidth = field.width / (2 * unit);
   const bottom = -field.height / (2 * unit);
-  const clearance = Math.max(0, halfSize) + SPAWN_GAP + random() * SPAWN_JITTER;
+  const clearance = Math.max(0, halfSize) + CUSTOM_PARTICLE_SPAWN.gap + random() * CUSTOM_PARTICLE_SPAWN.jitter;
   return {
     // Across the full width, in scene units around the centre.
     x: (random() * 2 - 1) * halfWidth,
@@ -658,9 +666,10 @@ export function spawnEmberPosition(
  *
  * Sideways: the magnitude is uniform over [0, drift] and the sign is right with
  * probability `direction` - 0.7 means about 70% of the particles go right.
- * Upward: rise with ±15% jitter, so the field does not move as one sheet while
- * the mean stays rise; rise 0 stays exactly 0 (a particle born below the screen
- * then never enters it, which is the honest reading of that setting).
+ * Upward: vy = rise * random(0.5, 1.0), i.e. uniform over [rise/2, rise], the
+ * same shape as the sideways slider (the slider is the maximum, each particle
+ * picks its own speed below it). rise 0 stays exactly 0 (a particle born below
+ * the screen then never enters it, which is the honest reading of that setting).
  * Pure: the random source is injected.
  */
 export function spawnEmberVelocity(flow: ParticleFlow, random: () => number): { vx: number; vy: number } {
@@ -669,7 +678,7 @@ export function spawnEmberVelocity(flow: ParticleFlow, random: () => number): { 
   const rise = Math.max(0, Number(flow.rise) || 0);
   const right = random() < direction;
   const speed = random() * drift;
-  const vertical = rise * (0.85 + random() * 0.3);
+  const vertical = rise * (0.5 + random() * 0.5);
   return { vx: (right ? 1 : -1) * speed, vy: vertical };
 }
 
@@ -681,6 +690,26 @@ export function spawnEmber(
   random: () => number,
 ): SpawnedEmber {
   return { ...spawnEmberPosition(field, halfSize, random), ...spawnEmberVelocity(flow, random) };
+}
+
+/**
+ * How many particles are on screen right now: alive with their centre inside
+ * the viewport. Used by the canvas's data-visible-particles hook and asserted by
+ * the probes, because the density slider promises this number, not the slot
+ * count alone.
+ */
+export function countVisibleEmbers(systems: LibraryParticles, field: ParticleField): number {
+  const halfWidth = field.width / 2;
+  const halfHeight = field.height / 2;
+  let visible = 0;
+  for (const particle of systems.root.slots) {
+    if (!particle.alive) continue;
+    const screenX = halfWidth + particle.position[0] * field.unit;
+    const screenY = halfHeight - particle.position[1] * field.unit;
+    if (screenX < 0 || screenX > field.width || screenY < 0 || screenY > field.height) continue;
+    visible += 1;
+  }
+  return visible;
 }
 
 /** What one step of the field did. */
@@ -1077,6 +1106,8 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     let running = false;
     let last = 0;
     let time = 0;
+    /** When the canvas last published its on-screen count, for the debug hook. */
+    let lastVisibleReport = 0;
 
     /**
      * One frame of the scene renderer's `oscillateposition` curve, applied to the
@@ -1123,6 +1154,12 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       if (context) {
         advanceParticleFlow(systems, flowState, field, flow, delta / 1000);
         paintParticles();
+        // Twice a second is enough for the hook, and keeps DOM writes off the
+        // frame path: the canvas reports what the density slider promises.
+        if (canvas && now - lastVisibleReport >= 500) {
+          lastVisibleReport = now;
+          canvas.dataset.visibleParticles = String(countVisibleEmbers(systems, field));
+        }
       }
     };
 
@@ -1146,6 +1183,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       warmUpParticleFlow(systems, flowState, field, flow);
       applyParticleColor(systems, flowState, flow.color);
       paintParticles();
+      if (canvas) canvas.dataset.visibleParticles = String(countVisibleEmbers(systems, field));
     }
     // The first pose is written before the first frame, so the picture starts on
     // the curve instead of sitting untransformed for a frame.

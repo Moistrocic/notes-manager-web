@@ -1,10 +1,26 @@
 import express, { Router } from 'express';
-import { MAX_BACKGROUND_BYTES } from '../../backgrounds/store.js';
+import { BackgroundRemoveError, MAX_BACKGROUND_BYTES } from '../../backgrounds/store.js';
 import { createLogger } from '../../logger.js';
 import { handler, requireAdmin } from '../middleware.js';
 import type { Services } from '../../services.js';
 
 const log = createLogger('routes:background');
+
+/**
+ * The kind the layer is really showing, from the settings and from the files.
+ *
+ * A file kind without a usable file is not a background: an administrator who
+ * deleted the file leaves everybody with their own choice rather than a locked,
+ * broken page. GET / and DELETE / share this answer so the two cannot disagree
+ * about what "configured" means.
+ */
+function configuredKind(services: Services): 'aurora' | 'image' | 'video' | 'scene' | 'custom' | null {
+  const settings = services.settings.effective().background;
+  if (settings.kind === 'off') return null;
+  if (settings.kind === 'aurora') return 'aurora';
+  const file = services.backgrounds.find(settings.file);
+  return file && (settings.kind !== 'custom' || file.kind === 'image') ? settings.kind : null;
+}
 
 /**
  * The administrator's default background.
@@ -24,17 +40,7 @@ export function backgroundRoutes(services: Services): Router {
       const settings = services.settings.effective().background;
       const files = services.backgrounds.list();
       const file = services.backgrounds.find(settings.file);
-      // A file kind without a usable file is not a background: an administrator
-      // who deleted the file leaves everybody with their own choice rather than
-      // a locked, broken page.
-      const kind =
-        settings.kind === 'off'
-          ? null
-          : settings.kind === 'aurora'
-            ? 'aurora'
-            : file && (settings.kind !== 'custom' || file.kind === 'image')
-              ? settings.kind
-              : null;
+      const kind = configuredKind(services);
       // What the browser keys its copy of the file on: the same bytes keep the
       // same hash however the file was replaced, and a different file is a
       // different hash - so a wallpaper is downloaded when it changes rather
@@ -143,6 +149,48 @@ export function backgroundRoutes(services: Services): Router {
         res.status(201).json({ file, available: services.backgrounds.list() });
       } catch (err) {
         res.status(400).json({ error: { message: (err as Error).message, code: 'invalid_background' } });
+      }
+    }),
+  );
+
+  /**
+   * Deletes a file from the background folder.
+   *
+   * Contract: DELETE /api/background?name=<percent-encoded file name>,
+   * requireAdmin. 200 { removed, available, configured, kind, reset };
+   * 400 invalid_background_name; 401 unauthenticated; 403 forbidden;
+   * 404 background_not_found.
+   *
+   * When the deleted file was the configured background the setting is reset to
+   * `off` in the same request and `reset: true` says so: a settings file that
+   * names a file which is gone would leave the sign-in screen pointing at a 404,
+   * and the caller should not have to guess that it happened.
+   */
+  router.delete(
+    '/',
+    requireAdmin,
+    handler(async (req, res) => {
+      const name = typeof req.query.name === 'string' ? req.query.name : '';
+      try {
+        const removed = services.backgrounds.remove(name);
+        const settings = services.settings.effective().background;
+        const reset = settings.file === removed.name;
+        if (reset) {
+          services.settings.update({ background: { ...settings, kind: 'off', file: '', note: '' } });
+          log.info(`background ${removed.name} was in use - reset to off`);
+        }
+        const kind = configuredKind(services);
+        res.json({
+          removed: removed.name,
+          available: services.backgrounds.list(),
+          configured: kind !== null,
+          kind,
+          reset,
+        });
+      } catch (err) {
+        if (!(err instanceof BackgroundRemoveError)) throw err;
+        const status = err.code === 'background_not_found' ? 404 : 400;
+        res.status(status).json({ error: { message: err.message, code: err.code } });
       }
     }),
   );
