@@ -79,12 +79,14 @@ export interface WallpaperSettings {
   /*
    * The custom wallpaper's seven controls (1.6).
    *
-   * Six of them come straight from the Wallpaper Engine drift model the vendored
-   * scene renderer implements (lib/wallpaper-scene-layers/.../render/particles.ts:
-   * ParticleDriftOptions { rise, speed, forwardRatio, spread }); the two booleans
-   * turn the two halves of the effect off. They are optional because settings
-   * files written before each version have fewer fields than the current ones:
-   * resolveCustomEffect() is the one place that fills and clamps them.
+   * Four numbers and two switches: the picture's sway, and a particle field that
+   * is born below the screen and rises into it. The motion numbers are in scene
+   * units per second (the library's 3840x2160 orthographic volume, see
+   * sceneUnitScale), the sway follows the library's `oscillateposition` curve,
+   * and the two booleans turn the two halves off. They are optional because
+   * settings files written before each version have fewer fields than the
+   * current ones: resolveCustomEffect() is the one place that fills and clamps
+   * them.
    */
   /** Draw the picture's slow sway at all. */
   customSway?: boolean;
@@ -94,11 +96,18 @@ export interface WallpaperSettings {
   customSwayFrequency?: number;
   /** Draw particles at all. */
   customShowParticles?: boolean;
-  /** Drift rise: scene units per second, i.e. the engine's drift.rise. */
+  /** Upward speed of a particle, scene units per second (0 - 500). */
   customParticleRise?: number;
-  /** Drift speed: scene units per second, i.e. the engine's drift.speed. */
+  /**
+   * The largest sideways speed a particle may be given, scene units per second
+   * (0 - 400). Each particle picks its own magnitude from [0, this].
+   */
   customParticleDrift?: number;
-  /** Fraction of particles blown along the main direction: drift.forwardRatio. */
+  /**
+   * The share of particles that move right, 0 - 1: 0.7 means 70% right and
+   * 30% left. The field name is kept for settings compatibility; the meaning is
+   * "probability of moving right", not the library's forwardRatio.
+   */
   customParticleDirection?: number;
   /*
    * The 1.5.x knobs. Kept in the type (all optional) so an old settings file
@@ -194,18 +203,16 @@ export const LEGACY_CUSTOM_KEYS = [
 
 /**
  * The custom background's controls, in the user's words: whether the picture
- * sways and how far/fast, whether particles show and how they rise, drift, and
- * how many go the main way.
+ * sways and how far/fast, and whether particles show, how fast they rise, how
+ * fast they slide sideways, and what share of them goes right.
  *
- * The motion half is the Wallpaper Engine drift model the vendored renderer
- * implements: `ParticleDriftOptions` in
- * lib/wallpaper-scene-layers/packages/we-scene/src/render/particles.ts
- * ({ rise: 120, speed: 200, forwardRatio: 0.8, spread: 0.6 } are that renderer's
- * defaults), and the library's Rossi preset uses rise 240 / speed 200 /
- * forwardRatio 0.7 - which is where this wallpaper's defaults come from. The
- * sway half follows that renderer's `oscillateposition` operator curve:
- * displacement = sin/cos(elapsed * frequency * 2π). The scene there displaces a
- * 3D camera/quad; here the same curve and units displace a 2D picture.
+ * The look of the particles (halo sprite, additive blending, size/alpha/lifetime
+ * curves) is still the vendored scene library's ember preset; the *emitter* is
+ * ours: a particle is born below the screen and drifts up into it, so it enters
+ * from the bottom edge instead of appearing anywhere on screen. The sway half
+ * follows the library's `oscillateposition` operator curve: displacement =
+ * sin/cos(elapsed * frequency * 2π). The scene there displaces a 3D camera/quad;
+ * here the same curve and units displace a 2D picture.
  */
 export interface CustomEffectParams {
   customSway?: boolean;
@@ -225,11 +232,11 @@ export interface ResolvedCustomEffect {
   /** Cycles per second. */
   frequency: number;
   particles: boolean;
-  /** Scene units per second; the engine's drift.rise. */
+  /** Upward speed, scene units per second. */
   rise: number;
-  /** Scene units per second; the engine's drift.speed. */
+  /** Largest sideways speed, scene units per second; each particle samples [0, drift]. */
   drift: number;
-  /** The engine's drift.forwardRatio, 0 - 1. */
+  /** Probability a particle moves right, 0 - 1 (0.7 = 70% right, 30% left). */
   direction: number;
 }
 
@@ -313,8 +320,8 @@ export const CUSTOM_EFFECT_SLIDERS: readonly CustomEffectControl[] = [
   { key: 'customSwayAmplitude', label: '背景晃动幅度', min: 0, max: 8, step: 0.25, format: (v) => `${v.toFixed(2)}%` },
   { key: 'customSwayFrequency', label: '背景晃动频率', min: 0.02, max: 0.5, step: 0.01, format: (v) => `${v.toFixed(2)} Hz` },
   { key: 'customParticleRise', label: '粒子上升速度', min: 0, max: 500, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
-  { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 400, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
-  { key: 'customParticleDirection', label: '粒子有向概率', min: 0, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
+  { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 400, step: 10, format: (v) => `最大 ${Math.round(v)} 单位/秒` },
+  { key: 'customParticleDirection', label: '粒子方向比例', min: 0, max: 1, step: 0.05, format: (v) => `向右 ${Math.round(v * 100)}%` },
 ];
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {

@@ -5330,12 +5330,23 @@ console.log('\nthe custom wallpaper (jsdom)');
   check(
     'each named in the user\'s words',
     CUSTOM_EFFECT_SLIDERS.map((control: { label: string }) => control.label),
-    ['背景晃动幅度', '背景晃动频率', '粒子上升速度', '粒子漂移速度', '粒子有向概率'],
+    ['背景晃动幅度', '背景晃动频率', '粒子上升速度', '粒子漂移速度', '粒子方向比例'],
   );
   check('and two switches turn the halves on or off', CUSTOM_EFFECT_TOGGLES.map((toggle: { key: string; label: string }) => [toggle.key, toggle.label]), [
     ['customSway', '背景晃动'],
     ['customShowParticles', '显示粒子'],
   ]);
+  // How each number reads: drift is a maximum, direction is a rightward share.
+  check(
+    "the numbers' own words",
+    CUSTOM_EFFECT_SLIDERS.map((control: { key: string; format: (value: number) => string }) => {
+      if (control.key === 'customParticleDrift') return control.format(200);
+      if (control.key === 'customParticleDirection') return control.format(0.7);
+      if (control.key === 'customParticleRise') return control.format(240);
+      return null;
+    }),
+    [null, null, '240 单位/秒', '最大 200 单位/秒', '向右 70%'],
+  );
 
   /* --- the particles, with a seeded random --------------------------------- */
   // LEGACY: the 1.5.x renderer is kept as a compatibility export for old
@@ -5950,7 +5961,9 @@ console.log('\nthe custom wallpaper (jsdom)');
 }
 
 
-/* --- the production particles are the scene library's --------------------- */
+/* --- the particle look, as the library runs it (compatibility path) ------ */
+// The wallpaper itself now runs the emitter below (batch P); this block keeps
+// the library-only warm-up honest for the older exports.
 {
   const { advanceLibraryParticles, createLibraryParticles, drawLibraryParticles, warmUpLibraryParticles } = await import(
     './src/components/CustomWallpaper'
@@ -6356,6 +6369,133 @@ console.log('\nthe boot screen and the error boundaries (jsdom)');
       globalThis.fetch = realFetch;
       appStore.setState(hold);
     }
+  }
+}
+
+/* --- the ember field's own emitter (batch P) ------------------------------ */
+console.log('\nthe ember emitter (jsdom)');
+{
+  const {
+    createFlowParticles,
+    createParticleFlowState,
+    placeSpawnedEmbers,
+    spawnEmberPosition,
+    spawnEmberVelocity,
+    warmUpParticleFlow,
+  } = await import('./src/components/CustomWallpaper');
+  const { resolveCustomEffect } = await import('./src/lib/wallpaper');
+  const makeRandom = (seed: number) => {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  // A 1920x1080 viewport in scene units (unit = 1), so positions read directly.
+  const field = { width: 1920, height: 1080, unit: 1 };
+  const bottom = -field.height / 2;
+  const top = field.height / 2;
+
+  // Birth: below the bottom edge, across the whole width.
+  {
+    const random = makeRandom(11);
+    const places = Array.from({ length: 200 }, () => spawnEmberPosition(field, 40, random));
+    check('every ember is born below the screen', places.every((place) => place.y < bottom), true);
+    check('with its whole sprite off screen', places.every((place) => place.y + 40 < bottom), true);
+    check(
+      'and somewhere across the full width',
+      [Math.min(...places.map((place) => place.x)) < -600, Math.max(...places.map((place) => place.x)) > 600],
+      [true, true],
+    );
+  }
+
+  // Velocity: |vx| is uniform over [0, drift], its sign is right with
+  // probability direction; rise is the upward speed.
+  {
+    const sample = (flow: { rise: number; drift: number; direction: number }) => {
+      const random = makeRandom(7);
+      let right = 0;
+      let sumAbs = 0;
+      let maxAbs = 0;
+      let sumVy = 0;
+      const count = 20000;
+      for (let index = 0; index < count; index += 1) {
+        const { vx, vy } = spawnEmberVelocity(flow, random);
+        if (vx > 1e-9) right += 1;
+        const abs = Math.abs(vx);
+        sumAbs += abs;
+        maxAbs = Math.max(maxAbs, abs);
+        sumVy += vy;
+      }
+      return { right: right / count, meanAbs: sumAbs / count, maxAbs, meanVy: sumVy / count };
+    };
+    const flow = { rise: 240, drift: 200, direction: 0.7 };
+    const stats = sample(flow);
+    check('the rightward share is the direction', Math.abs(stats.right - 0.7) <= 0.05, true);
+    check('sideways speed never passes the maximum', stats.maxAbs <= 200, true);
+    check('and the maximum is reachable', stats.maxAbs > 190, true);
+    check('with a mean of half of it', Math.abs(stats.meanAbs - 100) <= 6, true);
+    check('the rise is the upward speed, jittered around it', Math.abs(stats.meanVy - 240) <= 6, true);
+    check('0 sends every ember left', sample({ ...flow, direction: 0 }).right, 0);
+    check('1 sends every ember right', sample({ ...flow, direction: 1 }).right, 1);
+    check('0.5 splits them', Math.abs(sample({ ...flow, direction: 0.5 }).right - 0.5) <= 0.05, true);
+    check('drift 0 is no sideways speed', sample({ ...flow, drift: 0 }).maxAbs, 0);
+    check('rise 0 is no upward speed', sample({ ...flow, rise: 0 }).meanVy, 0);
+  }
+
+  // The field: embers appear from below and are warmed up onto the screen.
+  {
+    const systems = createFlowParticles(resolveCustomEffect({}));
+    const state = createParticleFlowState(systems);
+    const flow = { rise: 240, drift: 200, direction: 0.7 };
+    const stats = warmUpParticleFlow(systems, state, field, flow, 3.2, makeRandom(3));
+    check('the warm-up spawns embers', stats.spawned > 0, true);
+    check('and every one of them below the screen', stats.belowViewport, stats.spawned);
+    const alive = systems.root.slots.filter((slot: { alive: boolean }) => slot.alive);
+    const inside = alive.filter(
+      (slot: { position: number[] }) => Math.abs(slot.position[1]) < top && Math.abs(slot.position[0]) < field.width / 2,
+    );
+    check('after the warm-up there are embers on screen', inside.length > 0, true);
+
+    // The emitter owns the velocity: the library's drift is only the rise.
+    const fresh = createFlowParticles(resolveCustomEffect({}));
+    const freshState = createParticleFlowState(fresh);
+    fresh.root.update(1 / 20);
+    const spawned = placeSpawnedEmbers(fresh, freshState, field, flow, makeRandom(5));
+    const born = fresh.root.slots.filter((slot: { alive: boolean }) => slot.alive);
+    check('a step spawns into the field', spawned.spawned > 0, true);
+    check(
+      'the emitter, not the library drift, sets the velocity',
+      born.every((slot: { velocity: number[]; driftVelocity: number[] }) => slot.velocity[0] === slot.driftVelocity[0] && slot.velocity[1] === slot.driftVelocity[1]),
+      true,
+    );
+    check('a step spawns them in', spawned.spawned > 0, true);
+    // A few steps, so the sideways speeds can be compared as a spread: their
+    // base is the emitter's, which the library does not overwrite at birth.
+    for (let step = 0; step < 8; step += 1) {
+      fresh.root.update(1 / 20);
+      placeSpawnedEmbers(fresh, freshState, field, flow, makeRandom(20 + step));
+    }
+    const sideways = fresh.root.slots
+      .filter((slot: { alive: boolean }) => slot.alive)
+      .map((slot: { driftVelocity: number[] }) => Math.abs(slot.driftVelocity[0]));
+    check(
+      'with sideways speeds spread up to the maximum',
+      [Math.min(...sideways) < 60, Math.max(...sideways) > 140],
+      [true, true],
+    );
+
+    // rise 0 is a still field: nothing climbs into view.
+    const still = createFlowParticles(resolveCustomEffect({}));
+    const stillState = createParticleFlowState(still);
+    const stillStats = warmUpParticleFlow(still, stillState, field, { ...flow, rise: 0 }, 3.2, makeRandom(4));
+    const stillAlive = still.root.slots.filter((slot: { alive: boolean }) => slot.alive);
+    const onScreen = stillAlive.filter((slot: { position: number[] }) => slot.position[1] > bottom);
+    check('rise 0 keeps every ember below the screen', stillStats.spawned > 0, true);
+    check('so none of them is in view', onScreen.length, 0);
   }
 }
 

@@ -399,21 +399,25 @@ function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D |
 /* -------------------------------------------------------------------------- */
 
 /**
- * Two particle definitions taken from the Rossi scene the wallpaper is compared
- * with: the ember sprite ("灰烬大") and its glow child ("emberglow").
+ * The particle definitions: the Rossi scene's ember sprite ("灰烬大") with its
+ * glow child ("emberglow").
  *
- * The simulation used to be a hand written imitation. It moved along the right
- * curve but looked nothing like the scene: hard circles instead of the measured
- * halo sprite, no additive blending, sizes two orders of magnitude too small,
- * and a lifetime/alpha distribution nobody could point at the engine for. The
- * renderer's particle system is pure TypeScript with no WebGL dependency, so the
- * honest fix is to run the engine's own simulation and only write the drawing
- * here. Sizes are in scene units, which the orthographic volume (3840 x 2160,
- * see sceneUnitScale) turns into pixels.
+ * There are two root definitions below. The "look" one is the engine preset as
+ * imported (3-5 s of life, 160 slots, 40/s) and is what the compatibility
+ * factory (createLibraryParticles, used by the assertions that pin the library
+ * model) runs. The flow one is what the wallpaper runs: identical sprite,
+ * colours, size ramp and alpha curve, but a much longer life and the matching
+ * slot count / emission rate. The lifetime is the only way an ember can cross
+ * the screen: at the default rise of 240 scene units/s a 3-5 s particle climbs
+ * 720-1200 units, while the viewport is 2160 units tall, so it used to die in
+ * the lower half. 9-12 s of life gives 2160-2880 units of climb - from just
+ * below the bottom edge to the top edge and past it - with the same speed
+ * setting, and the extra slots keep the density up now that they are spread
+ * over the whole screen instead of its bottom 45%.
  *
- * The layer in the scene scales its emitter (scale 2.85) and emits from a
- * 512 x 256 box near one side; the custom wallpaper covers the whole screen, so
- * the box is the screen and the counts are raised to keep the same density.
+ * Sizes are in scene units, which the orthographic volume (3840 x 2160, see
+ * sceneUnitScale) turns into pixels. The layer in the scene scales its emitter
+ * by 2.85; here the emitter box is the screen itself (see spawnEmberPosition).
  */
 const EMBER_DEFINITION_JSON: Record<string, unknown> = {
   material: 'materials/presets/ember.json',
@@ -460,10 +464,32 @@ const EMBER_GLOW_DEFINITION_JSON: Record<string, unknown> = {
   renderer: [{ name: 'sprite' }],
 };
 
+/** The production root definition: the same embers, long enough to cross. */
+const FLOW_EMBER_DEFINITION_JSON: Record<string, unknown> = {
+  ...EMBER_DEFINITION_JSON,
+  maxcount: 300,
+  emitter: [{ name: 'boxrandom', rate: 30, directions: '0 1 0', distancemax: '1920 1080 0' }],
+  // ~11 s of life at rise 240: 2160-2880 scene units of climb, i.e. from below
+  // the bottom edge to (and past) the top edge. The other keys are the engine
+  // preset's own - sprite sizes, colours, fade and size ramp are unchanged.
+  initializer: [
+    { name: 'lifetimerandom', min: 9, max: 12 },
+    { name: 'sizerandom', min: 140, max: 560 },
+    { name: 'colorrandom', min: '255 143 102', max: '255 218 108' },
+    { name: 'turbulentvelocityrandom', offset: -0.5, scale: 0.1 },
+  ],
+};
+
 /** Parsed once: the definitions are constants, the systems are per wallpaper. */
 const EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } = {
   root: parseParticleDefinition(EMBER_DEFINITION_JSON),
   glow: parseParticleDefinition(EMBER_GLOW_DEFINITION_JSON),
+};
+
+/** The production pair: the flow root and the same glow child. */
+const FLOW_EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } = {
+  root: parseParticleDefinition(FLOW_EMBER_DEFINITION_JSON),
+  glow: EMBER_DEFINITIONS.glow,
 };
 
 export interface LibraryParticles {
@@ -471,14 +497,25 @@ export interface LibraryParticles {
   glow: ParticleSystem;
 }
 
+/** How strongly the curl field bends the flow emitter's paths (0 = straight lines). */
+const FLOW_TURBULENCE = 0.05;
+
+function buildSystemPair(options: ParticleOptions, definitions = EMBER_DEFINITIONS): LibraryParticles {
+  const root = new ParticleSystem(definitions.root, undefined, options);
+  // The glow child mirrors the embers one to one, at a tenth of the opacity and
+  // twenty times the size - that pairing is what makes the embers glow.
+  const glow = new ParticleSystem(definitions.glow, root, options);
+  return { root, glow };
+}
+
 /**
- * The drift model itself: the seven controls are `ParticleDriftOptions` fields
- * (the engine's "灰烬大" preset tuned them to rise 240 / speed 200 /
- * forwardRatio 0.7), and the turbulence weight is the library's own 0.15 for
- * drift mode.
+ * The library's own drift model, kept as the compatible factory the assertions
+ * pin: `ParticleDriftOptions` with rise / speed / forwardRatio and the library's
+ * 0.15 turbulence weight. The wallpaper itself uses createFlowParticles(), whose
+ * emitter owns the sideways speed instead.
  */
 export function createLibraryParticles(effect: ResolvedCustomEffect): LibraryParticles {
-  const options: ParticleOptions = {
+  return buildSystemPair({
     drift: {
       rise: effect.rise,
       speed: effect.drift,
@@ -486,12 +523,24 @@ export function createLibraryParticles(effect: ResolvedCustomEffect): LibraryPar
       spread: 0.6,
       turbulence: 0.15,
     },
-  };
-  const root = new ParticleSystem(EMBER_DEFINITIONS.root, undefined, options);
-  // The glow child mirrors the embers one to one, at a tenth of the opacity and
-  // twenty times the size - that pairing is what makes the embers glow.
-  const glow = new ParticleSystem(EMBER_DEFINITIONS.glow, root, options);
-  return { root, glow };
+  });
+}
+
+/**
+ * The systems the wallpaper runs: same ember look, but the emitter (not the
+ * library's forwardRatio drift) owns the horizontal velocity.
+ *
+ * The drift option is reduced to the rise and a small turbulence weight: no
+ * speed and no forwardRatio, otherwise the library would add a sideways base of
+ * its own under the emitter's. rise 0 also switches the wobble off - drift mode
+ * clamps the downward wobble to zero, which would otherwise make "standing
+ * still" particles creep upward.
+ */
+export function createFlowParticles(effect: ResolvedCustomEffect): LibraryParticles {
+  return buildSystemPair(
+    { drift: { rise: effect.rise, speed: 0, spread: 0, turbulence: effect.rise > 0 ? FLOW_TURBULENCE : 0 } },
+    FLOW_EMBER_DEFINITIONS,
+  );
 }
 
 export function advanceLibraryParticles(systems: LibraryParticles, deltaSeconds: number): void {
@@ -513,6 +562,258 @@ export function advanceLibraryParticles(systems: LibraryParticles, deltaSeconds:
 export function warmUpLibraryParticles(systems: LibraryParticles, seconds = 3.2): void {
   const steps = Math.ceil(seconds * 60);
   for (let step = 0; step < steps; step += 1) advanceLibraryParticles(systems, 1 / 60);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The ember field's own emitter: born below the screen, rising into it       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The viewport the field lives in.
+ *
+ * Positions are in scene units (the library's orthographic volume, 3840x2160),
+ * so the emitter and the probes can talk about "below the screen" without
+ * depending on where the canvas is on the page.
+ */
+export interface ParticleField {
+  /** CSS pixels. */
+  width: number;
+  height: number;
+  /** Scene units per CSS pixel (see sceneUnitScale). */
+  unit: number;
+}
+
+/** The three numbers the emitter reads (the rest of the look is fixed preset). */
+export interface ParticleFlow {
+  /** Upward speed, scene units per second. */
+  rise: number;
+  /** Largest sideways speed, scene units per second. */
+  drift: number;
+  /** Probability a particle moves right, 0 - 1. */
+  direction: number;
+}
+
+/** How far below the bottom edge a particle is born, before its own random extra. */
+const SPAWN_GAP = 20;
+const SPAWN_JITTER = 80;
+
+/** One particle's birth, in scene units. */
+export interface SpawnedEmber {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
+/**
+ * Where a new ember appears: somewhere along the width, strictly below the
+ * bottom edge so the whole sprite starts off screen.
+ *
+ * `halfSize` is the sprite's half width in scene units; the clearance includes
+ * it, so even the largest ember cannot have its centre inside the viewport.
+ * Pure: the random source is injected.
+ */
+export function spawnEmberPosition(
+  field: ParticleField,
+  halfSize: number,
+  random: () => number,
+): { x: number; y: number } {
+  const unit = Math.max(0.0001, field.unit);
+  const halfWidth = field.width / (2 * unit);
+  const bottom = -field.height / (2 * unit);
+  const clearance = Math.max(0, halfSize) + SPAWN_GAP + random() * SPAWN_JITTER;
+  return {
+    // Across the full width, in scene units around the centre.
+    x: (random() * 2 - 1) * halfWidth,
+    y: bottom - clearance,
+  };
+}
+
+/**
+ * The speed a new ember is born with.
+ *
+ * Sideways: the magnitude is uniform over [0, drift] and the sign is right with
+ * probability `direction` - 0.7 means about 70% of the particles go right.
+ * Upward: rise with ±15% jitter, so the field does not move as one sheet while
+ * the mean stays rise; rise 0 stays exactly 0 (a particle born below the screen
+ * then never enters it, which is the honest reading of that setting).
+ * Pure: the random source is injected.
+ */
+export function spawnEmberVelocity(flow: ParticleFlow, random: () => number): { vx: number; vy: number } {
+  const direction = Math.min(1, Math.max(0, Number(flow.direction) || 0));
+  const drift = Math.max(0, Number(flow.drift) || 0);
+  const rise = Math.max(0, Number(flow.rise) || 0);
+  const right = random() < direction;
+  const speed = random() * drift;
+  const vertical = rise * (0.85 + random() * 0.3);
+  return { vx: (right ? 1 : -1) * speed, vy: vertical };
+}
+
+/** Position and velocity of one birth; the loop and the probes use the same call. */
+export function spawnEmber(
+  field: ParticleField,
+  flow: ParticleFlow,
+  halfSize: number,
+  random: () => number,
+): SpawnedEmber {
+  return { ...spawnEmberPosition(field, halfSize, random), ...spawnEmberVelocity(flow, random) };
+}
+
+/** What one step of the field did. */
+export interface ParticleSpawnStats {
+  spawned: number;
+  /** Born moving right / left / with no sideways speed (drift = 0). */
+  right: number;
+  left: number;
+  stationary: number;
+  /** Spawns whose birth position was strictly below the viewport bottom. */
+  belowViewport: number;
+  /** Embers that left through the top edge and were reclaimed this step. */
+  recycled: number;
+}
+
+/** What was alive last step, so a respawn (dead -> alive) can be recognised. */
+export interface ParticleFlowState {
+  seen: Uint8Array;
+  stats: ParticleSpawnStats;
+}
+
+function emptySpawnStats(): ParticleSpawnStats {
+  return { spawned: 0, right: 0, left: 0, stationary: 0, belowViewport: 0, recycled: 0 };
+}
+
+export function createParticleFlowState(systems: LibraryParticles): ParticleFlowState {
+  return { seen: new Uint8Array(systems.root.slots.length), stats: emptySpawnStats() };
+}
+
+/**
+ * Re-plants every particle that spawned this step below the screen and gives it
+ * the emitter's velocity.
+ *
+ * The vendored ParticleSystem has no spawn hook - its emitter picks a random box
+ * around the origin and the host cannot influence it - so this is the one seam
+ * where the host takes over: the slot array is public, and the drift system only
+ * touches a particle's `driftVelocity` at birth. Replacing position, velocity
+ * and driftVelocity here is exactly what a custom emitter would have produced;
+ * the turbulence operator then keeps flowing on top of that base velocity.
+ */
+export function placeSpawnedEmbers(
+  systems: LibraryParticles,
+  state: ParticleFlowState,
+  field: ParticleField,
+  flow: ParticleFlow,
+  random: () => number = Math.random,
+): ParticleSpawnStats {
+  const stats = emptySpawnStats();
+  const slots = systems.root.slots;
+  const bottom = -field.height / (2 * Math.max(0.0001, field.unit));
+  for (let index = 0; index < slots.length; index += 1) {
+    const particle = slots[index];
+    const alive = particle.alive;
+    const wasAlive = state.seen[index] === 1;
+    state.seen[index] = alive ? 1 : 0;
+    if (!alive || wasAlive) continue;
+    const ember = spawnEmber(field, flow, particle.sizeStart / 2, random);
+    particle.position = [ember.x, ember.y, 0];
+    particle.velocity = [ember.vx, ember.vy, 0];
+    particle.driftVelocity = [ember.vx, ember.vy, 0];
+    stats.spawned += 1;
+    if (ember.vx > 1e-6) stats.right += 1;
+    else if (ember.vx < -1e-6) stats.left += 1;
+    else stats.stationary += 1;
+    if (ember.y < bottom) stats.belowViewport += 1;
+  }
+  state.stats = stats;
+  return stats;
+}
+
+/**
+ * Reclaims embers that have climbed out through the top edge.
+ *
+ * A particle that is fully above the viewport is invisible but still occupies a
+ * slot, so at a high `rise` a third of the field would be spent on particles
+ * nobody can see and the screen would get thinner. Freeing the slot makes the
+ * emitter spawn its replacement at the bottom, which keeps the visible density
+ * roughly constant as the rise slider changes how long the crossing takes. The
+ * slot is marked seen=0 so the next step recognises the replacement as a birth.
+ */
+export function recycleEscapedEmbers(
+  systems: LibraryParticles,
+  state: ParticleFlowState,
+  field: ParticleField,
+): number {
+  const top = field.height / (2 * Math.max(0.0001, field.unit));
+  let recycled = 0;
+  const slots = systems.root.slots;
+  for (let index = 0; index < slots.length; index += 1) {
+    const particle = slots[index];
+    if (!particle.alive) continue;
+    // Conservative half-size: with the size ramp the sprite only shrinks, so
+    // once the full-size half is above the edge the whole sprite is too.
+    if (particle.position[1] - particle.sizeStart / 2 <= top) continue;
+    particle.alive = false;
+    state.seen[index] = 0;
+    recycled += 1;
+  }
+  return recycled;
+}
+
+/**
+ * One step of the field: simulate, reclaim the embers that left through the top,
+ * re-plant the new ones, then mirror them to the glow child. The order matters:
+ * the placement runs between the two updates because the child copies its
+ * parent's position while updating, so a spawn repaired after the child would
+ * leave a one frame ghost at the old emitter box.
+ */
+export function advanceParticleFlow(
+  systems: LibraryParticles,
+  state: ParticleFlowState,
+  field: ParticleField,
+  flow: ParticleFlow,
+  deltaSeconds: number,
+  random: () => number = Math.random,
+): ParticleSpawnStats {
+  // The library clamps internally as well; clamp before it so both systems share
+  // exactly the same clock after a suspended tab.
+  const dt = Math.min(Math.max(deltaSeconds, 0), 1 / 20);
+  systems.root.update(dt);
+  const recycled = recycleEscapedEmbers(systems, state, field);
+  const stats = placeSpawnedEmbers(systems, state, field, flow, random);
+  stats.recycled = recycled;
+  systems.glow.update(dt);
+  return stats;
+}
+
+/**
+ * Runs the field forward before the first frame.
+ *
+ * The scene's ember layer starts empty. A wallpaper that is blank for the first
+ * seconds reads as broken, so the field is warmed up to its steady state first -
+ * by the time it appears, the embers are spread along the whole bottom-to-top
+ * path instead of bunched at the bottom edge. The default covers the production
+ * particle lifetime (9-12 s) plus a little, because the field only fills once
+ * the first generation has had time to climb.
+ */
+export function warmUpParticleFlow(
+  systems: LibraryParticles,
+  state: ParticleFlowState,
+  field: ParticleField,
+  flow: ParticleFlow,
+  seconds = 12.5,
+  random: () => number = Math.random,
+): ParticleSpawnStats {
+  const steps = Math.ceil(seconds * 60);
+  const total = emptySpawnStats();
+  for (let step = 0; step < steps; step += 1) {
+    const stepStats = advanceParticleFlow(systems, state, field, flow, 1 / 60, random);
+    total.spawned += stepStats.spawned;
+    total.right += stepStats.right;
+    total.left += stepStats.left;
+    total.stationary += stepStats.stationary;
+    total.belowViewport += stepStats.belowViewport;
+    total.recycled += stepStats.recycled;
+  }
+  return total;
 }
 
 /** The measured halo sprites, rasterised once per document. */
@@ -582,7 +883,8 @@ export function drawLibraryParticles(
   height: number,
   unitScale: number,
 ): void {
-  if (!quadScratch || quadScratch.length < 9 * 6 * 200) quadScratch = new Float32Array(9 * 6 * 256);
+  // 300 root embers + the glow child; rounded up so neither can overflow it.
+  if (!quadScratch || quadScratch.length < 9 * 6 * 320) quadScratch = new Float32Array(9 * 6 * 384);
   context.globalCompositeOperation = 'lighter';
   context.globalAlpha = 1;
   const sprites: Array<[ParticleSystem, HTMLCanvasElement | null]> = [
@@ -687,8 +989,13 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     /** Sway displacement in CSS pixels, from the slider's share of the short edge. */
     let amplitude = 0;
     let scale = 1;
-    // The engine's own particle simulation, warmed up before the first frame.
-    const systems = createLibraryParticles(effect);
+    // The engine's own particle simulation, with this wallpaper's own emitter:
+    // embers are born below the screen and rise into it from the bottom edge.
+    const systems = createFlowParticles(effect);
+    const flow: ParticleFlow = { rise: effect.rise, drift: effect.drift, direction: effect.direction };
+    const flowState = createParticleFlowState(systems);
+    /** The viewport in scene units; layout() keeps it current. */
+    const field: ParticleField = { width: 1280, height: 720, unit: 1 };
     let raf = 0;
     let running = false;
     let last = 0;
@@ -711,6 +1018,9 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       amplitude = (effect.amplitude / 100) * Math.min(width, height);
       scale = 1 + (2 * effect.amplitude) / 100 + 0.01;
       unit = sceneUnitScale(width, height);
+      field.width = width;
+      field.height = height;
+      field.unit = unit;
       if (context && canvas) {
         // A retina screen is worth two pixels per CSS pixel and no more.
         const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
@@ -734,7 +1044,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       time += delta / 1000;
       paintSway();
       if (context) {
-        advanceLibraryParticles(systems, delta / 1000);
+        advanceParticleFlow(systems, flowState, field, flow, delta / 1000);
         paintParticles();
       }
     };
@@ -754,8 +1064,9 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     layout();
     if (context) {
       // The scene starts empty; three odd seconds of simulation means the first
-      // paint already has embers in it instead of a blank screen.
-      warmUpLibraryParticles(systems);
+      // paint already has embers along the bottom-to-top path instead of a blank
+      // screen.
+      warmUpParticleFlow(systems, flowState, field, flow);
       paintParticles();
     }
     // The first pose is written before the first frame, so the picture starts on
@@ -929,8 +1240,10 @@ export function CustomWallpaperControls({ value, onChange, disabled = false }: C
         })}
       </div>
       <p className="text-[11px] leading-relaxed text-[var(--faint)]">
-        晃动与粒子参数对齐 wallpaper-scene-layers 的 drift / oscillateposition 语义：频率是每秒往复次数，
-        粒子的升降与漂移以场景单位/秒计（库的 3840×2160 正交视图）。
+        粒子在屏幕下方生成、向上飘入画面。漂移速度是左右移动的<em>最大</em>速度，每颗粒子在
+        0 到该值之间随机；方向比例是向右飞行的粒子比例，70% 即 70% 向右、30% 向左。
+        软光晕、加色混合与尺寸/透明度/寿命曲线沿用 wallpaper-scene-layers 的灰烬预设，
+        速度以场景单位/秒计（库的 3840×2160 正交视图）。
       </p>
     </div>
   );

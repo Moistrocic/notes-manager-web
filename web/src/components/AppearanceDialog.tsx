@@ -537,7 +537,8 @@ export function AppearanceDialog() {
                 图片在浏览器里先缩小（长边 ≤2560、WebP 0.82）再存入本地 IndexedDB，不上传服务器，
                 一张 10 MB 的照片通常只剩几百 KB。选 .pkg 场景包时，会先取出它的完整壁纸图
                 （一般是最底层图片层的贴图，取不到时渲染一帧），再按同样的方式缩图。
-                晃动与粒子参数对齐 wallpaper-scene-layers 的 drift / oscillateposition 语义。
+                粒子从屏幕下方生成、向上飘入；漂移速度是左右最大速度（每颗随机取
+                0 到该值），方向比例是向右飞行的比例（70% = 70% 向右、30% 向左）。
               </p>
 
               <CropSection
