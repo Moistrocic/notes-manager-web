@@ -38,6 +38,11 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 前端全局状态（只有一个 store） | `web/src/store/useAppStore.ts` |
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
+| 公式（KaTeX）与 markdown 渲染规则 | `web/src/lib/markdown.ts`：五条 tokenizer/renderer 扩展（`$$…$$` 块级与单行、`$…$`、`\[…\]`、`\(…\)`）、`PURIFY_CONFIG`（html + mathMl + svg profile）、只放行 `.katex` 里 `style` 的 hook |
+| 排序优先级（四个键的先后） | store 的 `sortKeys` / `normaliseSortKeys` / `setSortKeys` / `moveSortKey` + `NoteTree.tsx` 的 `compareNotes`（树与列表共用）；localStorage `notes-manager-sort-keys`，旧键 `notes-manager-sort` 同步写 |
+| 大纲折叠 | `web/src/lib/outline.ts` 的 `buildOutlineTree` / `collapsibleHeadingIndexes` / `visibleOutlineRows` + `OutlinePanel.tsx`（默认收起、全部展开/收起；导航仍用扁平 index） |
+| 壁纸（含自定义壁纸） | `web/src/lib/wallpaper.ts` + `components/Wallpaper.tsx` + `components/CustomWallpaper.tsx`（Canvas 自绘）+ `AppearanceDialog.tsx`；管理员默认背景在 `lib/admin-background.ts` + `SettingsDialog.tsx` |
+| 「新建笔记」的默认目录 | store 的 `lastFolder`（`selectNote` 记笔记所在目录、树里点文件夹记该路径；`renameFolder` / `moveFolder` 跟随、`deleteFolder` 清空）+ `NoteList.tsx` 的 `lastFolder → newNoteFolder`（目录不在列表里时回退根目录） |
 | 分栏两侧的滚动同步 | `web/src/lib/scroll-sync.ts`（源码行 ⇄ 预览位置的映射）+ `markdown.ts` 的 `sourceBlocks` / `annotateSourceLines` + `Editor.tsx` 里的 `data-sync-scroll` 按钮与监听 |
 | 全站右键菜单 | `web/src/components/ContextMenu.tsx` |
 | 博客（公开页面与公开接口） | `web/src/components/blog/**` + `web/src/lib/blog-api.ts` + `server/src/http/routes/blog.ts` |
@@ -85,6 +90,10 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （`scripts/test-openlist.mjs` 里把假后端的根删掉再读博客）。
 - **批量操作读的是 store 里的 `selection`**：先移动、后清空；反了会让批量移动静默变成空操作。
 - **拖放与多选的区分**：位移 > 8px 是拖动，按住不动满 300ms 才进多选。拖动过程的中间态不要写进 selection。
+- **拖放落点：文件行的目录要从 summary 读，不能从 id 推**。非笔记文件没有 front matter，服务端发的
+  `id` 是 `hashId(path)`（`f`+16 位十六进制），**不是路径**——想拿它所在目录必须读
+  `summary.folder`（`NoteTree.tsx` 的 `dropTargetAt`）；用 `parentPath(id)` 会永远得到根目录，
+  表现为「拖到某目录里的图片上，却移到了根目录」。
 - **同步滚动按源码行，行号来自 lexer 各 token 的 `raw` 换行累计**：`sourceBlocks` 数的是
   「前面出现过多少个 \n」，**不要**改成按行 `split` 计数——空行 token 的 `raw` 带着上一行结尾的
   换行，一段一段数下来每遇到一个空行就整体漂一行（踩过，已修）。
@@ -96,6 +105,40 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   点大纲/锚点之后预览有一段「自己在滚」的时间（`PreviewApi.isSelfScrolling()`），这段时间不镜像；
   jsdom 里 `scrollTo` 被打桩、不会自己产生 scroll 事件，所以那段等于 300ms 兜底计时——
   要在同一个场景里测镜像，就先等它过去。
+- **同步滚动的回声按「期望值」抑制，不是只靠一帧**：写入一侧后记下**浏览器实际落点**
+  （`scrollTop` 读回值会被夹到可滚范围），对侧 `scroll` 到达时若与该期望相差 ≤2px 就当作自己的回声
+  跳过。所以「用户滚了一次 → 对侧一定被写一次」并不总成立：先等一帧、必要时再比对实际 scrollTop，
+  别把一次滚动事件当成一次镜像写入。
+- **预览比输入晚一拍（`PREVIEW_SETTLE_MS = 120ms`）**：编辑栏即时回显，右侧预览在打字停顿后
+  才重渲染（整篇 marked + DOMPurify + 标注 + 取图，1600 行约 160ms，以前是每次按键都付）；
+  **切换笔记立即显示**，不延迟。断言里「敲字后立刻检查预览内容」要等 ≥150ms 再断言，
+  或者先断言旧内容、等一拍再断言新内容——直接读会读到上一版。
+- **公式是五条 marked 扩展，写在自己这里是有原因的**：`marked-katex-extension` 的 peer 范围卡在
+  已被废弃的 KaTeX 0.18（那个版本是误发布），用它要么装废弃版、要么打包两份 KaTeX。规则在
+  `markdown.ts` 顶部，渲染统一走 `typesetFormula`（`throwOnError: false`，写错就地标出、不抛）。
+  KaTeX 的 `style` 属性是排版必需，但只允许出现在 `.katex` 里（`uponSanitizeAttribute` hook）；
+  MathML/SVG 靠 `USE_PROFILES` 放行。KaTeX 字体约 1MB、59 个文件，是前端体积的主要来源。
+- **排序优先级只有一个真相：store 的 `sortKeys`**。`compareNotes` 收整条顺序（树与列表共用同一份），
+  单键 `sort` 只是 `sortKeys[0]` 的兼容视图。旧版本只存 `notes-manager-sort`，升级迁移只发生在
+  「没有 `notes-manager-sort-keys`」时（旧键当主键、其余按默认补齐）；写入时两个键都要写，
+  老版本读到主键才不会退回默认。
+- **大纲折叠只是「画哪些行」，不改导航索引**：`visibleOutlineRows` 决定画哪些，扁平 `index`
+  永远是 `extractHeadings` 里的位置（`onNavigate(heading, index)` 用的就是它）。折叠状态是
+  `OutlinePanel` 的局部 state，按 `activeNote.id` 重置——切换笔记必须回到「全部收起」，
+  但同一篇笔记里编辑不要重置（否则刚展开的章节会在打字时自己合上）。
+- **自定义壁纸是画出来的，不是文件**：`CustomWallpaper.tsx` 只在有 2D 上下文时跑 rAF，
+  SSR / jsdom / 老浏览器靠 `customBackdrop()` 的 CSS 渐变兜底（同一张画面，不能留空洞）；
+  `prefers-reduced-motion` 直接停动画。清理必须在 effect 的 cleanup 里做完
+  （`cancelAnimationFrame`、resize / visibilitychange / motion 监听、MutationObserver），
+  否则切走壁纸后还在画。调色板只在布局和主题变化时 `getComputedStyle` 一次，别每帧读；
+  DPR 上限 2，粒子数量有上限（`CUSTOM_MAX_PARTICLES`）。
+- **`lastFolder` 是「新建笔记默认目录」的唯一来源**：`selectNote` 写笔记所在目录、树里点文件夹写
+  该路径；`renameFolder` / `moveFolder` 会让它跟着改，`deleteFolder` 清空。对话框打开时还要再查
+  一遍「这个目录现在还在不在」——不在就回退根目录，不能把一个不存在的路径塞进输入框。
+- **PromptDialog 的输入框带着反自动填充属性**（`NoteList.tsx` 的 `PROMPT_INPUT_GUARDS`）：
+  `autocomplete/autocorrect/autocapitalize=off`、`spellcheck=false`、三家密码管理器的 opt-out，
+  而且 `name` 不能叫 username/password 这类。新增输入框别忘了带上，否则 Bitwarden 会在一个
+  只是问「文件夹叫什么」的小框上弹「保存密码」。
 - **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
   博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
   状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
