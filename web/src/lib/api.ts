@@ -37,9 +37,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const text = await response.text();
   let payload: unknown = null;
+  let parsed = false;
   if (text) {
     try {
       payload = JSON.parse(text);
+      parsed = true;
     } catch {
       payload = null;
     }
@@ -49,7 +51,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const error = (payload as { error?: { message?: string; code?: string } } | null)?.error;
     throw new ApiError(error?.message ?? `请求失败 (${response.status})`, response.status, error?.code);
   }
-  return (payload ?? {}) as T;
+  // Every route in this API answers with JSON - there is no 204 and no empty
+  // body - so an OK response without one is a broken response (an intercepting
+  // proxy, a half-written reply). Returning `{}` for it used to turn "the payload
+  // is not there" into "the field is undefined" somewhere far away; fail here,
+  // where the reason is still known.
+  if (!parsed || payload === null) {
+    throw new ApiError(
+      text ? '服务器返回了无法解析的响应（不是 JSON）' : '服务器返回了空响应',
+      response.status,
+      'bad_response',
+    );
+  }
+  return payload as T;
 }
 
 /**

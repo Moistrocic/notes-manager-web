@@ -13,6 +13,31 @@ import type { Services } from './services.js';
 
 const log = createLogger('http');
 
+/**
+ * Paths a browser asks for as files rather than as pages.
+ *
+ * A note's address ends in `.md` and is a page, so it is not in this list; a
+ * hashed bundle, an icon, a font or a background is.
+ */
+const STATIC_ASSET_EXTENSIONS = /\.(?:js|mjs|css|map|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|wasm|mp4|webm|pkg|webmanifest)$/i;
+
+function looksLikeStaticAsset(pathname: string): boolean {
+  return pathname.startsWith('/assets/') || STATIC_ASSET_EXTENSIONS.test(pathname);
+}
+
+/**
+ * Says what a missing static file usually means.
+ *
+ * Page routes answer with index.html, which is right for a note's address and
+ * wrong for a file the page asked for by content hash: the tab that asked is
+ * older than the build. The user sees a black screen, so at least the log
+ * should say why - "static asset not found, likely a stale page" is the one line
+ * that turns "the panel is broken" into "that tab is stale".
+ */
+function logStalePage(pathname: string): void {
+  log.warn(`static asset not found, likely a stale page: ${pathname}`);
+}
+
 const FALLBACK_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>notes-manager-web</title>
 <style>
@@ -69,6 +94,11 @@ export function createApp(services: Services): Express {
         next();
         return;
       }
+      if (looksLikeStaticAsset(req.path)) {
+        logStalePage(req.path);
+        res.status(404).type('text/plain').send(`Not found: ${req.path}`);
+        return;
+      }
       res.sendFile(indexFile);
     });
   } else {
@@ -76,6 +106,11 @@ export function createApp(services: Services): Express {
     app.get(/\/.*/, (req: Request, res: Response, next: NextFunction) => {
       if (req.path.startsWith('/api/')) {
         next();
+        return;
+      }
+      if (looksLikeStaticAsset(req.path)) {
+        logStalePage(req.path);
+        res.status(404).type('text/plain').send(`Not found: ${req.path}`);
         return;
       }
       res.status(200).type('html').send(FALLBACK_PAGE);

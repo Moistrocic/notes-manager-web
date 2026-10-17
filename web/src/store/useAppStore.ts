@@ -452,6 +452,124 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+/* -------------------------------------------------------------------------- */
+/* Response shape                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A payload short enough to read in a console warning.
+ *
+ * A malformed response is the one thing that is worth logging in full: without
+ * it, "the panel is empty again" has no evidence behind it.
+ */
+function truncateForLog(value: unknown, limit = 400): string {
+  let text: string;
+  try {
+    const json = JSON.stringify(value);
+    text = typeof json === 'string' ? json : String(value);
+  } catch {
+    text = String(value);
+  }
+  return text.length > limit ? `${text.slice(0, limit)}…（共 ${text.length} 字符）` : text;
+}
+
+/** A JSON object, or null when the value is not one. */
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** A whole number from a payload, or 0. */
+function toCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * One note summary, with the fields the panel reads defensively filled in.
+ *
+ * The response is `unknown` until checked here. A summary without `tags` used to
+ * reach `note.tags.some(...)` inside the command palette and take the whole page
+ * down; a summary without an id cannot be opened or addressed at all, so it is
+ * dropped rather than rendered as a ghost row.
+ */
+function normaliseNoteSummary(value: unknown): NoteSummary | null {
+  const raw = asRecord(value);
+  if (!raw || typeof raw.id !== 'string' || !raw.id) return null;
+  return {
+    ...(raw as unknown as NoteSummary),
+    title: typeof raw.title === 'string' ? raw.title : '',
+    tags: Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag)) : [],
+    folder: typeof raw.folder === 'string' ? raw.folder : '',
+    path: typeof raw.path === 'string' ? raw.path : '',
+  };
+}
+
+/** The tag counts, ignoring entries that are not tags. */
+function normaliseTags(value: unknown, fallback: TagCount[]): TagCount[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.flatMap((item) => {
+    const raw = asRecord(item);
+    const tag = raw && typeof raw.tag === 'string' ? raw.tag : '';
+    return tag ? [{ tag, count: toCount(raw?.count) }] : [];
+  });
+}
+
+/** The folder counts, ignoring entries that are not folders. */
+function normaliseFolders(value: unknown, fallback: FolderCount[]): FolderCount[] {
+  if (!Array.isArray(value)) return fallback;
+  return value.flatMap((item) => {
+    const raw = asRecord(item);
+    const path = raw && typeof raw.path === 'string' ? raw.path : '';
+    if (!path) return [];
+    return [
+      {
+        path,
+        name: typeof raw?.name === 'string' ? raw.name : path.split('/').pop() ?? path,
+        count: toCount(raw?.count),
+        depth: toCount(raw?.depth),
+      },
+    ];
+  });
+}
+
+/** The header numbers, when the response has them; null means "not known". */
+function normaliseStats(value: unknown): NoteStats | null {
+  const raw = asRecord(value);
+  if (!raw) return null;
+  return {
+    notes: toCount(raw.notes),
+    tags: toCount(raw.tags),
+    folders: toCount(raw.folders),
+    words: toCount(raw.words),
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : null,
+  };
+}
+
+/** What this session may do with the storage, when the response says clearly. */
+function normaliseCapabilities(value: unknown): NoteCapabilities | null {
+  const raw = asRecord(value);
+  if (!raw) return null;
+  const driver = raw.driver === 'openlist' || raw.driver === 'local' ? raw.driver : null;
+  if (!driver || typeof raw.root !== 'string' || typeof raw.writable !== 'boolean') return null;
+  const permissions = asRecord(raw.permissions);
+  return {
+    driver,
+    root: raw.root,
+    writable: raw.writable,
+    // Anything short of a clear "yes" is a no: the panel would rather offer a
+    // read-only note than send a write the account cannot make.
+    permissions: permissions
+      ? {
+          write: permissions.write === true,
+          rename: permissions.rename === true,
+          move: permissions.move === true,
+          remove: permissions.remove === true,
+        }
+      : null,
+  };
+}
+
 function toSummary(note: Note): NoteSummary {
   const { content: _content, ...rest } = note;
   return { ...rest, excerpt: stripMarkdown(note.content, 200) };
@@ -658,11 +776,40 @@ export const appStore = createStore<AppState>((set, get) => ({
     if (!get().user) return;
     if (!options?.silent) set({ loadingNotes: true });
     try {
-      const payload = await api.listNotes();
+      // The response is checked as `unknown`: it comes from outside this bundle
+      // (a proxy, a half-restarted server, a different version behind the same
+      // URL), and writing it straight into the store is how `notes` became
+      // `undefined` and took the whole panel down three components later.
+      const payload: unknown = await api.listNotes();
+      const body = asRecord(payload);
+      if (!body || !Array.isArray(body.notes)) {
+        console.warn('[notes] /api/notes 的响应里没有 notes 数组，保留上一次的列表。原始响应：', truncateForLog(payload));
+        set({
+          loadingNotes: false,
+          notesError:
+            '笔记列表响应格式异常（缺少 notes 数组），已保留上一次的内容。请刷新重试；若反复出现，检查服务器或反向代理是否改写了 /api/notes 的响应。',
+        });
+        return;
+      }
+
+      const listed: unknown[] = body.notes;
+      const notes = listed.map(normaliseNoteSummary).filter((note): note is NoteSummary => note !== null);
+      if (notes.length !== listed.length) {
+        console.warn(`[notes] ${listed.length - notes.length} 条笔记缺少 id 或不是对象，已跳过：`, truncateForLog(listed));
+      }
+      // tags/folders are not what the list is rendered from. A malformed one
+      // keeps the previous value - which is still a list - rather than blanking
+      // the panel; what reaches the store is only ever an array.
+      if (!Array.isArray(body.tags) || !Array.isArray(body.folders)) {
+        console.warn('[notes] /api/notes 的 tags/folders 不是数组，已保留上一次的值：', truncateForLog({ tags: body.tags, folders: body.folders }));
+      }
+      const tags = normaliseTags(body.tags, get().tags);
+      const folders = normaliseFolders(body.folders, get().folders);
+
       const { activeId, activeNote } = get();
       let nextActive = activeNote;
       if (activeNote) {
-        const updated = payload.notes.find((n) => n.id === activeNote.id);
+        const updated = notes.find((n) => n.id === activeNote.id);
         if (!updated) {
           nextActive = null;
         } else if (!get().dirty) {
@@ -672,11 +819,11 @@ export const appStore = createStore<AppState>((set, get) => ({
         }
       }
       set({
-        notes: payload.notes,
-        tags: payload.tags,
-        folders: payload.folders,
-        stats: payload.stats,
-        capabilities: payload.capabilities ?? null,
+        notes,
+        tags,
+        folders,
+        stats: normaliseStats(body.stats),
+        capabilities: normaliseCapabilities(body.capabilities),
         loadingNotes: false,
         notesError: null,
         activeNote: nextActive,

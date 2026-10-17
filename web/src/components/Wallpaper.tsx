@@ -6,6 +6,7 @@ import { sceneStillUrl } from '../lib/scene/render-still';
 import { cropMediaStyle } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 import { CustomWallpaper } from './CustomWallpaper';
+import { ErrorBoundary } from './ErrorBoundary';
 
 /**
  * The wallpaper layer, behind everything else.
@@ -13,7 +14,7 @@ import { CustomWallpaper } from './CustomWallpaper';
  * It is a fixed, non-interactive element: the app's glass panels sit on top of
  * it, and a scrim keeps the text readable whatever the picture looks like.
  */
-export function Wallpaper() {
+function WallpaperLayer() {
   const settings = useAppStore((s) => s.wallpaper);
   const ownUrl = useAppStore((s) => s.wallpaperUrl);
   const identity = useAppStore((s) => s.wallpaperIdentity);
@@ -432,3 +433,46 @@ export function Wallpaper() {
     </div>
   );
 }
+/**
+ * What stands in for a wallpaper that failed: the colour field, nothing else.
+ *
+ * Decorative and empty on purpose - the panel sits on top of it and must not
+ * care that the picture, the scene or the particles did not make it.
+ */
+function WallpaperFallback() {
+  return (
+    <div
+      className="wallpaper-layer"
+      data-testid="wallpaper-fallback"
+      data-wallpaper-fallback="true"
+      aria-hidden
+      style={{
+        background: 'radial-gradient(120% 90% at 50% 0%, #22305f 0%, #101838 48%, #070b18 100%)',
+      }}
+    />
+  );
+}
+
+/**
+ * The wallpaper layer, with a fence around it.
+ *
+ * The wallpaper is decoration. Whatever it uses - a scene the browser cannot
+ * compile, a picture it cannot decode, particle code that met an older engine -
+ * a failure there must not be able to take the interface with it: the boundary
+ * catches it and leaves the theme's colour field behind everything else, which
+ * is what a background nobody configured looks like. It is keyed by what it is
+ * showing, so picking another background (or fixing the broken one) is a fresh
+ * attempt rather than a fallback that stays forever.
+ */
+export function Wallpaper() {
+  const settings = useAppStore((s) => s.wallpaper);
+  const admin = useAppStore((s) => s.adminBackground);
+  const wallpaper = shownWallpaper(settings, admin);
+  const fence = `${wallpaper.kind}:${wallpaper.url ?? ''}`;
+  return (
+    <ErrorBoundary key={fence} label="wallpaper" fallback={<WallpaperFallback />}>
+      <WallpaperLayer />
+    </ErrorBoundary>
+  );
+}
+

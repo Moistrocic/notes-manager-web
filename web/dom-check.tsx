@@ -6102,5 +6102,262 @@ console.log('\nthe custom wallpaper (jsdom)');
     check('isScenePkg is just the extension test it uses', [isScenePkg(new w.File([], 'a.PKG')), isScenePkg(new w.File([], 'a.png'))], [true, false]);
   }
 }
+/* --- the boot screen and the error boundaries ----------------------------- */
+console.log('\nthe boot screen and the error boundaries (jsdom)');
+{
+  const fs = await import('node:fs');
+  const pathMod = await import('node:path');
+  const candidates = [pathMod.join(process.cwd(), 'index.html'), pathMod.join(process.cwd(), 'web', 'index.html')];
+  const indexPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? '';
+  check('the page shell is on disk', indexPath !== '', true);
+  if (indexPath) {
+    const html = fs.readFileSync(indexPath, 'utf8');
+    check(
+      'it carries the placeholder the user sees',
+      [
+        html.includes('id="boot"'),
+        html.includes('data-boot-state="loading"'),
+        html.includes('id="boot-line"'),
+        html.includes('id="boot-error"'),
+        html.includes('id="boot-reload"'),
+      ],
+      [true, true, true, true, true],
+    );
+    check(
+      'a stale chunk reloads once, with a timestamp to stop a loop',
+      [
+        html.includes('vite:preloadError'),
+        html.includes('notes-manager-boot-reloaded-at'),
+        /RELOAD_DEBOUNCE_MS = 10000/.test(html),
+      ],
+      [true, true, true],
+    );
+    check('a silent failure becomes visible after the deadline', /MOUNT_TIMEOUT_MS = 12000/.test(html), true);
+    check('and the application says hello when it mounts', [
+      html.includes('window.__boot'),
+      html.includes('markMounted'),
+    ], [true, true]);
+  }
+
+  // The API boundary: 200 with no usable body is an error, not `{}`.
+  {
+    const { api } = await import('./src/lib/api');
+    const realFetch = globalThis.fetch;
+    const codeOf = async (body: string) => {
+      globalThis.fetch = (async () =>
+        new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+      try {
+        await api.listNotes();
+        return 'no error';
+      } catch (err) {
+        return (err as { code?: string }).code ?? 'no code';
+      }
+    };
+    try {
+      check('an empty 200 is a bad_response', await codeOf(''), 'bad_response');
+      check('a null 200 body is too', await codeOf('null'), 'bad_response');
+      check('and so is something that is not JSON', await codeOf('not json'), 'bad_response');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+
+  // The palette is where the crash surfaced: notes.filter over an undefined
+  // list. It must survive the store handing it rubbish.
+  {
+    const { CommandPalette } = await import('./src/components/CommandPalette');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    const realError = console.error;
+    console.error = () => undefined;
+    // jsdom has no layout, so it has no scrollIntoView: the palette's
+    // "keep the cursor visible" call would throw where a browser would not.
+    const elementProto = w.Element.prototype as unknown as { scrollIntoView?: unknown };
+    const realScrollIntoView = elementProto.scrollIntoView;
+    elementProto.scrollIntoView = () => undefined;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const type = async (value: string) => {
+      const input = host.querySelector('input');
+      await act(async () => {
+        if (!input) return;
+        const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+        setter?.call(input, value);
+        input.dispatchEvent(new w.Event('input', { bubbles: true }));
+      });
+      await flush();
+    };
+    try {
+      appStore.setState({ paletteOpen: true, notes: undefined } as never);
+      let crash: string | null = null;
+      try {
+        await act(async () => {
+          root.render(React.createElement(CommandPalette));
+        });
+        await flush();
+      } catch (err) {
+        crash = (err as Error).message ?? String(err);
+      }
+      check('the palette survives a store with no notes', crash, null);
+      check('and still opens', Boolean(host.querySelector('input')), true);
+      let typedCrash: string | null = null;
+      try {
+        await type('note');
+        await flush();
+      } catch (err) {
+        typedCrash = (err as Error).message ?? String(err);
+      }
+      check('typing into it does not crash either', typedCrash, null);
+
+      // A note without a title or tags: the other shape that used to throw.
+      appStore.setState({ notes: [{ id: 'n1' }] } as never);
+      let entryCrash: string | null = null;
+      try {
+        await type('n1');
+        await act(async () => {
+          root.render(React.createElement(CommandPalette));
+        });
+        await flush();
+      } catch (err) {
+        entryCrash = (err as Error).message ?? String(err);
+      }
+      check('a note without a title or tags is tolerated', entryCrash, null);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      elementProto.scrollIntoView = realScrollIntoView;
+      console.error = realError;
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+
+  // The root boundary says what happened and offers the two repairs.
+  {
+    const { ErrorBoundary } = await import('./src/components/ErrorBoundary');
+    const realError = console.error;
+    console.error = () => undefined;
+    const Boom = () => {
+      throw new Error('boom from a child');
+    };
+    const renderNode = async (node: React.ReactElement) => {
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      let crash: Error | null = null;
+      try {
+        await act(async () => {
+          root.render(node);
+        });
+        await flush();
+      } catch (err) {
+        crash = err as Error;
+      }
+      const html = host.innerHTML;
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      return { html, crash };
+    };
+    try {
+      const crashed = await renderNode(React.createElement(ErrorBoundary, null, React.createElement(Boom)));
+      check(
+        'a render error becomes a panel, not a white page',
+        [crashed.html.includes('data-testid="error-boundary"'), crashed.html.includes('role="alert"')],
+        [true, true],
+      );
+      check('the message is the original error', crashed.html.includes('boom from a child'), true);
+      check(
+        'with both repairs offered',
+        [crashed.html.includes('data-testid="error-reload"'), crashed.html.includes('data-testid="error-clear-cache"')],
+        [true, true],
+      );
+
+      const custom = await renderNode(
+        React.createElement(
+          ErrorBoundary,
+          {
+            fallback: React.createElement('div', { 'data-testid': 'custom-fallback' }, '占位'),
+            children: React.createElement(Boom),
+          },
+        ),
+      );
+      check(
+        'a custom fallback is used where one is given',
+        [custom.html.includes('data-testid="custom-fallback"'), custom.html.includes('data-testid="error-boundary"')],
+        [true, false],
+      );
+
+      const healthy = await renderNode(React.createElement(ErrorBoundary, null, React.createElement('div', null, '一切正常')));
+      check('a healthy subtree renders straight through', healthy.html.includes('一切正常'), true);
+      check('with no panel', healthy.html.includes('data-testid="error-boundary"'), false);
+    } finally {
+      console.error = realError;
+    }
+  }
+
+  // The wallpaper is decoration: a crash inside it leaves the panel alone.
+  {
+    const { Wallpaper } = await import('./src/components/Wallpaper');
+    const { DEFAULT_WALLPAPER } = await import('./src/lib/wallpaper');
+    const hold = appStore.getState();
+    const realFetch = globalThis.fetch;
+    const realError = console.error;
+    globalThis.fetch = (async () => reply({})) as typeof fetch;
+    console.error = () => undefined;
+    // Reads only the fields the layer needs before it reaches the custom
+    // wallpaper; everything past that throws, standing in for a broken render.
+    const allowed = new Set(['useAdminBackground', 'kind', 'url', 'source', 'crop', 'dim', 'autoAccent']);
+    const broken = new Proxy(
+      { ...DEFAULT_WALLPAPER, kind: 'custom', url: 'https://cdn.example.com/custom.webp' },
+      {
+        get(target, prop) {
+          if (typeof prop !== 'string' || allowed.has(prop)) return (target as Record<string | symbol, unknown>)[prop];
+          throw new Error('wallpaper boom');
+        },
+      },
+    );
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    try {
+      appStore.setState({ appearanceOpen: false, wallpaper: broken, adminBackground: null } as never);
+      await act(async () => {
+        root.render(
+          React.createElement(
+            'div',
+            null,
+            React.createElement(Wallpaper),
+            React.createElement('div', { 'data-testid': 'panel-body' }, '面板内容'),
+          ),
+        );
+      });
+      await flush();
+      check(
+        'a broken wallpaper falls back to the colour field',
+        [
+          Boolean(host.querySelector('[data-testid="wallpaper-fallback"]')),
+          host.querySelector('[data-wallpaper-fallback]')?.getAttribute('data-wallpaper-fallback'),
+        ],
+        [true, 'true'],
+      );
+      check('and the panel on top of it is untouched', host.querySelector('[data-testid="panel-body"]')?.textContent, '面板内容');
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+      console.error = realError;
+      globalThis.fetch = realFetch;
+      appStore.setState(hold);
+    }
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

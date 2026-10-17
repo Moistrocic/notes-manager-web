@@ -17,9 +17,311 @@
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#060a16" />
     <meta name="application-name" content="笔记管理面板" />
     <title>笔记管理面板</title>
+
+    <!--
+      The boot screen.
+      The app's stylesheet arrives with the app's JavaScript, so the wait before
+      it - and the failure where it never arrives - is drawn from here. Anything
+      unusual has to be visible: a page that shows only the background colour is
+      indistinguishable from a broken application, which is exactly how the
+      "cannot open the panel" report looked. Everything below is inline on
+      purpose: it must work when no other file loads.
+    -->
+    <style>
+      #boot {
+        --boot-bg: #060a16;
+        --boot-card: #0e1426;
+        --boot-line: rgba(255, 255, 255, 0.08);
+        --boot-text: #e9edff;
+        --boot-muted: #96a2c8;
+        --boot-faint: #64708f;
+        --boot-accent: #8b6cff;
+        position: fixed;
+        inset: 0;
+        z-index: 2147483000;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: radial-gradient(120% 90% at 50% 0%, #111a3a 0%, var(--boot-bg) 60%, #04060e 100%);
+        color: var(--boot-text);
+        font-family: 'Inter var', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+          'Microsoft YaHei', system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        text-align: center;
+      }
+      #boot[data-boot-state='error'] {
+        background: radial-gradient(120% 90% at 50% 0%, #2a1230 0%, var(--boot-bg) 62%, #04060e 100%);
+      }
+      #boot .boot-card {
+        width: min(520px, 100%);
+        box-sizing: border-box;
+        padding: 36px 32px;
+        border: 1px solid var(--boot-line);
+        border-radius: 20px;
+        background: var(--boot-card);
+        box-shadow: 0 30px 80px -40px rgba(0, 0, 0, 0.95);
+      }
+      #boot .boot-name {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+      #boot .boot-line {
+        margin: 10px 0 0;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--boot-muted);
+      }
+      #boot .boot-error {
+        display: none;
+        margin: 16px 0 0;
+        max-height: 180px;
+        overflow: auto;
+        box-sizing: border-box;
+        padding: 12px 14px;
+        border: 1px solid var(--boot-line);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.28);
+        color: var(--boot-muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11.5px;
+        line-height: 1.6;
+        text-align: left;
+        white-space: pre-wrap;
+        word-break: break-word;
+        user-select: text;
+      }
+      #boot[data-boot-state='error'] .boot-error {
+        display: block;
+      }
+      #boot .boot-action {
+        display: inline-block;
+        margin-top: 18px;
+        padding: 8px 18px;
+        border: 1px solid var(--boot-line);
+        border-radius: 999px;
+        color: var(--boot-faint);
+        font-size: 12.5px;
+        text-decoration: none;
+      }
+      #boot .boot-action:hover {
+        color: var(--boot-text);
+        border-color: rgba(255, 255, 255, 0.28);
+      }
+      #boot[data-boot-state='error'] .boot-action {
+        border-color: rgba(139, 108, 255, 0.65);
+        background: rgba(139, 108, 255, 0.16);
+        color: #c7b8ff;
+      }
+      #boot .boot-hint {
+        margin: 14px 0 0;
+        font-size: 11px;
+        color: var(--boot-faint);
+      }
+      html.boot-light #boot {
+        --boot-bg: #f4f5fb;
+        --boot-card: #ffffff;
+        --boot-line: rgba(17, 24, 45, 0.1);
+        --boot-text: #111a30;
+        --boot-muted: #4c5878;
+        --boot-faint: #6b7694;
+        --boot-accent: #6d4cff;
+        background: radial-gradient(120% 90% at 50% 0%, #e9ecff 0%, var(--boot-bg) 60%, #f7f8fd 100%);
+      }
+      html.boot-light #boot .boot-error {
+        background: rgba(17, 24, 45, 0.04);
+      }
+    </style>
+    <script>
+      // The app keeps its theme in localStorage and the wait should not show the
+      // other one. It defaults to dark on both sides, so an unreadable or empty
+      // store means dark too.
+      (function () {
+        var theme = 'dark';
+        try {
+          theme = localStorage.getItem('notes-manager-theme') || 'dark';
+        } catch (err) {
+          /* private mode: the default is fine */
+        }
+        document.documentElement.classList.add(theme === 'light' ? 'boot-light' : 'boot-dark');
+        document.documentElement.style.colorScheme = theme === 'light' ? 'light' : 'dark';
+      })();
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot" data-boot-state="loading" role="status" aria-live="polite">
+        <div class="boot-card">
+          <div class="boot-name">笔记管理面板</div>
+          <p class="boot-line" id="boot-line">正在加载…</p>
+          <pre class="boot-error" id="boot-error"></pre>
+          <p class="boot-hint" id="boot-hint">如果长时间没有反应，刷新页面通常就好了。</p>
+          <a class="boot-action" id="boot-reload" href="">刷新</a>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      /*
+       * What the page says when the application does not arrive.
+       *
+       * Three ways it can fail: a chunk from an older build has been replaced
+       * (the page is stale), the page throws while starting, or nothing loads at
+       * all. All three used to end at a blank background; each says something
+       * here, and the stale-chunk case repairs itself with one reload.
+       */
+      (function () {
+        var root = document.getElementById('root');
+        var box = document.getElementById('boot');
+        var line = document.getElementById('boot-line');
+        var detail = document.getElementById('boot-error');
+        var hint = document.getElementById('boot-hint');
+        var action = document.getElementById('boot-reload');
+        if (!root || !box || !line || !detail || !hint || !action) return;
+
+        var RELOAD_KEY = 'notes-manager-boot-reloaded-at';
+        var MOUNT_TIMEOUT_MS = 12000;
+        /** Reloading twice for one deploy is a loop; this bounds it. */
+        var RELOAD_DEBOUNCE_MS = 10000;
+        var mounted = false;
+        var shown = false;
+        var timeoutId = 0;
+
+        function setState(state) {
+          box.setAttribute('data-boot-state', state);
+        }
+
+        /**
+         * Says what went wrong, in the placeholder, where it can be copied.
+         *
+         * Only while the placeholder is still on the page: once the app has
+         * taken over, the error boundary (or the console) owns the message.
+         */
+        function show(title, message) {
+          if (mounted || shown || !box.parentNode) return;
+          shown = true;
+          setState('error');
+          line.textContent = title;
+          if (message) {
+            detail.textContent = String(message);
+            detail.style.display = 'block';
+          }
+          hint.textContent = '刷新后如果仍然这样，请把上面的信息复制给维护者。';
+          action.setAttribute('data-highlighted', 'true');
+          action.focus();
+        }
+
+        function reload() {
+          try {
+            location.reload();
+          } catch (err) {
+            /* nothing left to try */
+          }
+        }
+
+        // A link, so it can be opened in a new tab; a click reloads in place,
+        // like the button in the error boundary.
+        action.href = location.href;
+        action.addEventListener('click', function (event) {
+          event.preventDefault();
+          reload();
+        });
+
+        // The application says hello after its first commit. Until then the
+        // placeholder is what the user sees, and the 12s timer below is what
+        // makes a silent failure visible.
+        window.__boot = {
+          markMounted: function () {
+            mounted = true;
+            root.setAttribute('data-mounted', 'true');
+            if (box.parentNode) box.parentNode.removeChild(box);
+            if (timeoutId) window.clearTimeout(timeoutId);
+          },
+          showError: show,
+          state: function () {
+            return box.getAttribute('data-boot-state');
+          },
+        };
+
+        /*
+         * Vite raises this when a dynamic import points at a chunk that is no
+         * longer in the build: the tab is older than the files it is asking
+         * for. One reload takes it to the current page. The timestamp keeps a
+         * broken build from reloading forever.
+         */
+        window.addEventListener('vite:preloadError', function () {
+          var last = 0;
+          try {
+            last = Number(sessionStorage.getItem(RELOAD_KEY)) || 0;
+          } catch (err) {
+            /* no storage: fall through to a single reload */
+          }
+          if (last && Date.now() - last < RELOAD_DEBOUNCE_MS) {
+            show(
+              '页面没能加载最新的版本',
+              '这个页面是旧版本，它需要的文件已经被替换了。刷新一次即可。',
+            );
+            return;
+          }
+          try {
+            sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+          } catch (err) {
+            /* reload anyway */
+          }
+          reload();
+        });
+
+        /*
+         * Runtime errors and failed <script>/<link> loads both arrive here.
+         * Capturing is required: a resource that fails to load does not bubble.
+         */
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (mounted) {
+              console.error('[boot] error after mount', event.error || event.message);
+              return;
+            }
+            var target = event.target;
+            if (target && target !== window && target.tagName) {
+              show(
+                '页面加载失败',
+                '有一个文件没有加载成功：' +
+                  (target.src || target.href || target.tagName) +
+                  '\n这通常是旧页面遇到了新版本，刷新一次就好。',
+              );
+              return;
+            }
+            show(
+              '页面加载失败',
+              (event.message || '未知错误') +
+                (event.filename ? '（' + event.filename + ':' + event.lineno + '）' : ''),
+            );
+          },
+          true,
+        );
+
+        window.addEventListener('unhandledrejection', function (event) {
+          if (mounted) {
+            console.error('[boot] unhandled rejection after mount', event.reason);
+            return;
+          }
+          var reason = event.reason;
+          show('页面加载失败', reason && reason.message ? reason.message : String(reason));
+        });
+
+        timeoutId = window.setTimeout(function () {
+          timeoutId = 0;
+          if (mounted) return;
+          show(
+            '页面加载失败',
+            '界面在 ' + MOUNT_TIMEOUT_MS / 1000 + ' 秒内没有完成加载。可能是网络太慢，或者这个页面是旧版本留下的。刷新一次重试。',
+          );
+        }, MOUNT_TIMEOUT_MS);
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

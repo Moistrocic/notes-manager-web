@@ -143,9 +143,20 @@ export function CommandPalette() {
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const matchedCommands = commands.filter((c) => !q || c.label.toLowerCase().includes(q) || c.group.includes(q));
-    const matchedNotes = notes
-      .filter((n) => !q || n.title.toLowerCase().includes(q) || n.tags.some((t) => t.toLowerCase().includes(q)))
+    // The store is supposed to only ever hold lists here, but a response that
+    // lost a field is exactly the kind of thing this palette finds first: it
+    // renders on every keystroke. A missing list is an empty list, not a crash.
+    const matchedCommands = (Array.isArray(commands) ? commands : []).filter(
+      (c) => !q || c.label.toLowerCase().includes(q) || c.group.includes(q),
+    );
+    const matchedNotes = (Array.isArray(notes) ? notes : [])
+      .filter((note) => {
+        if (!note || typeof note.id !== 'string') return false;
+        if (!q) return true;
+        const title = typeof note.title === 'string' ? note.title : '';
+        const tags = Array.isArray(note.tags) ? note.tags : [];
+        return title.toLowerCase().includes(q) || tags.some((tag) => String(tag).toLowerCase().includes(q));
+      })
       .slice(0, q ? 8 : 5)
       .map<Command>((note) => ({
         id: `note:${note.id}`,

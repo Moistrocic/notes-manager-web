@@ -8,6 +8,7 @@
  * every request the store makes is recorded and asserted on.
  */
 import { appStore, normaliseSortKeys, SORT_KEYS } from './src/store/useAppStore';
+import { api } from './src/lib/api';
 import type { Note } from './src/lib/types';
 
 let failed = 0;
@@ -40,6 +41,8 @@ let notesRoot = '/public/Notes';
 let slowWrites = false;
 /** While set, the folder endpoint refuses - as a server with no write access would. */
 let refuseFolderCreate = false;
+/** While set, GET /api/notes answers with this instead of a real list. */
+let brokenList: null | 'empty_object' | 'nulls' | 'broken_entries' | 'empty_body' | 'json_null' = null;
 
 /* -------------------------------------------------------------------------- */
 /* window stub, so the deep link code has somewhere to read the address from   */
@@ -165,6 +168,17 @@ globalThis.fetch = (async (input: unknown, init: RequestInit = {}) => {
       notes.delete(id);
       return json({ ok: true, trashed: true });
     }
+  }
+  if (url.includes('/api/notes') && method === 'GET' && brokenList) {
+    // The shapes a proxy, a half-restarted server or another version can send
+    // while still answering 200. The store must not trust any of them.
+    if (brokenList === 'empty_body') return new Response('', { status: 200 });
+    if (brokenList === 'json_null') {
+      return new Response('null', { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (brokenList === 'empty_object') return json({});
+    if (brokenList === 'nulls') return json({ notes: [], tags: null });
+    return json({ notes: [null, 42, { nope: true }], tags: 'nope', folders: 'nope' });
   }
   if (url.includes('/api/notes')) {
     return json({
@@ -674,6 +688,82 @@ console.log('creating a folder');
   const made = await store.getState().createFolder('新/目录', { silent: true });
   check('a folder the server accepts comes back true', made, true);
   check('and a silent creation says nothing of its own', store.getState().toasts, []);
+}
+
+/* -------------------------------------------------------------------------- */
+/* A 200 response is not trusted to have the shape we asked for               */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('a malformed notes response');
+
+// 29. The crash the user hit: /api/notes answered 200 with a body without
+// notes, refreshNotes wrote it through, and CommandPalette crashed on
+// notes.filter. A list that cannot be read now keeps the last good one, and
+// says so; tags/folders are only ever arrays.
+{
+  const seed = (extra: Record<string, unknown> = {}) => {
+    notes.clear();
+    notes.set('keep', makeNote('keep', '# keep\n'));
+    store.setState({
+      user: { sid: 's', id: 'u', username: 'u', displayName: 'u', role: 'admin', provider: 'local', createdAt: 0, expiresAt: 0 },
+      notes: [makeNote('keep', '# keep\n')],
+      tags: ['t'],
+      folders: ['proj'],
+      stats: { notes: 1, tags: 1, folders: 1, words: 1, updatedAt: null },
+      notesError: null,
+      loadingNotes: false,
+      ...extra,
+    } as never);
+  };
+
+  seed();
+  brokenList = 'empty_object';
+  await store.getState().refreshNotes();
+  check('a body without notes keeps the list it had', store.getState().notes.map((note) => note.id), ['keep']);
+  check('and says the response was malformed', (store.getState().notesError ?? '').includes('格式异常'), true);
+  check('with the loading flag put back', store.getState().loadingNotes, false);
+
+  seed();
+  brokenList = 'nulls';
+  await store.getState().refreshNotes();
+  check('an empty list is a list', store.getState().notes, []);
+  check('but tags and folders are never null', [Array.isArray(store.getState().tags), Array.isArray(store.getState().folders)], [true, true]);
+  check('and the previous ones are kept', [store.getState().tags, store.getState().folders], [['t'], ['proj']]);
+
+  seed();
+  brokenList = 'broken_entries';
+  await store.getState().refreshNotes();
+  check('entries that are not notes are dropped', store.getState().notes, []);
+  check('and tags/folders fall back to the previous arrays', [store.getState().tags, store.getState().folders], [['t'], ['proj']]);
+
+  seed();
+  brokenList = 'empty_body';
+  await store.getState().refreshNotes();
+  check('an empty 200 is not an empty list', store.getState().notes.map((note) => note.id), ['keep']);
+  check('and it is reported as an empty response', (store.getState().notesError ?? '').includes('空响应'), true);
+
+  seed();
+  brokenList = 'json_null';
+  await store.getState().refreshNotes();
+  check('a null body is not an empty list either', store.getState().notes.map((note) => note.id), ['keep']);
+  check('and it is reported as unparseable', (store.getState().notesError ?? '').includes('无法解析'), true);
+  check('the bad_response code is what the API layer threw', await (async () => {
+    try {
+      brokenList = 'empty_body';
+      await api.listNotes();
+      return 'no error';
+    } catch (err) {
+      return (err as { code?: string }).code ?? 'no code';
+    } finally {
+      brokenList = null;
+    }
+  })(), 'bad_response');
+
+  seed();
+  brokenList = null;
+  await store.getState().refreshNotes();
+  check('a good response clears the error', store.getState().notesError, null);
+  check('and loads the list', store.getState().notes.map((note) => note.id), ['keep']);
 }
 
 /* -------------------------------------------------------------------------- */
