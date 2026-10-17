@@ -126,12 +126,12 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   永远是 `extractHeadings` 里的位置（`onNavigate(heading, index)` 用的就是它）。折叠状态是
   `OutlinePanel` 的局部 state，按 `activeNote.id` 重置——切换笔记必须回到「全部收起」，
   但同一篇笔记里编辑不要重置（否则刚展开的章节会在打字时自己合上）。
-- **自定义壁纸是画出来的，不是文件**：`CustomWallpaper.tsx` 只在有 2D 上下文时跑 rAF，
-  SSR / jsdom / 老浏览器靠 `customBackdrop()` 的 CSS 渐变兜底（同一张画面，不能留空洞）；
-  `prefers-reduced-motion` 直接停动画。清理必须在 effect 的 cleanup 里做完
-  （`cancelAnimationFrame`、resize / visibilitychange / motion 监听、MutationObserver），
-  否则切走壁纸后还在画。调色板只在布局和主题变化时 `getComputedStyle` 一次，别每帧读；
-  DPR 上限 2，粒子数量有上限（`CUSTOM_MAX_PARTICLES`）。
+- **自定义壁纸现在「有图片才动」**：`CustomWallpaper.tsx` 只在有图片、有 2D 上下文、且没开
+  reduced-motion 时才跑粒子 rAF；没有图片时渲染 `[data-custom-placeholder]` 的主题渐变占位
+  （SSR / jsdom 同样如此，不能留空洞）。晃动是 CSS keyframes（`customSwayKeyframes` 采样一周期），
+  不是每帧计算。清理必须在 effect 的 cleanup 里做完（`cancelAnimationFrame`、resize /
+  visibilitychange / matchMedia 监听、MutationObserver），否则切走壁纸后还在画。
+  调色板只在布局和主题变化时 `getComputedStyle` 一次，别每帧读；DPR 上限 2。
 - **`lastFolder` 是「新建笔记默认目录」的唯一来源**：`selectNote` 写笔记所在目录、树里点文件夹写
   该路径；`renameFolder` / `moveFolder` 会让它跟着改，`deleteFolder` 清空。对话框打开时还要再查
   一遍「这个目录现在还在不在」——不在就回退根目录，不能把一个不存在的路径塞进输入框。
@@ -152,11 +152,28 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （`setSortKeys`）——拖动结束后浏览器补发的那次 click 必须被吞掉（`swallowClick`），否则拖完就
   顺手置顶了。jsdom 里测拖动要自己派发 pointerdown、真实等 320ms、再 pointermove/pointerup；
   没有布局时行高按 `SORT_ROW_HEIGHT=28` 折算。
-- **自定义壁纸的默认值与夹取只有一处**：`resolveCustomWallpaper()`（web）与 `mergeSettings`（server）
-  分别补默认、夹范围；旧设置文件缺字段是常态。`crop` / `blur` 对 kind=custom **不生效**，只有
-  `dim`（和一套晃动/粒子参数）。`CustomWallpaper` 在没有 2D 上下文（SSR/jsdom）时只画 CSS 兜底、
-  不起 rAF；循环、resize/visibilitychange/matchMedia 监听与 MutationObserver 都在 cleanup 里收掉，
-  否则切走壁纸后还在画。导入的图片先缩图（长边 ≤2560、WebP 0.82，小图直通）再存/上传。
+- **目录建议是 portal 到 body 的浮层，不是对话框里的绝对定位**：Modal 的内容区是
+  `overflow-y-auto`，字段内的 absolute 浮层会在滚动边缘被裁掉；浮层挂在 body 上还带来一个好处——
+  它不参与对话框布局，出现/消失**不会改变对话框高度**（hint 那行因此常驻 `min-h-4` 占位）。
+  断言要用 `document` 查（不在对话框子树里找），并注意 field 的 onMouseDown preventDefault
+  （键盘留在输入框）、focusout 后延迟 ~150ms 才收起、Esc 先关列表再关对话框。
+- **自定义壁纸只有 7 个参数，并且语义对齐场景库**：`resolveCustomEffect()`（web）与
+  `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
+  数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
+  `customParticleRise`（0–500）/ `customParticleDrift`（0–400）/ `customParticleDirection`（0–1）。
+  映射：晃动 = 库 `oscillateposition`（x=sin、y=cos，采样一周期成 keyframes，图片放大
+  `1 + 2·amplitude% + 0.01` 才不会露出边缘）；粒子 = `ParticleDriftOptions`
+  （rise / speed / forwardRatio，spread 固定 0.6）；场景单位→px 用库的 3840×2160 正交视图
+  cover 换算（`sceneUnitScale`）。**没有图片时是主题渐变占位（`data-custom-placeholder`），
+  不吃 crop/blur，只有 dim 生效**。
+- **1.5.x 的旧壁纸参数是「忽略 + 补默认」迁移**：`customA/customB/customDrift/customDensity/
+  customParticle*` 等留在 `WallpaperSettings` 上只为让旧 settings.json 与老 fixture 通过类型检查，
+  读写都不再用（服务端同样忽略）；不要把它们重新接回 UI 或渲染 —— 旧客户端发这些字段只应
+  得到 200 与新默认值（test-server 有一条兼容断言）。
+- **deprecated 兼容层的可删条件**：那些 @deprecated 导出/字段（`CUSTOM_DEFAULTS`、
+  `CUSTOM_WALLPAPER_SLIDERS`、`resolveCustomWallpaper`、`customParticleCount`、`customBackdrop`
+  之外的旧粒子配置）在 `grep` 结果为 0 引用后由 Lead 决定删除；删之前 `resolveCustomEffect` +
+  `CUSTOM_EFFECT_*` 必须已经是唯一入口（当前断言已全部切到新表面）。
 - **`POST /api/background` 是管理员专用的裸字节上传**（和笔记/字体上传同一种形状）：octet-stream、
   文件名在 `X-Background-Filename`（percent-encoded）、上限 20 MB、**扩展名由 magic 嗅探决定**
   （`.webp`/`.png`/`.jpg`/`.gif`），body 为空 400 `empty_body`、不是图片 400 `invalid_background`、
