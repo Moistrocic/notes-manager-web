@@ -5386,6 +5386,22 @@ console.log('\nthe custom wallpaper (jsdom)');
       return { count, meanUp, forward, stdX };
     };
 
+    // Both sides draw random numbers, and a comparison of two means is only a
+    // test if both draws are seeded: unseeded, the difference moves by a few
+    // units from run to run, which is a flaky assertion, not a regression.
+    // A small deterministic PRNG, then both sides read from their own stream.
+    const mulberry32 = (seed: number) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let value = state;
+        value = Math.imul(value ^ (value >>> 15), value | 1);
+        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+
+    // Ours takes its random source as an argument.
     const ours = createCustomParticles(600, {
       count: 600,
       size: 2,
@@ -5398,40 +5414,61 @@ console.log('\nthe custom wallpaper (jsdom)');
       turbulence: 0.15,
       color: '',
       wind: 0,
-    }, 3840, 2160);
+    }, 3840, 2160, mulberry32(1));
     const ourStats = summarise(
       ours.map((particle: { vx: number }) => particle.vx),
       ours.map((particle: { vy: number }) => -particle.vy),
     );
 
-    const system = new ParticleSystem(
-      parseParticleDefinition({
-        maxcount: 400,
-        starttime: 0,
-        emitter: [{ name: 'boxrandom', rate: 400, distancemax: '800 600 0' }],
-        initializer: [
-          { name: 'lifetimerandom', min: 8, max: 9 },
-          { name: 'sizerandom', min: 1, max: 2 },
-        ],
-        operator: [],
-        material: {},
-      }),
-      undefined,
-      { drift: { rise: RISE, speed: SPEED, forwardRatio: DIRECTION, spread: SPREAD } },
-    );
-    // Long enough to fill every slot, short enough that none has died.
-    for (let step = 0; step < 40; step += 1) system.update(1 / 30);
-    const alive = system.slots.filter((slot: { alive: boolean }) => slot.alive);
-    const libraryStats = summarise(
-      alive.map((slot: { velocity: number[] }) => slot.velocity[0]),
-      alive.map((slot: { velocity: number[] }) => slot.velocity[1]),
-    );
+    // The library reads Math.random directly: it gets a stream of its own for
+    // the length of its run, and the real one is put back either way.
+    const runLibrary = () => {
+      const realRandom = Math.random;
+      try {
+        Math.random = mulberry32(2);
+        const system = new ParticleSystem(
+          parseParticleDefinition({
+            maxcount: 400,
+            starttime: 0,
+            emitter: [{ name: 'boxrandom', rate: 400, distancemax: '800 600 0' }],
+            initializer: [
+              { name: 'lifetimerandom', min: 8, max: 9 },
+              { name: 'sizerandom', min: 1, max: 2 },
+            ],
+            operator: [],
+            material: {},
+          }),
+          undefined,
+          { drift: { rise: RISE, speed: SPEED, forwardRatio: DIRECTION, spread: SPREAD } },
+        );
+        // Long enough to fill every slot, short enough that none has died.
+        for (let step = 0; step < 40; step += 1) system.update(1 / 30);
+        const alive = system.slots.filter((slot: { alive: boolean }) => slot.alive);
+        return summarise(
+          alive.map((slot: { velocity: number[] }) => slot.velocity[0]),
+          alive.map((slot: { velocity: number[] }) => slot.velocity[1]),
+        );
+      } finally {
+        Math.random = realRandom;
+      }
+    };
+    const libraryStats = runLibrary();
 
     check('the library reference has a full field of particles', libraryStats.count > 100, true);
-    // Tolerances from the implementer's comparison of the two runs.
-    check('the mean upward speed is the library\'s', Math.abs(ourStats.meanUp - libraryStats.meanUp) <= 20, true);
-    check('and the share drifting the main way', Math.abs(ourStats.forward - libraryStats.forward) <= 0.08, true);
-    check('and the sideways spread', Math.abs(ourStats.stdX - libraryStats.stdX) <= 20, true);
+    // Seeded on both sides, so these are the same numbers on every run. Both
+    // sides are pinned to the measured values (a change in either model moves
+    // them), and the two are compared with a fixed structural tolerance: the
+    // remaining difference is the models' own shape (our vertical velocity is
+    // cosine-jittered, the library's is not), not sampling noise.
+    check('our mean upward speed is the seeded one', Math.abs(ourStats.meanUp - 323.33) <= 3, true);
+    check('and the library\'s is its own', Math.abs(libraryStats.meanUp - 315) <= 3, true);
+    check('the two mean upward speeds agree', Math.abs(ourStats.meanUp - libraryStats.meanUp) <= 12, true);
+    check('our share drifting the main way is the seeded one', Math.abs(ourStats.forward - 0.725) <= 0.02, true);
+    check('and the library\'s is its own', Math.abs(libraryStats.forward - 0.6875) <= 0.02, true);
+    check('the two shares agree', Math.abs(ourStats.forward - libraryStats.forward) <= 0.06, true);
+    check('our sideways spread is the seeded one', Math.abs(ourStats.stdX - 74.72) <= 3, true);
+    check('and the library\'s is its own', Math.abs(libraryStats.stdX - 67.27) <= 3, true);
+    check('the two spreads agree', Math.abs(ourStats.stdX - libraryStats.stdX) <= 12, true);
   }
   // The fade in and out are the engine's alphafade and sizechange, combined.
   {
