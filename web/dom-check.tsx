@@ -3135,6 +3135,195 @@ console.log('\nkeeping two panes level (jsdom)');
   appStore.setState(hold);
 }
 
+/* --- the preview does not bounce back from the end ------------------------- */
+console.log('\nthe end of the note does not bounce (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => reply({})) as typeof fetch;
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [note],
+    activeId: note.id,
+    activeNote: note,
+    lastSaved: null,
+    dirty: false,
+    editorMode: 'split',
+    metaOpen: false,
+    saving: false,
+    // The switch is part of this fix: without sync there is no mirror at all.
+    syncScroll: true,
+  } as never);
+  w.localStorage.removeItem('notes-manager-sync-scroll');
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(Editor));
+  });
+  await flush();
+
+  // jsdom has no layout: each pane is told how tall it is, and every write to
+  // scrollTop obeys the browser's rule that a pane cannot scroll past its own
+  // end. That clamp is the whole bug - at the end of a note the editor runs out
+  // of room before the preview does.
+  const clamp = (value: number, max: number) => Math.max(0, Math.min(max, Number.isFinite(value) ? value : 0));
+  /** Every write to scrollTop: what was asked for, and where the pane ended up. */
+  const track = (element: HTMLElement, max: number) => {
+    const asked: number[] = [];
+    const landed: number[] = [];
+    let value = clamp(element.scrollTop, max);
+    Object.defineProperty(element, 'scrollTop', {
+      configurable: true,
+      get: () => value,
+      set: (next: number) => {
+        asked.push(next);
+        value = clamp(next, max);
+        landed.push(value);
+      },
+    });
+    return { asked, landed };
+  };
+  const size = (element: HTMLElement, scrollHeight: number, clientHeight: number) => {
+    Object.defineProperty(element, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(element, 'clientHeight', { value: clientHeight, configurable: true });
+  };
+
+  const editorEl = host.querySelector<HTMLElement>('.cm-scroller') as HTMLElement;
+  const previewEl = host.querySelector<HTMLElement>('.markdown-body') as HTMLElement;
+  check('both panes are there', Boolean(editorEl && previewEl), true);
+  // The editor runs out of room almost at once, the preview has plenty: that is
+  // the shape of the bug - the last line of the note cannot be put at the top of
+  // the editor, so the position it reports is an earlier one.
+  size(editorEl, 300, 200);
+  size(previewEl, 1800, 200);
+  const editorLog = track(editorEl, 100);
+  const previewLog = track(previewEl, 1600);
+  const editorWrites = editorLog.landed;
+  const previewWrites = previewLog.landed;
+
+  // The rendered blocks are given a document of their own, as in the sync block.
+  const rect = (top: number, height: number) =>
+    ({ top, bottom: top + height, height, left: 0, right: 0, width: 0, x: 0, y: top }) as DOMRect;
+  previewEl.getBoundingClientRect = () => rect(0, 0);
+  Array.from(previewEl.querySelectorAll<HTMLElement>('[data-line]')).forEach((block, index) => {
+    block.getBoundingClientRect = () => rect(40 + index * 200 - previewEl.scrollTop, 100);
+  });
+
+  const clearWrites = () => {
+    editorWrites.length = 0;
+    previewWrites.length = 0;
+  };
+  const dispatchScroll = async (pane: HTMLElement) => {
+    await act(async () => {
+      pane.dispatchEvent(new w.Event('scroll'));
+    });
+    await flush();
+  };
+
+  // The reader scrolls the preview to its very end. The editor is put at the line
+  // of the last block - as far as it can go, which is short of what was asked.
+  previewEl.scrollTop = previewEl.scrollHeight - previewEl.clientHeight;
+  check('the preview can reach its own end', previewEl.scrollTop, 1600);
+  clearWrites();
+  await dispatchScroll(previewEl);
+  check('the editor is moved to the line that was asked for', editorWrites.length, 1);
+  check('asking for more room than the editor has', editorLog.asked[0] > editorLog.landed[0], true);
+  check('so it lands at its own end', editorEl.scrollTop, 100);
+
+  // Its report of that write arrives a moment later, describing the clamped
+  // place. It is the echo of our own write, not the reader moving the pane: the
+  // old handling had already let the frame go by then, so it dragged the preview
+  // back up from the end - a bounce the reader could never get past.
+  editorEl.scrollTop = 600;
+  clearWrites();
+  await dispatchScroll(editorEl);
+  check('the report of the clamped write moves nothing back', previewWrites, []);
+  check('so the preview stays at the end', previewEl.scrollTop, 1600);
+  check('and the editor stays where it was clamped', editorEl.scrollTop, 100);
+
+  // A real move in the editor is still followed: the guard is about echoes, not
+  // about the reader.
+  await flush();
+  editorEl.scrollTop = 40;
+  clearWrites();
+  await dispatchScroll(editorEl);
+  check('the reader moving the editor still moves the preview', previewWrites.length, 1);
+  check('and the preview does not jump past its end', previewEl.scrollTop < 1600, true);
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  w.localStorage.removeItem('notes-manager-sync-scroll');
+  globalThis.fetch = realFetch;
+  appStore.setState(hold);
+}
+
+/* --- the preview waits for typing to settle -------------------------------- */
+console.log('\nthe preview keeps up without holding typing back (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => reply({})) as typeof fetch;
+  const noteWith = (id: string, marker: string) => {
+    const body = '# 延迟测试\n\n' + marker + ' 这一段。\n';
+    return { ...note, id, content: body, size: body.length };
+  };
+  const opened = noteWith('lag1', 'OLD_MARKER');
+  appStore.setState({
+    capabilities: WRITABLE,
+    notes: [opened],
+    activeId: opened.id,
+    activeNote: opened,
+    lastSaved: null,
+    dirty: false,
+    editorMode: 'split',
+    metaOpen: false,
+    saving: false,
+  } as never);
+
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(Editor));
+  });
+  await flush();
+
+  const previewText = () => host.querySelector('.markdown-body')?.textContent ?? '';
+  const editorText = () => host.querySelector('.cm-content')?.textContent ?? '';
+  check('the preview opens on the note it was given', previewText().includes('OLD_MARKER'), true);
+
+  // The editor echoes at once - it renders from the store. The preview is the
+  // expensive one (parse, sanitise, annotate, resolve pictures, swap the DOM),
+  // so it is given the note the typing settled on a beat later.
+  await act(async () => {
+    appStore.getState().patchActive({ content: noteWith('lag1', 'NEW_MARKER').content });
+  });
+  await flush();
+  check('the editor echoes the typing at once', editorText().includes('NEW_MARKER'), true);
+  check('while the preview still shows the last thing it rendered', previewText().includes('NEW_MARKER'), false);
+  check('and shows the old content instead', previewText().includes('OLD_MARKER'), true);
+  await settled(200);
+  check('a beat later the preview has caught up', previewText().includes('NEW_MARKER'), true);
+
+  // Another note is not a lagging edit: showing the old one would be a lie.
+  const other = noteWith('lag2', 'SWITCH_MARKER');
+  await act(async () => {
+    appStore.setState({ notes: [opened, other], activeId: other.id, activeNote: other } as never);
+  });
+  check('another note is shown at once, not a beat later', previewText().includes('SWITCH_MARKER'), true);
+
+  await act(async () => {
+    root.unmount();
+  });
+  host.remove();
+  globalThis.fetch = realFetch;
+  appStore.setState(hold);
+}
+
 /* --- the pictures a note refers to ---------------------------------------- */
 console.log('\nimages inside a note (jsdom)');
 {
