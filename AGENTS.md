@@ -132,7 +132,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   粒子**不是手写噪声**：用库的 `ParticleSystem` 跑仿真（生产路径 `createFlowParticles`），
   `buildVertices` 取四边形、实测的 halo 贴图 + `globalCompositeOperation='lighter'` 加色绘制，
   再挂一个 glow 子发射器（放大 ~20 倍、全屏时 alpha 压到 0.02–0.06）；出生位置与速度由
-  `placeSpawnedEmbers` 改写（见「7 个参数」那条）；生产定义是「长寿命」的一套（寿命 9–12s、槽位 300、发射 30/s），开屏先 `warmUpParticleFlow` 预热 12.5 秒，让第一帧就已经铺满整条上升路径。
+  `placeSpawnedEmbers` 改写（见「9 个控件」那条）；生产定义是「长寿命」的一套（寿命 9–12s、槽位 300、发射 30/s），开屏先 `warmUpParticleFlow` 预热 12.5 秒，让第一帧就已经铺满整条上升路径。
   断言里先固定 `Math.random`（mulberry32）再取统计量，否则 aliveCount / 尺寸类断言会偶发红。
   `prefers-reduced-motion` **不整体停用**（场景库也一样会动），显式开关
   （`customSway` / `customShowParticles`）才是唯一的停用方式——断言里「reduced-motion 下 0 次 rAF」
@@ -178,7 +178,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   它不参与对话框布局，出现/消失**不会改变对话框高度**（hint 那行因此常驻 `min-h-4` 占位）。
   断言要用 `document` 查（不在对话框子树里找），并注意 field 的 onMouseDown preventDefault
   （键盘留在输入框）、focusout 后延迟 ~150ms 才收起、Esc 先关列表再关对话框。
-- **自定义壁纸只有 7 个参数，并且语义对齐场景库**：`resolveCustomEffect()`（web）与
+- **自定义壁纸有 9 个控件（6 滑块 + 2 开关 + 1 取色）**：`resolveCustomEffect()`（web）与
   `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
   数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
   `customParticleRise`（0–500）/ `customParticleDrift`（0–400）/ `customParticleDirection`（0–1）。
@@ -192,6 +192,16 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   对外语义：drift=**最大**横向速度、direction=**向右概率**（UI 标签「粒子方向比例」，显示
   「向右 70%」「最大 200 单位/秒」）。生产路径是 `createFlowParticles` / `advanceParticleFlow` /
   `warmUpParticleFlow`；`createLibraryParticles`/`warmUpLibraryParticles` 只剩兼容测试在用。
+  密度与基色（1.7 新增）：`customParticleDensity`（0–600，默认 300）是**同屏粒子上限**——
+  `particleEmissionForDensity` 映射为 `maxCount = density`、`rate = density / 10.5`（10.5s 是
+  生产预设的平均寿命），density=0 时 maxCount 仍为 1 但 rate=0（库的 slot 数组不能为空类），
+  **不建画布**、`data-custom-particles="false"`。`customParticleColor` 是 `#rrggbb` 或空串：
+  `normaliseParticleColor` 大小写/三位简写归一、非法值一律空串；`resolveParticleColorValue`
+  的优先级是「手选颜色 → --accent → 主题默认 `#6d4cff`」，`parseParticleColor` 给 0–1 通道；
+  画布上的光晕用 `applyParticleColor(systems, state, color)` 原地重绘（主题 accent 变化且颜色为空
+  时调用），每颗的明暗由 `particleBrightnessJitter(random)` 取 ±18%；`LEGACY_CUSTOM_KEYS`
+  **不再包含 `customParticleColor`**（旧文件里合法的颜色会被沿用，服务端 mergeSettings 同样
+  小写化/夹取，非法值→空串）。
   场景单位→px 用库的 3840×2160 正交视图 cover 换算（`sceneUnitScale`）。
   **没有图片时是主题渐变占位（`data-custom-placeholder`），不吃 crop/blur，只有 dim 生效**。
 - **1.5.x 的旧壁纸参数是「忽略 + 补默认」迁移**：`customA/customB/customDrift/customDensity/
