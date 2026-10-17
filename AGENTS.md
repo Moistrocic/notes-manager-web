@@ -195,6 +195,25 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   `CUSTOM_WALLPAPER_SLIDERS`、`resolveCustomWallpaper`、`customParticleCount`、`customBackdrop`
   之外的旧粒子配置）在 `grep` 结果为 0 引用后由 Lead 决定删除；删之前 `resolveCustomEffect` +
   `CUSTOM_EFFECT_*` 必须已经是唯一入口（当前断言已全部切到新表面）。
+- **`api.request` 不允许再返回 `(payload ?? {})`**：200 + 空 body、200 + 非 JSON、JSON `null`
+  都必须抛 `ApiError(..., 'bad_response')`；调用方不得信任「200 就一定是 JSON」。列表接口还要在
+  store 里再校验一遍（`refreshNotes`：notes 必须是数组，否则保留上一次的列表并设置可读的
+  `notesError`；tags/folders 只接收数组，畸形条目丢弃；stats/capabilities 走 normalise）。
+  真实事故：`/api/notes` 返回 200 + `{}`，列表被写成 `undefined`，`CommandPalette` 的
+  `notes.filter` 让整页崩掉——现在 `CommandPalette` 也做了防御，但根因在入口。
+- **启动页与错误边界**：`web/index.html` 里有一段内联兜底（`#boot` 占位、`data-boot-state`、
+  `#boot-line` / `#boot-error` / `#boot-reload`、`window.__boot`、`vite:preloadError` → 自动刷新
+  一次（`notes-manager-boot-reloaded-at`、10s 防抖）、`MOUNT_TIMEOUT_MS = 12000`）。改 index.html
+  时这些钩子一个都不能删——它们是白屏时唯一的说明；`main.tsx` 在第一次 commit 后调用
+  `__boot.markMounted()` 移除占位。根 `ErrorBoundary`（`main.tsx`）显示「页面出错了」面板 +
+  `error-reload` / `error-clear-cache`；壁纸有**自己的一层** `ErrorBoundary`（`Wallpaper.tsx`，
+  fallback 是 `data-testid="wallpaper-fallback"` 的颜色渐变，按 kind/url 重新挂载），所以壁纸崩了
+  只回退背景，面板不受影响。
+- **静态 404 的契约**：`/assets/*` 与常见静态扩展名（js/css/map/svg/图片/字体/wasm/视频/pkg 等，
+  见 `app.ts` 的 `STATIC_ASSET_EXTENSIONS`）找不到时回 **404 text/plain**，不回落 index.html，
+  并打一行 `static asset not found, likely a stale page: <path>`；页面路由（`/`、`/manager/`、
+  笔记地址）才回落 index.html；`/api/*` 未知路径仍是 404 JSON。这条日志是「用户说黑屏」时判断
+  旧版本的第一线索。
 - **`POST /api/background` 是管理员专用的裸字节上传**（和笔记/字体上传同一种形状）：octet-stream、
   文件名在 `X-Background-Filename`（percent-encoded）、上限 20 MB、**扩展名由 magic 嗅探决定**
   （`.webp`/`.png`/`.jpg`/`.gif`），body 为空 400 `empty_body`、不是图片 400 `invalid_background`、
