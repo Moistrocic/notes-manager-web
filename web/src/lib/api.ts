@@ -2,6 +2,8 @@ import { ApiError } from './types';
 import type { BackgroundFile, BackgroundOptions } from './admin-background';
 import type {
   AuthProviders,
+  BackgroundPreset,
+  BackgroundSettings,
   FontRecord,
   FontSelection,
   AppSettingsPayload,
@@ -135,6 +137,25 @@ export const api = {
       '/system/settings',
       { method: 'PUT', body: JSON.stringify(settings) },
     ),
+  /**
+   * Saves the current default background as a preset.
+   *
+   * Without a background the server snapshots whatever is configured now; the
+   * settings dialog always sends the form's copy, so what the administrator
+   * sees on screen is what gets saved. 201 returns the stored preset (name and
+   * timestamps normalised) and the whole list.
+   */
+  createBackgroundPreset: (body: { name?: string; background?: BackgroundSettings }) =>
+    request<{ preset: BackgroundPreset; presets: BackgroundPreset[] }>('/system/background-presets', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  /** Deletes a preset. The background in use is not affected. */
+  deleteBackgroundPreset: (id: string) =>
+    request<{ presets: BackgroundPreset[] }>(`/system/background-presets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   testOpenList: (url: string, token?: string) =>
     request<{ ok: boolean; message: string; details?: Record<string, unknown> }>('/system/openlist/test', {
       method: 'POST',

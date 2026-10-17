@@ -258,6 +258,20 @@ export interface BackgroundSettings extends BackgroundOptions {
   note: string;
 }
 
+/**
+ * A saved snapshot of the administrator's default background.
+ *
+ * Immutable by design: clicking one copies its background into the live
+ * settings and leaves the preset itself alone, so "使用预设后继续改参数" only
+ * changes what is in use now.
+ */
+export interface BackgroundPreset {
+  id: string;
+  name: string;
+  createdAt: string;
+  background: BackgroundSettings;
+}
+
 export interface AppSettingsPayload {
   settings: {
     storage: {
@@ -266,6 +280,8 @@ export interface AppSettingsPayload {
       local: { root: string };
     };
     background: BackgroundSettings;
+    /** Saved backgrounds, managed by /api/system/background-presets. */
+    backgroundPresets: BackgroundPreset[];
     guest: { enabled: boolean };
     blog: { enabled: boolean };
   };
@@ -276,6 +292,7 @@ export interface AppSettingsPayload {
       local: { root: string };
     };
     background: BackgroundSettings;
+    backgroundPresets: BackgroundPreset[];
     guest: { enabled: boolean };
     blog: { enabled: boolean };
     sources: Record<string, 'env' | 'file' | 'default'>;

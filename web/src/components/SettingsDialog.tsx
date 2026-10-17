@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import {
   AlertCircle,
+  Bookmark,
   CheckCircle2,
   Cloud,
   Database,
@@ -8,6 +9,7 @@ import {
   HardDrive,
   Image as ImageIcon,
   KeyRound,
+  Plus,
   RefreshCw,
   Save,
   Trash2,
@@ -21,7 +23,7 @@ import { cn } from '../lib/cn';
 import { formatBytes } from '../lib/format';
 import { isScenePkg, pictureFromScenePkg } from '../lib/scene/pkg-wallpaper';
 import { sceneStillUrl } from '../lib/scene/render-still';
-import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
+import type { BackgroundPreset, BackgroundSettings, AppSettingsPayload } from '../lib/types';
 import { CUSTOM_EFFECT_DEFAULTS, shrinkWallpaperImage } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 import { CustomWallpaperControls } from './CustomWallpaper';
@@ -81,6 +83,34 @@ const DEFAULT_BACKGROUND: BackgroundSettings = {
   customParticleColor: CUSTOM_EFFECT_DEFAULTS.color,
 };
 
+/** The most presets the server keeps; the button stops before the 400. */
+const MAX_PRESETS = 50;
+
+/**
+ * One line about what a preset restores, under its name.
+ *
+ * A name alone stops saying much after a while - "预设 1" could be anything - so
+ * the kind and the number that changes the look most are spelled out.
+ */
+function describePreset(background: BackgroundSettings): string {
+  switch (background.kind) {
+    case 'off':
+      return '不设置默认背景';
+    case 'aurora':
+      return '主题极光';
+    case 'image':
+      return `图片 · ${background.file || '未选文件'}`;
+    case 'video':
+      return `视频 · ${background.file || '未选文件'}`;
+    case 'scene':
+      return `场景壁纸 · ${background.file || '未选文件'}`;
+    case 'custom':
+      return `自定义壁纸 · 密度 ${background.customParticleDensity} · 上升 ${background.customParticleRise}`;
+    default:
+      return '背景';
+  }
+}
+
 /** A file name inside a sentence, so the paths read as paths. */
 function Code({ children }: { children: React.ReactNode }) {
   return (
@@ -130,12 +160,33 @@ export function SettingsDialog() {
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
   /** Puts an armed bin back after a few seconds, so a stray click cannot delete. */
   const confirmTimer = useRef<number | null>(null);
+  /** Saved background snapshots the administrator can switch between. */
+  const [presets, setPresets] = useState<BackgroundPreset[]>([]);
+  /** The inline "name this preset" editor; it saves the form's current background. */
+  const [addingPreset, setAddingPreset] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [savingPreset, setSavingPreset] = useState(false);
+  /** The preset being applied right now, so rows cannot be pressed twice. */
+  const [usingPreset, setUsingPreset] = useState<string | null>(null);
+  /** The preset whose bin is waiting for its second press (same as the files). */
+  const [pendingPresetDelete, setPendingPresetDelete] = useState<string | null>(null);
+  const [deletingPreset, setDeletingPreset] = useState<string | null>(null);
+  const presetConfirmTimer = useRef<number | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
   const version = useAppStore((s) => s.status?.version);
 
   useEffect(() => {
     if (!open) return;
     setTestResult(null);
+    // A reopened dialog starts clean: no half-open editor and no bin waiting
+    // for a second press from the last time it was open.
+    if (presetConfirmTimer.current !== null) {
+      window.clearTimeout(presetConfirmTimer.current);
+      presetConfirmTimer.current = null;
+    }
+    setAddingPreset(false);
+    setPresetName('');
+    setPendingPresetDelete(null);
     void api
       .settings()
       .then((data) => {
@@ -148,6 +199,7 @@ export function SettingsDialog() {
         setBackground(data.settings.background ?? DEFAULT_BACKGROUND);
         setGuestEnabled(data.settings.guest?.enabled ?? true);
         setBlogEnabled(data.settings.blog?.enabled ?? false);
+        setPresets(data.settings.backgroundPresets ?? []);
       })
       .catch((err: Error) => pushToast({ title: '读取设置失败', message: err.message, tone: 'error' }));
   }, [open, pushToast]);
@@ -156,6 +208,7 @@ export function SettingsDialog() {
   useEffect(
     () => () => {
       if (confirmTimer.current !== null) window.clearTimeout(confirmTimer.current);
+      if (presetConfirmTimer.current !== null) window.clearTimeout(presetConfirmTimer.current);
     },
     [],
   );
@@ -181,6 +234,7 @@ export function SettingsDialog() {
       ]);
       const data = await api.settings();
       setPayload(data);
+      setPresets(data.settings.backgroundPresets ?? []);
     } catch (err) {
       pushToast({ title: '保存失败', message: (err as Error).message, tone: 'error' });
     } finally {
@@ -272,6 +326,110 @@ export function SettingsDialog() {
     } finally {
       setDeletingFile(null);
       setPendingDelete(null);
+    }
+  };
+
+  /** Opens the inline editor, with the name the server would fall back to. */
+  const startAddingPreset = () => {
+    setPresetName(`预设 ${presets.length + 1}`);
+    setAddingPreset(true);
+  };
+
+  const cancelAddingPreset = () => {
+    setAddingPreset(false);
+    setPresetName('');
+  };
+
+  /**
+   * Saves the form's current background as a preset.
+   *
+   * Deliberately not `save()`: that would also send the storage fields, and the
+   * point of a preset is the background, not the whole dialog.
+   */
+  const addPreset = async () => {
+    if (savingPreset) return;
+    const name = presetName.trim().slice(0, 40);
+    setSavingPreset(true);
+    try {
+      const result = await api.createBackgroundPreset({ name: name || undefined, background });
+      setPresets(result.presets ?? []);
+      setAddingPreset(false);
+      setPresetName('');
+      pushToast({ title: '预设已添加', message: result.preset?.name ?? name, tone: 'success' });
+    } catch (err) {
+      pushToast({ title: '添加预设失败', message: (err as Error).message || '未知错误', tone: 'error' });
+    } finally {
+      setSavingPreset(false);
+    }
+  };
+
+  /**
+   * Makes a preset the live default background.
+   *
+   * One PUT of just the background: the snapshot becomes the saved setting, the
+   * form follows it, and the layer behind the dialog redraws. The preset itself
+   * is never sent back, so editing the background afterwards stays local to the
+   * current setting.
+   */
+  const usePreset = async (preset: BackgroundPreset) => {
+    if (usingPreset) return;
+    setUsingPreset(preset.id);
+    try {
+      await api.saveSettings({ background: preset.background });
+      setBackground({ ...preset.background, crop: { ...preset.background.crop } });
+      await refreshAdminBackground();
+      pushToast({
+        title: `已切换到预设 ${preset.name}`,
+        message: '之后改参数只影响当前背景，预设不会变',
+        tone: 'success',
+      });
+    } catch (err) {
+      // Most often 400 background_missing: the file this preset names is gone.
+      pushToast({
+        title: `使用预设「${preset.name}」失败`,
+        message: (err as Error).message || '未知错误',
+        tone: 'error',
+      });
+    } finally {
+      setUsingPreset(null);
+    }
+  };
+
+  /** Turns a preset's bin into "确认删除？", or back into a bin after a moment. */
+  const armPresetDelete = (id: string) => {
+    if (presetConfirmTimer.current !== null) window.clearTimeout(presetConfirmTimer.current);
+    setPendingPresetDelete(id);
+    presetConfirmTimer.current = window.setTimeout(() => {
+      presetConfirmTimer.current = null;
+      setPendingPresetDelete(null);
+    }, 4000);
+  };
+
+  /** Deletes a preset. It is only a saved copy, so the background in use stays. */
+  const deletePreset = async (preset: BackgroundPreset) => {
+    // The armed button stays on screen while the request runs, but its timer
+    // must not put the bin back halfway.
+    if (presetConfirmTimer.current !== null) {
+      window.clearTimeout(presetConfirmTimer.current);
+      presetConfirmTimer.current = null;
+    }
+    setDeletingPreset(preset.id);
+    try {
+      const result = await api.deleteBackgroundPreset(preset.id);
+      setPresets(result.presets ?? []);
+      pushToast({ title: '预设已删除', message: `${preset.name}（当前背景未改动）`, tone: 'success' });
+    } catch (err) {
+      pushToast({ title: '删除预设失败', message: (err as Error).message || '未知错误', tone: 'error' });
+      // The list may have changed under us; read it rather than show a stale row.
+      try {
+        const data = await api.settings();
+        setPresets(data.settings.backgroundPresets ?? []);
+      } catch {
+        /* keep the list we have */
+      }
+    } finally {
+      setDeletingPreset(null);
+      setPendingPresetDelete(null);
     }
   };
 
@@ -719,6 +877,147 @@ export function SettingsDialog() {
                 placeholder="例如：洛茜 Rossi · 创意工坊 3691554683"
               />
             </Field>
+
+            {/* Presets: snapshots of the background above, for one-click
+                switching. A preset is immutable - the row only ever says "use
+                this" or "forget this", which is why there is no rename field. */}
+            <div className="space-y-2 border-t border-[var(--line)] pt-3" data-preset-section>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Bookmark className="h-3.5 w-3.5 shrink-0 text-[var(--accent)]" />
+                  <span className="text-[12px] text-[var(--muted)]">预设</span>
+                  <span className="min-w-0 truncate text-[11px] text-[var(--faint)]">
+                    保存当前背景设置，之后一键切换；预设本身不可修改
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="preset-add"
+                  disabled={addingPreset || presets.length >= MAX_PRESETS}
+                  onClick={startAddingPreset}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  添加预设
+                </Button>
+              </div>
+
+              {addingPreset ? (
+                <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] p-2">
+                  <Input
+                    data-testid="preset-name-input"
+                    aria-label="预设名称"
+                    value={presetName}
+                    maxLength={40}
+                    autoFocus
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => setPresetName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void addPreset();
+                      } else if (e.key === 'Escape') {
+                        // Close the inline editor, not the whole dialog.
+                        e.stopPropagation();
+                        cancelAddingPreset();
+                      }
+                    }}
+                    placeholder={`预设 ${presets.length + 1}`}
+                    className="h-8 max-w-[240px] text-[12px]"
+                  />
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    data-testid="preset-save"
+                    loading={savingPreset}
+                    onClick={() => void addPreset()}
+                  >
+                    确定
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    data-testid="preset-cancel"
+                    disabled={savingPreset}
+                    onClick={cancelAddingPreset}
+                  >
+                    取消
+                  </Button>
+                  <span className="text-[11px] text-[var(--faint)]">保存上面这份表单里的背景</span>
+                </div>
+              ) : null}
+
+              {presets.length === 0 ? (
+                <p className="text-[11px] leading-relaxed text-[var(--faint)]" data-testid="preset-empty">
+                  还没有预设。保存当前背景设置，之后可以一键切换。
+                </p>
+              ) : (
+                <div className="max-h-56 space-y-1 overflow-y-auto">
+                  {presets.map((preset) => {
+                    const armed = pendingPresetDelete === preset.id;
+                    const deleting = deletingPreset === preset.id;
+                    const applying = usingPreset === preset.id;
+                    return (
+                      <div
+                        key={preset.id}
+                        data-testid="preset-row"
+                        className="flex items-center gap-1 rounded-xl border border-[var(--line)] px-1 py-0.5 transition-colors hover:border-[var(--line-strong)]"
+                      >
+                        <button
+                          type="button"
+                          data-testid={`preset-use-${preset.id}`}
+                          aria-label={`使用预设 ${preset.name}`}
+                          title={`切换到「${preset.name}」`}
+                          disabled={usingPreset !== null}
+                          onClick={() => void usePreset(preset)}
+                          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors disabled:opacity-60"
+                        >
+                          <Bookmark className="h-3 w-3 shrink-0 text-[var(--accent)]" />
+                          <span className="min-w-0 flex-1">
+                            <span data-testid="preset-name" className="block truncate text-[12px] text-[var(--text)]">
+                              {preset.name}
+                            </span>
+                            <span className="block truncate text-[11px] text-[var(--faint)]">
+                              {describePreset(preset.background)}
+                            </span>
+                          </span>
+                          <span className="shrink-0 text-[11px] text-[var(--faint)]">
+                            {applying ? '切换中…' : '点击使用'}
+                          </span>
+                        </button>
+                        {armed ? (
+                          <button
+                            type="button"
+                            data-testid={`preset-delete-confirm-${preset.id}`}
+                            disabled={deleting}
+                            aria-label={`确认删除预设 ${preset.name}`}
+                            title="再点一次才会真的删除"
+                            onClick={() => void deletePreset(preset)}
+                            className="focus-ring flex shrink-0 items-center gap-1 rounded-lg border border-[var(--danger)] bg-[color-mix(in_srgb,var(--danger)_16%,transparent)] px-2 py-1 text-[11px] text-[var(--danger)] transition-colors disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            {deleting ? '删除中…' : '确认删除？'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`preset-delete-${preset.id}`}
+                            disabled={deleting}
+                            aria-label={`删除预设 ${preset.name}`}
+                            title="删除这个预设（不影响当前背景）"
+                            onClick={() => armPresetDelete(preset.id)}
+                            className="focus-ring flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--faint)] transition-colors hover:text-[var(--danger)] disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             <p className="text-[11px] leading-relaxed text-[var(--faint)]">
               {background.kind === 'off'

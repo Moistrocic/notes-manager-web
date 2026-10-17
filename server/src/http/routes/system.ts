@@ -1,9 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { Services } from '../../services.js';
 import { createLogger } from '../../logger.js';
 import { handler, requireAdmin } from '../middleware.js';
 import { DEFAULT_ENV_FILE, activeEnvFile, envFileOverride } from '../../boot.js';
-import type { AppSettings } from '../../config.js';
+import { MAX_BACKGROUND_PRESETS, type AppSettings, type BackgroundPreset, type BackgroundSettings } from '../../config.js';
 
 const log = createLogger('routes:system');
 const startedAt = Date.now();
@@ -144,7 +145,10 @@ export function systemRoutes(services: Services): Router {
     '/settings',
     requireAdmin,
     handler(async (req, res) => {
-      const body = (req.body ?? {}) as Partial<AppSettings>;
+      // Presets are immutable and have their own endpoints: this save must not
+      // be able to add, rewrite or remove them, however the body is shaped.
+      const body = { ...((req.body ?? {}) as Partial<AppSettings>) };
+      delete body.backgroundPresets;
       const refused = validateBackground(services, body);
       if (refused) {
         res.status(400).json({ error: refused });
@@ -161,6 +165,94 @@ export function systemRoutes(services: Services): Router {
       }
       log.info(`settings saved (driver=${effective.storage.driver}, openlist=${effective.storage.openlist.url || 'none'})`);
       res.json({ settings: services.settings.raw(), effective, status: await services.storage.status() });
+    }),
+  );
+
+  /**
+   * Saves the current default background as a named preset.
+   *
+   * Contract: POST /api/system/background-presets, requireAdmin,
+   * body { name?: string, background?: BackgroundSettings }. Without a
+   * background the currently saved one is snapshotted; with one it goes through
+   * the same file/kind checks as PUT /settings, because a preset that points at
+   * a file nobody can load would fail every time somebody uses it. 201
+   * { preset, presets }; 400 background_missing / background_kind_mismatch /
+   * background_invalid / preset_limit; 401 unauthenticated; 403 forbidden.
+   */
+  router.post(
+    '/background-presets',
+    requireAdmin,
+    handler(async (req, res) => {
+      const body = (req.body ?? {}) as { name?: unknown; background?: unknown };
+      const raw = services.settings.raw();
+      if (raw.backgroundPresets.length >= MAX_BACKGROUND_PRESETS) {
+        res.status(400).json({
+          error: {
+            message: `预设最多 ${MAX_BACKGROUND_PRESETS} 个，请先删掉一些再添加`,
+            code: 'preset_limit',
+          },
+        });
+        return;
+      }
+
+      let background: BackgroundSettings;
+      if (body.background === undefined) {
+        // "Save what is already set" - the current background is what is on
+        // screen, so that is the snapshot.
+        background = raw.background;
+      } else if (!body.background || typeof body.background !== 'object' || Array.isArray(body.background)) {
+        res.status(400).json({ error: { message: 'background 必须是一份背景设置对象', code: 'background_invalid' } });
+        return;
+      } else {
+        background = body.background as BackgroundSettings;
+      }
+
+      const refused = validateBackground(services, { background });
+      if (refused) {
+        res.status(400).json({ error: refused });
+        return;
+      }
+
+      const preset: BackgroundPreset = {
+        id: randomUUID(),
+        name: typeof body.name === 'string' ? body.name : '',
+        createdAt: new Date().toISOString(),
+        background,
+      };
+      const effective = services.settings.update({
+        backgroundPresets: [...raw.backgroundPresets, preset],
+      });
+      const saved = effective.backgroundPresets.find((entry) => entry.id === preset.id) ?? preset;
+      log.info(`background preset added: ${saved.name}`);
+      res.status(201).json({ preset: saved, presets: effective.backgroundPresets });
+    }),
+  );
+
+  /**
+   * Deletes a preset. The background in use is untouched - a preset is only a
+   * saved copy, so removing it cannot switch what people are looking at.
+   *
+   * Contract: DELETE /api/system/background-presets/:id, requireAdmin. 200
+   * { presets }; 404 preset_not_found; 401 unauthenticated; 403 forbidden.
+   */
+  router.delete(
+    '/background-presets/:id',
+    requireAdmin,
+    handler(async (req, res) => {
+      const raw = services.settings.raw();
+      const id = String(req.params.id ?? '');
+      const existing = raw.backgroundPresets.find((entry) => entry.id === id);
+      if (!existing) {
+        res.status(404).json({
+          error: { message: '预设不存在，可能已经在别处删除', code: 'preset_not_found' },
+        });
+        return;
+      }
+      const effective = services.settings.update({
+        backgroundPresets: raw.backgroundPresets.filter((entry) => entry.id !== id),
+      });
+      log.info(`background preset removed: ${existing.name}`);
+      res.json({ presets: effective.backgroundPresets });
     }),
   );
 

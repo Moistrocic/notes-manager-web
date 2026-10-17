@@ -364,6 +364,30 @@ console.log('custom background');
       );
       return { status: response.status, payload: await response.json().catch(() => null) };
     };
+    const putSettingsBody = async (body) => {
+      const response = await fetch(origin + '/api/system/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
+    const getSettings = async () => (await fetch(origin + '/api/system/settings')).json();
+    const postPreset = async (body) => {
+      const response = await fetch(origin + '/api/system/background-presets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
+    const deletePreset = async (id) => {
+      const response = await fetch(
+        origin + '/api/system/background-presets/' + encodeURIComponent(id),
+        { method: 'DELETE' },
+      );
+      return { status: response.status, payload: await response.json().catch(() => null) };
+    };
     try {
       // The bytes decide the format; the name only supplies a label.
       const webp = Buffer.concat([
@@ -527,6 +551,155 @@ console.log('custom background');
       check('the endpoint reports nothing configured', [afterDelete.configured, afterDelete.kind, afterDelete.file], [false, null, null]);
       const gone = await fetch(origin + '/api/background/file?name=' + encodeURIComponent('删二.webp'));
       check('and the file is gone', [gone.status, (await gone.json()).error.code], [404, 'no_background']);
+
+      /* ---- Background presets -------------------------------------------- */
+      // A preset is a snapshot of the default background. It is created and
+      // removed by its own endpoints and never by PUT settings; the dialog's
+      // "use a preset" is a PUT of the snapshot, so this contract is what makes
+      // the feature work. The tests below pin all of it.
+      check(
+        'the current background is set up for the snapshot',
+        (await putSettings({ kind: 'aurora', file: '', note: '现在的', auroraA: '#112233', auroraB: '#445566' })).status,
+        200,
+      );
+      anonymous = true;
+      check('an anonymous preset creation is refused', (await postPreset({})).status, 401);
+      anonymous = false;
+      session.role = 'guest';
+      check('a guest may not create a preset', (await postPreset({})).status, 403);
+      session.role = 'admin';
+
+      const customSnapshot = {
+        ...settings.effective().background,
+        kind: 'custom',
+        file: '我的背景.webp',
+        note: '夜色',
+        dim: 0.5,
+        customParticleDensity: 320,
+      };
+      const created = await postPreset({ name: ' 夜色 ', background: customSnapshot });
+      const firstPreset = created.payload?.preset;
+      check('a named preset is created', created.status, 201);
+      check(
+        'it comes back with an id and a creation time',
+        [typeof firstPreset?.id === 'string' && firstPreset.id.length > 0, Number.isFinite(Date.parse(firstPreset?.createdAt ?? ''))],
+        [true, true],
+      );
+      check('the name is trimmed', firstPreset?.name, '夜色');
+      check(
+        'the whole background is kept as the snapshot',
+        [
+          firstPreset?.background?.kind,
+          firstPreset?.background?.file,
+          firstPreset?.background?.note,
+          firstPreset?.background?.dim,
+          firstPreset?.background?.customParticleDensity,
+        ],
+        ['custom', '我的背景.webp', '夜色', 0.5, 320],
+      );
+      check('and the list carries it', created.payload?.presets?.length, 1);
+
+      // Without a background the preset is the one configured right now.
+      const snapshotted = await postPreset({});
+      check(
+        'a preset with no background snapshots the current one',
+        [snapshotted.status, snapshotted.payload?.preset?.background?.kind, snapshotted.payload?.preset?.background?.auroraA],
+        [201, 'aurora', '#112233'],
+      );
+      check('an unnamed preset falls back to 预设 N', snapshotted.payload?.preset?.name, '预设 2');
+      check(
+        'snapshotting does not change the current background',
+        [settings.effective().background.kind, settings.effective().background.note],
+        ['aurora', '现在的'],
+      );
+
+      // The file/kind checks are the same ones PUT settings makes.
+      const presetMissing = await postPreset({ background: { ...customSnapshot, file: 'gone.png' } });
+      check(
+        'a preset naming a missing file is refused',
+        [presetMissing.status, presetMissing.payload?.error?.code],
+        [400, 'background_missing'],
+      );
+      const presetMismatch = await postPreset({ background: { ...customSnapshot, file: 'clip.mp4' } });
+      check(
+        'a preset pointing a video at the picture kind is refused',
+        [presetMismatch.status, presetMismatch.payload?.error?.code],
+        [400, 'background_kind_mismatch'],
+      );
+      const presetNotObject = await postPreset({ background: null });
+      check(
+        'a background that is not an object is refused',
+        [presetNotObject.status, presetNotObject.payload?.error?.code],
+        [400, 'background_invalid'],
+      );
+
+      // Presets are immutable: a general settings save must not be able to add,
+      // rewrite or remove one, however the body is shaped.
+      const beforePut = (await getSettings()).settings.backgroundPresets;
+      const injectedPreset = {
+        id: 'injected',
+        name: '被塞进来的',
+        createdAt: new Date().toISOString(),
+        background: { kind: 'aurora' },
+      };
+      const overwritten = await putSettingsBody({
+        background: { ...settings.effective().background, dim: 0.6 },
+        backgroundPresets: [injectedPreset],
+      });
+      check('saving settings succeeds even with a presets field', overwritten.status, 200);
+      check('and the background part is saved', settings.effective().background.dim, 0.6);
+      const afterPut = (await getSettings()).settings.backgroundPresets;
+      check('but the preset list is exactly what it was', afterPut, beforePut);
+      check('the injected preset is nowhere', afterPut.some((entry) => entry.id === 'injected'), false);
+      check('and nothing else changed either', [afterPut.length, beforePut.length], [2, 2]);
+
+      anonymous = true;
+      check('an anonymous preset delete is refused', (await deletePreset('whatever')).status, 401);
+      anonymous = false;
+      session.role = 'guest';
+      check('a guest may not delete a preset', (await deletePreset('whatever')).status, 403);
+      session.role = 'admin';
+      const unknownPreset = await deletePreset('not-a-preset');
+      check(
+        'deleting an unknown preset is a 404',
+        [unknownPreset.status, unknownPreset.payload?.error?.code],
+        [404, 'preset_not_found'],
+      );
+      const spacedPreset = await deletePreset('bad id');
+      check(
+        'an id that names nothing is the same 404',
+        [spacedPreset.status, spacedPreset.payload?.error?.code],
+        [404, 'preset_not_found'],
+      );
+      const presetCount = (await getSettings()).settings.backgroundPresets.length;
+      const removedPreset = await deletePreset(firstPreset.id);
+      check(
+        'a preset can be deleted',
+        [removedPreset.status, removedPreset.payload?.presets?.length, removedPreset.payload?.presets?.some((entry) => entry.id === firstPreset.id)],
+        [200, presetCount - 1, false],
+      );
+      check(
+        'deleting a preset leaves the background in use alone',
+        [settings.effective().background.kind, settings.effective().background.auroraA, settings.effective().background.dim],
+        ['aurora', '#112233', 0.6],
+      );
+      const reloadedPresets = new SettingsStore(dir).raw().backgroundPresets;
+      check('presets survive a restart', [reloadedPresets.length, reloadedPresets[0].id === snapshotted.payload.preset.id], [1, true]);
+
+      // 50 is the ceiling; the 51st is refused with a code the dialog explains.
+      const manyPresets = Array.from({ length: 50 }, (_, index) => ({
+        id: 'fill-' + index,
+        name: '预设 ' + (index + 1),
+        background: { kind: 'aurora' },
+      }));
+      settings.update({ backgroundPresets: manyPresets });
+      check('fifty presets fit', settings.raw().backgroundPresets.length, 50);
+      const tooMany = await postPreset({ name: '多余的' });
+      check(
+        'the fifty-first is refused',
+        [tooMany.status, tooMany.payload?.error?.code],
+        [400, 'preset_limit'],
+      );
       // (The upload's 20 MB ceiling is a raw-body parser limit and the browser
       // shrinks before sending, so no test here sends a file that big.)
     } finally {
@@ -534,6 +707,115 @@ console.log('custom background');
       server.closeAllConnections?.();
       await closed;
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Background presets: normalising a hand-edited settings.json                 */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('background presets (settings.json)');
+
+{
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'nm-presets-'));
+  try {
+    const writeSettings = (settings) =>
+      writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings), 'utf8');
+
+    // A settings.json written before presets existed has no field at all: that
+    // is "no presets yet", not an error.
+    writeSettings({ background: { kind: 'aurora', note: '旧文件' } });
+    check('a settings file without the field has no presets', new SettingsStore(dir).raw().backgroundPresets, []);
+
+    // Anything that is not a list is ignored rather than crashed on.
+    writeSettings({ backgroundPresets: { night: true } });
+    check('a non-list is ignored', new SettingsStore(dir).raw().backgroundPresets, []);
+
+    // Entries that are not usable backgrounds are dropped; the survivors get
+    // ids, names and timestamps, and their background is clamped exactly like
+    // the live setting would be.
+    writeSettings({
+      backgroundPresets: [
+        null,
+        'nope',
+        42,
+        [],
+        { name: '没有 background' },
+        {
+          id: 'kept',
+          name: '  夜色  ',
+          createdAt: '2026-01-02T03:04:05.000Z',
+          background: { kind: 'custom', file: 'wall.png', dim: 9, customParticleDensity: 9999, customParticleColor: 'red' },
+        },
+        { id: 'unnamed', background: { kind: 'aurora' } },
+        { id: 'kept', name: '重复的 id', background: { kind: 'off' } },
+        { name: '自动 id', background: { kind: 'off' } },
+      ],
+    });
+    const normalised = new SettingsStore(dir).raw().backgroundPresets;
+    check('the unusable entries are dropped', normalised.length, 3);
+    check('a kept preset keeps its id and trims its name', [normalised[0].id, normalised[0].name], ['kept', '夜色']);
+    check('its timestamp is kept', normalised[0].createdAt, '2026-01-02T03:04:05.000Z');
+    check(
+      'its background is clamped like a saved setting',
+      [normalised[0].background.dim, normalised[0].background.customParticleDensity, normalised[0].background.customParticleColor],
+      [0.85, 600, ''],
+    );
+    check('a missing name falls back to 预设 N', normalised[1].name, '预设 2');
+    check('a missing time is filled in', Number.isFinite(Date.parse(normalised[1].createdAt)), true);
+    check('a missing id is generated', typeof normalised[2].id === 'string' && normalised[2].id.length > 0, true);
+    check(
+      'a sparse background is filled in from the defaults',
+      [normalised[1].background.kind, normalised[1].background.customParticleDensity, normalised[1].background.crop],
+      ['aurora', 300, { x: 0, y: 0, w: 1, h: 1 }],
+    );
+
+    // The fallback number counts the presets that survive, not the entries in
+    // the file: a dropped entry must not leave a gap.
+    writeSettings({
+      backgroundPresets: [
+        { name: '   ', background: { kind: 'off' } },
+        { name: '中间', background: { kind: 'off' } },
+        { name: '', background: { kind: 'aurora' } },
+      ],
+    });
+    check(
+      'fallback names count the presets that survive',
+      new SettingsStore(dir).raw().backgroundPresets.map((entry) => entry.name),
+      ['预设 1', '中间', '预设 3'],
+    );
+
+    // 40 characters is the label limit; a longer one is cut, not refused.
+    writeSettings({ backgroundPresets: [{ name: '名'.repeat(60), background: { kind: 'off' } }] });
+    const longName = new SettingsStore(dir).raw().backgroundPresets[0].name;
+    check('an over-long name is truncated to 40', longName.length, 40);
+
+    // The cap is enforced on read too, so a hand-edited file cannot make the
+    // dialog draw more rows than the endpoints will accept.
+    writeSettings({
+      backgroundPresets: Array.from({ length: 60 }, (_, index) => ({
+        id: 'p-' + index,
+        name: '预设 ' + (index + 1),
+        background: { kind: 'off' },
+      })),
+    });
+    check('the list is capped at 50', new SettingsStore(dir).raw().backgroundPresets.length, 50);
+
+    // An update writes the normalised list back, so a bad file is repaired on
+    // the first save instead of being re-read on every boot.
+    const store = new SettingsStore(dir);
+    store.update({ backgroundPresets: [{ name: ' 写入 ', background: { kind: 'aurora' } }] });
+    // Imported here rather than from the module scope: a later section declares
+    // its own readFileSync, and this block runs before it.
+    const { readFileSync: readSettingsFile } = await import('node:fs');
+    const onDisk = JSON.parse(readSettingsFile(path.join(dir, 'settings.json'), 'utf8'));
+    check(
+      'an update persists the normalised list',
+      [onDisk.backgroundPresets.length, onDisk.backgroundPresets[0].name, typeof onDisk.backgroundPresets[0].id],
+      [1, '写入', 'string'],
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -86,6 +86,23 @@ export interface BackgroundSettings {
   customParticleColor: string;
 }
 
+/**
+ * A saved snapshot of the administrator's default background.
+ *
+ * A preset is immutable: "using" it copies these fields into the live settings,
+ * so editing the background afterwards changes what everyone sees now and
+ * never what the preset holds. The whole BackgroundSettings is kept - kind,
+ * file, framing and every custom-background number - because a preset that only
+ * remembered the file would not restore the look.
+ */
+export interface BackgroundPreset {
+  id: string;
+  name: string;
+  /** ISO timestamp of when the snapshot was taken. */
+  createdAt: string;
+  background: BackgroundSettings;
+}
+
 export interface GuestSettings {
   /**
    * Whether a visitor who has not signed in may browse read-only.
@@ -110,6 +127,8 @@ export interface BlogSettings {
 export interface AppSettings {
   storage: StorageSettings;
   background: BackgroundSettings;
+  /** Background snapshots the administrator can switch between. */
+  backgroundPresets: BackgroundPreset[];
   guest: GuestSettings;
   blog: BlogSettings;
 }
@@ -117,6 +136,10 @@ export interface AppSettings {
 const BACKGROUND_KINDS: BackgroundKind[] = ['off', 'aurora', 'image', 'video', 'scene', 'custom'];
 /** The smallest selection the crop editor can produce, as a server side floor. */
 const MIN_CROP = 0.05;
+/** How many background presets one settings file may hold. */
+export const MAX_BACKGROUND_PRESETS = 50;
+/** A preset's name is a label, not a paragraph. */
+const PRESET_NAME_MAX = 40;
 
 export const DEFAULT_BACKGROUND: BackgroundSettings = {
   kind: 'off',
@@ -188,6 +211,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     local: { root: '' },
   },
   background: DEFAULT_BACKGROUND,
+  backgroundPresets: [],
   guest: { enabled: true },
   blog: { enabled: false },
 };
@@ -363,6 +387,7 @@ export class SettingsStore {
         local: { root: localRoot ? resolveFromRoot(localRoot) : path.join(serverConfig.dataDir, 'notes') },
       },
       background: structuredClone(this.data.background),
+      backgroundPresets: structuredClone(this.data.backgroundPresets),
       guest: structuredClone(this.data.guest),
       blog: structuredClone(this.data.blog),
       sources,
@@ -375,6 +400,93 @@ export class SettingsStore {
     log.info('settings updated');
     return this.effective();
   }
+}
+
+/**
+ * Applies one background patch onto a background, with every value clamped.
+ *
+ * The live setting and a preset snapshot both go through this, so "what a
+ * preset restores" is exactly "what saving the form would have stored".
+ */
+function applyBackground(current: BackgroundSettings, b: Partial<BackgroundSettings>): void {
+  if (b.kind && BACKGROUND_KINDS.includes(b.kind)) current.kind = b.kind;
+  if (typeof b.file === 'string') current.file = b.file.trim();
+  if (typeof b.note === 'string') current.note = b.note.trim().slice(0, 200);
+  if (b.crop) current.crop = readCrop(b.crop, current.crop);
+  if (b.blur !== undefined) current.blur = Math.round(clampNumber(b.blur, 0, 40, current.blur));
+  if (b.dim !== undefined) current.dim = clampNumber(b.dim, 0, 0.85, current.dim);
+  if (typeof b.dynamic === 'boolean') current.dynamic = b.dynamic;
+  if (b.auroraA !== undefined) current.auroraA = colour(b.auroraA, '');
+  if (b.auroraB !== undefined) current.auroraB = colour(b.auroraB, '');
+  // The custom background: same ranges the sliders offer, enforced here so a
+  // hand-edited settings.json cannot put the animation out of range. The
+  // 1.5.x fields (customDrift, customDensity, ...) are not read at all: an old
+  // settings.json simply keeps the new defaults for them.
+  if (typeof b.customSway === 'boolean') current.customSway = b.customSway;
+  if (b.customSwayAmplitude !== undefined)
+    current.customSwayAmplitude = clampNumber(b.customSwayAmplitude, 0, 8, current.customSwayAmplitude);
+  if (b.customSwayFrequency !== undefined)
+    current.customSwayFrequency = clampNumber(b.customSwayFrequency, 0.02, 0.5, current.customSwayFrequency);
+  if (typeof b.customShowParticles === 'boolean') current.customShowParticles = b.customShowParticles;
+  if (b.customParticleRise !== undefined)
+    current.customParticleRise = clampNumber(b.customParticleRise, 0, 1000, current.customParticleRise);
+  if (b.customParticleDrift !== undefined)
+    current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 1000, current.customParticleDrift);
+  if (b.customParticleDirection !== undefined)
+    current.customParticleDirection = clampNumber(b.customParticleDirection, 0, 1, current.customParticleDirection);
+  if (b.customParticleDensity !== undefined)
+    current.customParticleDensity = Math.round(clampNumber(b.customParticleDensity, 0, 600, current.customParticleDensity));
+  // A colour that is not a plain hex string falls back to "follow the theme".
+  if (b.customParticleColor !== undefined) current.customParticleColor = colour(b.customParticleColor, '');
+}
+
+/**
+ * One preset's background, filled in and clamped from the defaults.
+ *
+ * Returns null when the value is not a background at all - those entries are
+ * dropped rather than turning into a preset that would switch everyone to a
+ * half-written setting.
+ */
+function readBackgroundSnapshot(value: unknown): BackgroundSettings | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const snapshot = structuredClone(DEFAULT_BACKGROUND);
+  applyBackground(snapshot, value as Partial<BackgroundSettings>);
+  return snapshot;
+}
+
+/**
+ * Normalises the persisted preset list.
+ *
+ * This runs whenever settings are read (and whenever they are patched), so it
+ * is also the migration for a settings.json written before presets existed:
+ * a missing field is not a failure, it is "no presets yet". Entries that are
+ * not objects, have no usable background, or reuse an id are dropped.
+ */
+function readBackgroundPresets(value: unknown): BackgroundPreset[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: BackgroundPreset[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (out.length >= MAX_BACKGROUND_PRESETS) break;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const raw = entry as Partial<BackgroundPreset>;
+    const background = readBackgroundSnapshot(raw.background);
+    if (!background) continue;
+    const id = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim() : crypto.randomUUID();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, PRESET_NAME_MAX) : '';
+    out.push({
+      id,
+      name: name || `预设 ${out.length + 1}`,
+      createdAt:
+        typeof raw.createdAt === 'string' && raw.createdAt.trim()
+          ? raw.createdAt.trim()
+          : new Date().toISOString(),
+      background,
+    });
+  }
+  return out;
 }
 
 function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefined): AppSettings {
@@ -395,38 +507,15 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
   }
   if (patch.guest && typeof patch.guest.enabled === 'boolean') out.guest.enabled = patch.guest.enabled;
   if (patch.blog && typeof patch.blog.enabled === 'boolean') out.blog.enabled = patch.blog.enabled;
-  if (patch.background) {
-    const b = (patch.background ?? {}) as Partial<BackgroundSettings>;
-    const current = out.background;
-    if (b.kind && BACKGROUND_KINDS.includes(b.kind)) current.kind = b.kind;
-    if (typeof b.file === 'string') current.file = b.file.trim();
-    if (typeof b.note === 'string') current.note = b.note.trim().slice(0, 200);
-    if (b.crop) current.crop = readCrop(b.crop, current.crop);
-    if (b.blur !== undefined) current.blur = Math.round(clampNumber(b.blur, 0, 40, current.blur));
-    if (b.dim !== undefined) current.dim = clampNumber(b.dim, 0, 0.85, current.dim);
-    if (typeof b.dynamic === 'boolean') current.dynamic = b.dynamic;
-    if (b.auroraA !== undefined) current.auroraA = colour(b.auroraA, '');
-    if (b.auroraB !== undefined) current.auroraB = colour(b.auroraB, '');
-    // The custom background: same ranges the sliders offer, enforced here so a
-    // hand-edited settings.json cannot put the animation out of range. The
-    // 1.5.x fields (customDrift, customDensity, ...) are not read at all: an old
-    // settings.json simply keeps the new defaults for them.
-    if (typeof b.customSway === 'boolean') current.customSway = b.customSway;
-    if (b.customSwayAmplitude !== undefined)
-      current.customSwayAmplitude = clampNumber(b.customSwayAmplitude, 0, 8, current.customSwayAmplitude);
-    if (b.customSwayFrequency !== undefined)
-      current.customSwayFrequency = clampNumber(b.customSwayFrequency, 0.02, 0.5, current.customSwayFrequency);
-    if (typeof b.customShowParticles === 'boolean') current.customShowParticles = b.customShowParticles;
-    if (b.customParticleRise !== undefined)
-      current.customParticleRise = clampNumber(b.customParticleRise, 0, 1000, current.customParticleRise);
-    if (b.customParticleDrift !== undefined)
-      current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 1000, current.customParticleDrift);
-    if (b.customParticleDirection !== undefined)
-      current.customParticleDirection = clampNumber(b.customParticleDirection, 0, 1, current.customParticleDirection);
-    if (b.customParticleDensity !== undefined)
-      current.customParticleDensity = Math.round(clampNumber(b.customParticleDensity, 0, 600, current.customParticleDensity));
-    // A colour that is not a plain hex string falls back to "follow the theme".
-    if (b.customParticleColor !== undefined) current.customParticleColor = colour(b.customParticleColor, '');
+  if (patch.background) applyBackground(out.background, patch.background as Partial<BackgroundSettings>);
+  // Presets normally change through their own endpoints; this is also the path
+  // a hand edited settings.json takes on the way in, so the list is normalised
+  // here - capped, given ids/names/timestamps, and dropped when an entry is not
+  // a background at all. PUT /system/settings deletes the field before calling
+  // update(): a general save must never rewrite the presets.
+  if (patch.backgroundPresets !== undefined) {
+    const presets = readBackgroundPresets(patch.backgroundPresets);
+    if (presets) out.backgroundPresets = presets;
   }
   return out;
 }

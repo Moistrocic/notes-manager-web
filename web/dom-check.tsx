@@ -14,7 +14,7 @@
 import { JSDOM } from 'jsdom';
 // Type only: erased at compile time, so it cannot run before the globals below.
 import type { CropRect } from './src/lib/wallpaper';
-import type { BlogPostSummary, NoteSummary } from './src/lib/types';
+import type { BackgroundPreset, BackgroundSettings, BlogPostSummary, NoteSummary } from './src/lib/types';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'https://notes.example.com/',
@@ -5146,6 +5146,319 @@ console.log('\ndeleting a background file (jsdom)');
     const saved = requests.filter((request) => request.method === 'PUT').pop();
     const savedBackground = saved ? (JSON.parse(saved.body ?? '{}') as { background?: { kind?: string; file?: string } }).background : undefined;
     check('the form saves nothing, not the deleted file', [savedBackground?.kind, savedBackground?.file], ['off', '']);
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+    globalThis.fetch = realFetch;
+    appStore.setState(hold);
+  }
+}
+
+/* --- background presets --------------------------------------------------- */
+console.log('\nbackground presets (jsdom)');
+{
+  const hold = appStore.getState();
+  const realFetch = globalThis.fetch;
+  const jsonResponse = (payload: unknown, status = 200) =>
+    new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } });
+
+  // What the form currently holds when the dialog opens: the theme's aurora.
+  const currentBackground: BackgroundSettings = {
+    kind: 'aurora',
+    file: '',
+    note: '现有背景',
+    crop: { x: 0, y: 0, w: 1, h: 1 },
+    blur: 0,
+    dim: 0.35,
+    dynamic: false,
+    auroraA: '#112233',
+    auroraB: '#445566',
+  };
+  // A saved custom background: the snapshot a preset restores.
+  const nightBackground: BackgroundSettings = {
+    kind: 'custom',
+    file: 'wall.png',
+    note: '夜色',
+    crop: { x: 0, y: 0, w: 1, h: 1 },
+    blur: 2,
+    dim: 0.5,
+    dynamic: false,
+    auroraA: '',
+    auroraB: '',
+    customSway: true,
+    customSwayAmplitude: 2.5,
+    customSwayFrequency: 0.1,
+    customShowParticles: true,
+    customParticleRise: 260,
+    customParticleDrift: 200,
+    customParticleDirection: 0.7,
+    customParticleDensity: 320,
+    customParticleColor: '',
+  };
+  const nightPreset: BackgroundPreset = {
+    id: 'p-night',
+    name: '夜色',
+    createdAt: '2026-01-02T03:04:05.000Z',
+    background: nightBackground,
+  };
+  let presets: BackgroundPreset[] = [nightPreset];
+  let settings: {
+    storage: {
+      driver: string;
+      openlist: { url: string; token: string; root: string; perUser: boolean; timeoutMs: number };
+      local: { root: string };
+    };
+    background: BackgroundSettings;
+    guest: { enabled: boolean };
+    blog: { enabled: boolean };
+  } = {
+    storage: {
+      driver: 'local',
+      openlist: { url: '', token: '', root: '/notes', perUser: false, timeoutMs: 15000 },
+      local: { root: '' },
+    },
+    background: currentBackground,
+    guest: { enabled: true },
+    blog: { enabled: false },
+  };
+  const adminBackground = {
+    configured: true,
+    kind: 'custom' as const,
+    file: 'wall.png',
+    bytes: 1024,
+    hash: 'abc123',
+    url: '/api/background/file?name=wall.png',
+    note: '夜色',
+    options: nightBackground,
+    available: [
+      { name: 'wall.png', kind: 'image' as const, bytes: 1024 },
+      { name: 'rossi.pkg', kind: 'scene' as const, bytes: 4096 },
+    ],
+  };
+  // A one-shot failure for the next PUT settings, used to prove a preset whose
+  // file was deleted is refused without touching the form.
+  let failNextSettingsPut: string | null = null;
+  const requests: Array<{ method: string; url: string; body?: string }> = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url = String(input);
+    const method = (init.method ?? 'GET').toUpperCase();
+    requests.push({ method, url, body: typeof init.body === 'string' ? init.body : undefined });
+    if (url.includes('/api/system/settings') && method === 'GET') {
+      return jsonResponse({
+        settings: { ...settings, backgroundPresets: presets },
+        effective: { ...settings, background: settings.background, sources: {} },
+        paths: {
+          projectRoot: '/srv/notes-manager',
+          dataDir: '/srv/notes-manager/data',
+          localNotesRoot: '/srv/notes-manager/data/notes',
+          envFile: '/srv/notes-manager/.env',
+          envFileLoaded: true,
+        },
+        env: {},
+      });
+    }
+    if (url.includes('/api/system/settings') && method === 'PUT') {
+      if (failNextSettingsPut) {
+        const message = failNextSettingsPut;
+        failNextSettingsPut = null;
+        return jsonResponse({ error: { message, code: 'background_missing' } }, 400);
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as { background?: BackgroundSettings };
+      if (body.background) settings = { ...settings, background: body.background };
+      return jsonResponse({ settings: { ...settings, backgroundPresets: presets }, effective: { ...settings, sources: {} }, status: {} });
+    }
+    if (url.endsWith('/api/system/background-presets') && method === 'POST') {
+      const body = JSON.parse(String(init.body ?? '{}')) as { name?: string; background?: BackgroundSettings };
+      const created: BackgroundPreset = {
+        id: 'p-added',
+        name: body.name ?? `预设 ${presets.length + 1}`,
+        createdAt: '2026-01-03T00:00:00.000Z',
+        background: body.background ?? settings.background,
+      };
+      presets = [...presets, created];
+      return jsonResponse({ preset: created, presets }, 201);
+    }
+    if (url.includes('/api/system/background-presets/') && method === 'DELETE') {
+      const id = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1));
+      presets = presets.filter((preset) => preset.id !== id);
+      return jsonResponse({ presets });
+    }
+    if (url.endsWith('/api/background') && method === 'GET') return jsonResponse(adminBackground);
+    return jsonResponse({});
+  }) as typeof fetch;
+
+  appStore.setState({ settingsOpen: true, adminBackground, toasts: [] } as never);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const rows = () => host.querySelectorAll('[data-testid="preset-row"]');
+  const button = (selector: string) => host.querySelector<HTMLButtonElement>(selector);
+  const toasts = () => (appStore.getState() as unknown as { toasts: Array<{ title: string }> }).toasts.map((toast) => toast.title);
+  const settingPuts = () => requests.filter((request) => request.method === 'PUT' && request.url.endsWith('/api/system/settings'));
+  const presetWrites = () =>
+    requests.filter((request) => request.url.includes('/background-presets') && request.method !== 'GET');
+  const saveButton = () =>
+    [...host.querySelectorAll('button')].find((item) => item.textContent?.trim().includes('保存设置'));
+  try {
+    await act(async () => {
+      root.render(React.createElement(SettingsDialog));
+    });
+    await flush();
+
+    // The list is a snapshot list: one row per preset, "use" on the row itself,
+    // and no edit affordance anywhere in it.
+    check('the saved presets are listed', rows().length, 1);
+    check('with their name', host.querySelector('[data-testid="preset-name"]')?.textContent, '夜色');
+    check('and what they restore', rows()[0]?.textContent?.includes('自定义壁纸 · 密度 320 · 上升 260'), true);
+    check('the add button is offered', Boolean(button('[data-testid="preset-add"]')), true);
+    check('there is no field in a row to rename it', host.querySelectorAll('[data-testid="preset-row"] input, [data-testid="preset-row"] textarea').length, 0);
+    check('the row itself is the use button', button('[data-testid="preset-use-p-night"]')?.getAttribute('aria-label'), '使用预设 夜色');
+    check('and its bin says which preset it removes', button('[data-testid="preset-delete-p-night"]')?.getAttribute('aria-label'), '删除预设 夜色');
+    check('the empty explanation is not shown while there are presets', Boolean(host.querySelector('[data-testid="preset-empty"]')), false);
+
+    // Adding: an inline name, defaulted to the next fallback, and a save that
+    // snapshots the form's background (not the saved settings).
+    await act(async () => {
+      button('[data-testid="preset-add"]')?.click();
+    });
+    await flush();
+    const nameInput = host.querySelector<HTMLInputElement>('[data-testid="preset-name-input"]');
+    check('adding a preset asks for a name', Boolean(nameInput), true);
+    check('with the next fallback name in it', nameInput?.value, '预设 2');
+    await act(async () => {
+      button('[data-testid="preset-cancel"]')?.click();
+    });
+    await flush();
+    check('cancel closes the inline editor', Boolean(host.querySelector('[data-testid="preset-name-input"]')), false);
+    check('and sends no request', presetWrites().length, 0);
+
+    await act(async () => {
+      button('[data-testid="preset-add"]')?.click();
+    });
+    await flush();
+    await typeIntoInput('[data-testid="preset-name-input"]', '  工作模式  ');
+    await act(async () => {
+      button('[data-testid="preset-save"]')?.click();
+    });
+    await flush();
+    const addRequest = requests.filter((request) => request.method === 'POST').pop();
+    const addBody = addRequest ? (JSON.parse(addRequest.body ?? '{}') as { name?: string; background?: BackgroundSettings }) : null;
+    check('the preset saves the background the form shows', addBody?.background, currentBackground);
+    check('under the trimmed name', addBody?.name, '工作模式');
+    check('the list grows by one', rows().length, 2);
+    check('and the new row is drawn', host.querySelectorAll('[data-testid="preset-name"]')[1]?.textContent, '工作模式');
+    check('a toast says it was added', toasts().includes('预设已添加'), true);
+
+    // Using: one PUT of the snapshot alone, then the form follows it.
+    await act(async () => {
+      button('[data-testid="preset-use-p-night"]')?.click();
+    });
+    await flush();
+    const useBody = JSON.parse(settingPuts().pop()?.body ?? '{}') as { background?: BackgroundSettings } & Record<string, unknown>;
+    check('using a preset sends exactly one field', Object.keys(useBody), ['background']);
+    check('and that field is the preset snapshot', useBody.background, nightBackground);
+    check('a toast names the preset that was applied', toasts().includes('已切换到预设 夜色'), true);
+
+    await act(async () => {
+      saveButton()?.click();
+    });
+    await flush();
+    const followedBody = JSON.parse(settingPuts().pop()?.body ?? '{}') as { background?: BackgroundSettings } & Record<string, unknown>;
+    check('the form followed the preset: a later save keeps it', followedBody.background, nightBackground);
+    check('and a settings save never carries the presets', 'backgroundPresets' in followedBody, false);
+    check('nor names them anywhere in the body', JSON.stringify(followedBody).includes('p-night'), false);
+
+    // A preset whose background file was deleted is refused by the server; the
+    // form must not switch to a broken snapshot.
+    failNextSettingsPut = 'backgrounds/ 里没有「gone.png」，请先把文件放进去';
+    await act(async () => {
+      button('[data-testid="preset-use-p-added"]')?.click();
+    });
+    await flush();
+    check('a preset whose file is gone fails loudly', toasts().includes('使用预设「工作模式」失败'), true);
+    await act(async () => {
+      saveButton()?.click();
+    });
+    await flush();
+    const afterFailure = JSON.parse(settingPuts().pop()?.body ?? '{}') as { background?: BackgroundSettings };
+    check('and the form was not switched to the broken preset', afterFailure.background, nightBackground);
+
+    // Immutable: editing the current background afterwards writes no preset
+    // request and does not change the rows; the row has no input at all.
+    const writesBeforeSlider = presetWrites().length;
+    const slider = host.querySelector<HTMLInputElement>('[data-custom-controls] input[type="range"]');
+    check('the applied preset brings its controls into the form', Boolean(slider), true);
+    const setRangeValue = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+    await act(async () => {
+      if (slider) {
+        setRangeValue?.call(slider, '420');
+        slider.dispatchEvent(new w.Event('input', { bubbles: true }));
+      }
+    });
+    await flush();
+    check('changing the background afterwards writes no preset', presetWrites().length, writesBeforeSlider);
+    check(
+      'and the rows still name the same presets',
+      [...host.querySelectorAll('[data-testid="preset-name"]')].map((node) => node.textContent),
+      ['夜色', '工作模式'],
+    );
+    check('there is still no rename field in a row', host.querySelectorAll('[data-testid="preset-row"] input, [data-testid="preset-row"] textarea').length, 0);
+
+    // Deleting takes two clicks; the first only arms, and four seconds later the
+    // bin puts itself back. The background in use must not move.
+    await act(async () => {
+      saveButton()?.click();
+    });
+    await flush();
+    const formBeforeDelete = JSON.parse(settingPuts().pop()?.body ?? '{}') as { background?: BackgroundSettings };
+    await act(async () => {
+      button('[data-testid="preset-delete-p-added"]')?.click();
+    });
+    await flush();
+    check('the first click sends no delete', presetWrites().filter((request) => request.method === 'DELETE').length, 0);
+    check('and turns the bin into a confirmation', button('[data-testid="preset-delete-confirm-p-added"]')?.textContent?.includes('确认删除？'), true);
+    await settled(4200);
+    check(
+      'left alone it goes back to the bin',
+      [Boolean(button('[data-testid="preset-delete-confirm-p-added"]')), Boolean(button('[data-testid="preset-delete-p-added"]'))],
+      [false, true],
+    );
+    check('still without sending a delete', presetWrites().filter((request) => request.method === 'DELETE').length, 0);
+
+    await act(async () => {
+      button('[data-testid="preset-delete-p-added"]')?.click();
+    });
+    await flush();
+    await act(async () => {
+      button('[data-testid="preset-delete-confirm-p-added"]')?.click();
+    });
+    await flush();
+    const deletes = presetWrites().filter((request) => request.method === 'DELETE');
+    check('the second click deletes that one preset', [deletes.length, deletes[0]?.url.endsWith('/p-added')], [1, true]);
+    check('the row is gone', rows().length, 1);
+    check('and a toast says it was deleted', toasts().includes('预设已删除'), true);
+    await act(async () => {
+      saveButton()?.click();
+    });
+    await flush();
+    const formAfterDelete = JSON.parse(settingPuts().pop()?.body ?? '{}') as { background?: BackgroundSettings };
+    check('deleting a preset leaves the background in use alone', formAfterDelete.background, formBeforeDelete.background);
+
+    // Empty list: explained, and the add button still there.
+    await act(async () => {
+      button('[data-testid="preset-delete-p-night"]')?.click();
+    });
+    await flush();
+    await act(async () => {
+      button('[data-testid="preset-delete-confirm-p-night"]')?.click();
+    });
+    await flush();
+    check('the last preset can be deleted too', rows().length, 0);
+    const emptyNote = host.querySelector('[data-testid="preset-empty"]');
+    check('the empty list explains what a preset is for', emptyNote?.textContent?.includes('保存当前背景设置，之后可以一键切换'), true);
+    check('and the add button is still offered', button('[data-testid="preset-add"]')?.disabled, false);
   } finally {
     await act(async () => {
       root.unmount();
