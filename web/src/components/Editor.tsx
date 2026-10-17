@@ -31,6 +31,45 @@ import { Preview, type PreviewApi } from './Preview';
 import { NoteMetaBar } from './NoteMetaBar';
 import { OutlinePanel } from './OutlinePanel';
 
+/**
+ * How long the preview waits for typing to pause before it re-renders.
+ *
+ * Long enough that a normal typing run only pays it once, short enough that the
+ * preview feels like it is following the writing rather than lagging behind it.
+ */
+const PREVIEW_SETTLE_MS = 120;
+
+/**
+ * The content the preview renders.
+ *
+ * Re-rendering the preview is not a cheap prop update: it re-parses the whole
+ * note through marked and DOMPurify, re-annotates every block, re-resolves the
+ * pictures and replaces the pane's DOM. Measured on a 1600-line note that is
+ * ~160 ms of work per keystroke - the editor showed the character only after
+ * the preview had been rebuilt, which is why long notes felt like they dropped
+ * frames while typing. The editor itself renders from the store, so the typing
+ * feedback never needed that work done synchronously; here the preview is given
+ * the note the typing has settled on, a beat later.
+ *
+ * A different note is not a lagging edit: it is shown at once, because a
+ * preview of the note you just left would be a lie on screen.
+ */
+function useSettledPreviewContent(noteId: string | null, content: string): string {
+  const [shown, setShown] = useState<{ id: string | null; content: string }>({ id: noteId, content });
+  useEffect(() => {
+    if (shown.id !== noteId) {
+      // Another note: the render below already shows its current content, so
+      // only the bookkeeping has to catch up.
+      setShown({ id: noteId, content });
+      return undefined;
+    }
+    if (shown.content === content) return undefined;
+    const timer = window.setTimeout(() => setShown({ id: noteId, content }), PREVIEW_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [noteId, content, shown]);
+  return shown.id === noteId ? shown.content : content;
+}
+
 export function Editor() {
   const activeNote = useAppStore((s) => s.activeNote);
   const loadingNote = useAppStore((s) => s.loadingNote);
@@ -66,6 +105,8 @@ export function Editor() {
   const panesRef = useRef<HTMLDivElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  // What the preview pane renders while the editor keeps up with the typing.
+  const previewContent = useSettledPreviewContent(activeNote?.id ?? null, activeNote?.content ?? '');
 
   /**
    * What is open. A note is written, a picture is looked at, and anything
@@ -196,13 +237,29 @@ export function Editor() {
     // One of them is not on screen: there is nothing to keep level with.
     if (!editor || !preview) return undefined;
 
+    // Where this effect last put a pane, so the report of that write can be told
+    // apart from the reader moving it. The report is not an instruction.
+    //
+    // A frame is the browser's usual delivery window for it - and the wait alone
+    // was not enough. At the end of a note the editor runs out of scrollable
+    // room before the preview does, so "put the last line at the top" is clamped
+    // to the editor's last screenful; its report therefore describes an earlier
+    // place, and answering it dragged the preview back up from the bottom by
+    // half a screen - the reader saw the pane bounce and could never reach the
+    // end. The number is the clamped value that was actually landed on, so it
+    // matches the report whenever it arrives, not only in the frame it was made.
+    let expectedEditor: number | null = null;
+    let expectedPreview: number | null = null;
+
     // The pane that was just moved reports its own move. That report is not an
-    // instruction, and treating it as one is what makes two panes fight.
+    // instruction, and treating it as one is what makes two panes fight. Kept as
+    // the same-frame guard it always was; the expected values above are what
+    // catch a report that arrives after the release below.
     let justMoved: HTMLElement | null = null;
     const release = () => {
       justMoved = null;
     };
-    // Released on the next frame: by then the move has been reported.
+    // Released on the next frame: by then the move has normally been reported.
     const later: (callback: FrameRequestCallback) => void =
       typeof window.requestAnimationFrame === 'function'
         ? window.requestAnimationFrame.bind(window)
@@ -211,8 +268,30 @@ export function Editor() {
     /** The rendered blocks with the source lines they came from. */
     const anchors = () => previewApiRef.current?.sourceAnchors() ?? [];
 
+    // Assigned, never animated: a smooth scroll here would still be travelling
+    // when the next event arrives, and the panes would trail each other instead
+    // of moving together. Read back after assigning, because the browser clamps
+    // the value to what is actually scrollable and that is what it will report.
+    const movePreview = (target: number) => {
+      preview.scrollTop = target;
+      expectedPreview = preview.scrollTop;
+    };
+
+    /**
+     * True when this report is the echo of the write just made to that pane.
+     *
+     * A couple of pixels of slack: the browser reports a rounded - sometimes
+     * fractional - scroll position, which is not exactly the number that was
+     * asked for. A report that misses by more is the reader, and is followed.
+     */
+    const isEcho = (expected: number | null, actual: number): boolean =>
+      expected !== null && Math.abs(expected - actual) <= 2;
+
     // The reader is in the editor: put the preview where that line is rendered.
     const followEditor = () => {
+      const echo = isEcho(expectedEditor, editor.scrollTop);
+      expectedEditor = null;
+      if (echo) return;
       if (justMoved === editor) return;
       // The preview is on its way somewhere under its own steam: those are not
       // positions to be followed. Where it lands is where the panes meet again,
@@ -229,21 +308,26 @@ export function Editor() {
       // for as long as the reader keeps still.
       if (Math.abs(target - preview.scrollTop) < 1) return;
       justMoved = preview;
-      // Assigned, never animated: a smooth scroll here would still be
-      // travelling when the next event arrives, and the panes would trail each
-      // other instead of moving together.
-      preview.scrollTop = target;
+      movePreview(target);
       later(release);
     };
 
     // The reader is in the preview: put that line at the top of the editor.
     const followPreview = () => {
+      const echo = isEcho(expectedPreview, preview.scrollTop);
+      expectedPreview = null;
+      if (echo) return;
       if (justMoved === preview) return;
       if (previewApiRef.current?.isSelfScrolling()) return;
       const position = sourcePositionAt(anchors(), preview.scrollTop);
       if (!position) return;
       justMoved = editor;
       apiRef.current?.scrollToLine(position.line, position.fraction);
+      // Where the editor actually ended up: the read-back matters, because the
+      // browser clamps scrollTop and the mapping may have asked for more room
+      // than the editor has at the end of the note. Its report will carry the
+      // clamped place, and that is the number that has to be expected.
+      expectedEditor = editor.scrollTop;
       later(release);
     };
 
@@ -612,7 +696,8 @@ export function Editor() {
                     className="min-w-0 flex-1"
                   >
                     <Preview
-                      content={activeNote.content}
+                      // A beat behind the typing - see useSettledPreviewContent.
+                      content={previewContent}
                       // Pictures inside the note are read against its own
                       // folder, so `../img/a.png` finds the right file.
                       notePath={activeNote.path}
