@@ -54,6 +54,21 @@ const matchMediaStub = () => ({
 define('matchMedia', matchMediaStub);
 // Components call window.matchMedia, which jsdom does not implement.
 (w as unknown as { matchMedia: unknown }).matchMedia = matchMediaStub;
+// jsdom has no ImageData, and the custom wallpaper's particle sprites put one
+// together before drawing. A plain holder is enough: only the canvas stub below
+// ever reads it, and that just needs the shape.
+class FakeImageData {
+  data: Uint8ClampedArray;
+  width: number;
+  height: number;
+  constructor(data: Uint8ClampedArray, width: number, height: number) {
+    this.data = data;
+    this.width = width;
+    this.height = height;
+  }
+}
+define('ImageData', FakeImageData);
+(w as unknown as { ImageData: unknown }).ImageData = FakeImageData;
 define('MutationObserver', w.MutationObserver);
 define('ResizeObserver', w.ResizeObserver ?? class { observe() {} unobserve() {} disconnect() {} });
 define('IntersectionObserver', class {
@@ -4959,13 +4974,14 @@ console.log('\ndefault background (jsdom)');
     customKind?.click();
   });
   markup = host.innerHTML;
-  check('choosing it offers an upload', markup.includes('导入图片（缩图后上传）'), true);
-  check('with a file picker behind the button', Boolean(host.querySelector('[data-background-import]')), true);
-  check(
-    'a preview of the wallpaper everyone would see',
-    Boolean(host.querySelector('[data-admin-custom-preview] [data-custom-wallpaper]')),
-    true,
-  );
+  check('choosing it offers an upload', markup.includes('导入图片或场景包（缩图后上传）'), true);
+  const adminPicker = host.querySelector<HTMLInputElement>('[data-background-import]');
+  check('with a file picker behind the button', Boolean(adminPicker), true);
+  check('which takes scene packages too', (adminPicker?.getAttribute('accept') ?? '').includes('.pkg'), true);
+  // The preview panel was removed: the crop editor is the picture everyone sees,
+  // and the wallpaper itself is on the page behind the dialog.
+  check('there is no preview panel any more', Boolean(host.querySelector('[data-admin-custom-preview]')), false);
+  check('the crop editor is what shows the picture', Boolean(host.querySelector('[data-crop-section]')), true);
   const { CUSTOM_EFFECT_SLIDERS } = await import('./src/lib/wallpaper');
   check(
     'and the shared sliders',
@@ -5322,6 +5338,8 @@ console.log('\nthe custom wallpaper (jsdom)');
   ]);
 
   /* --- the particles, with a seeded random --------------------------------- */
+  // LEGACY: the 1.5.x renderer is kept as a compatibility export for old
+  // fixtures; the wallpaper itself now draws through the library (next block).
   // The simulation is pure with `random` injected: same seed, same picture.
   {
     const config = {
@@ -5621,6 +5639,15 @@ console.log('\nthe custom wallpaper (jsdom)');
       fillRect() {},
       clearRect() {},
       createRadialGradient: () => ({ addColorStop() {} }),
+      putImageData() {},
+      drawImage() {},
+      getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+      // The library's vertex writer draws each quad with save/translate/rotate.
+      save() {},
+      restore() {},
+      translate() {},
+      rotate() {},
+      scale() {},
       beginPath() {},
       arc() {},
       fill() {},
@@ -5897,11 +5924,12 @@ console.log('\nthe custom wallpaper (jsdom)');
       [true, true],
     );
     check('a picture can be imported', Boolean(host.querySelector('[data-custom-import]')), true);
-    check(
-      'and the preview is the real wallpaper',
-      Boolean(host.querySelector('[data-custom-preview] [data-custom-wallpaper]')),
-      true,
-    );
+    const picker = host.querySelector<HTMLInputElement>('[data-custom-import]');
+    check('which takes scene packages too', (picker?.getAttribute('accept') ?? '').includes('.pkg'), true);
+    // The preview panel was removed on request; the crop editor is the only
+    // picture of the wallpaper in the dialog now.
+    check('there is no preview panel any more', Boolean(host.querySelector('[data-custom-preview]')), false);
+    check('the crop editor is what shows the picture', Boolean(host.querySelector('[data-crop-section]')), true);
     // Moving a slider writes the setting it belongs to.
     const rise = host.querySelector<HTMLInputElement>('input[aria-label="粒子上升速度"]') as HTMLInputElement;
     await act(async () => {
@@ -5921,5 +5949,158 @@ console.log('\nthe custom wallpaper (jsdom)');
   }
 }
 
+
+/* --- the production particles are the scene library's --------------------- */
+{
+  const { advanceLibraryParticles, createLibraryParticles, drawLibraryParticles, warmUpLibraryParticles } = await import(
+    './src/components/CustomWallpaper'
+  );
+  const { resolveCustomEffect } = await import('./src/lib/wallpaper');
+
+  // The library draws its random numbers from Math.random; seed it for the run
+  // so the counts and sizes below are the same on every test run (and restore
+  // the real one afterwards - later blocks must not inherit a fixed stream).
+  const realRandom = Math.random;
+  const makeRandom = (seed: number) => {
+    let state = seed >>> 0;
+    return () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let value = state;
+      value = Math.imul(value ^ (value >>> 15), value | 1);
+      value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+      return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  Math.random = makeRandom(7);
+  const systems = createLibraryParticles(resolveCustomEffect({}));
+  check('nothing is alive before the warm-up (the preset starts at 3s)', systems.root.aliveCount, 0);
+  warmUpLibraryParticles(systems);
+  check('the warm-up fills the ember field', systems.root.aliveCount > 80, true);
+  check('and its glow child comes with it', systems.glow.aliveCount > 0, true);
+
+  // Drift, read from the library's own particles: upward, mostly one way.
+  const alive = systems.root.slots.filter((slot: { alive: boolean }) => slot.alive);
+  // driftVelocity is the library's own base drift (before turbulence): its y is
+  // rise + speed * forward, so its sign says which way that particle was sent.
+  const drift = alive.map((slot: { driftVelocity: number[] }) => slot.driftVelocity[1]);
+  const meanUp = drift.reduce((sum: number, value: number) => sum + value, 0) / drift.length;
+  const forward = drift.filter((value: number) => value > 240).length / drift.length;
+  check('the embers drift upward', meanUp > 280 && meanUp < 360, true);
+  // The configured 0.7 forward ratio, with the sample's own spread.
+  check('and mostly the main way', Math.abs(forward - 0.7) <= 0.05, true);
+
+  // The quads come from the library's buildVertices: the size ramp, the alpha
+  // fade and the glow pairing are its numbers, not ours.
+  const scratch = new Float32Array(9 * 6 * 512);
+  const quads = (system: { buildVertices: (out: Float32Array, stride: number, scale: number) => number }) => {
+    const count = system.buildVertices(scratch, 9, 1);
+    const sizes: number[] = [];
+    const alphas: number[] = [];
+    for (let vertex = 0; vertex + 6 <= count; vertex += 6) {
+      const base = vertex * 9;
+      const cX = [scratch[base], scratch[base + 9], scratch[base + 18], scratch[base + 45]];
+      const cY = [scratch[base + 1], scratch[base + 10], scratch[base + 19], scratch[base + 46]];
+      sizes.push(Math.hypot(cX[1] - cX[0], cY[1] - cY[0]));
+      alphas.push(scratch[base + 8]);
+    }
+    return { count, sizes, alphas };
+  };
+  const embers = quads(systems.root);
+  check('every live ember is a quad', embers.sizes.length, systems.root.aliveCount);
+  check('with a size ramp', Math.min(...embers.sizes) < 30 && Math.max(...embers.sizes) > 300, true);
+  check('and an alpha fade', Math.min(...embers.alphas) > 0 && Math.max(...embers.alphas) <= 1, true);
+  const glow = quads(systems.glow);
+  check('the glow child is larger than the embers', Math.min(...glow.sizes) > Math.max(...embers.sizes), true);
+  check('and faint, so it reads as light', Math.max(...glow.alphas) <= 0.06, true);
+
+  // Drawing: every sprite is additive, and a later frame draws a different set.
+  const canvasProto = w.HTMLCanvasElement.prototype as unknown as { getContext: unknown };
+  const realCtx = canvasProto.getContext;
+  // The sprites are rasterised once per document, on a canvas of their own.
+  canvasProto.getContext = () => ({ putImageData() {}, fillRect() {}, drawImage() {} });
+  const draws: Array<{ op: string; alpha: number }> = [];
+  const ctx = {
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
+    fillStyle: '',
+    save() {},
+    restore() {},
+    translate() {},
+    rotate() {},
+    scale() {},
+    putImageData() {},
+    fillRect() {},
+    drawImage() {
+      draws.push({ op: ctx.globalCompositeOperation, alpha: ctx.globalAlpha });
+    },
+  };
+  try {
+    drawLibraryParticles(ctx as unknown as CanvasRenderingContext2D, systems, 1920, 1080, 1);
+    check('the particles are drawn', draws.length > 0, true);
+    check('all of them additively', draws.every((draw) => draw.op === 'lighter'), true);
+    check('and the context is put back afterwards', ctx.globalCompositeOperation, 'source-over');
+    check('the glow is part of the same pass', draws.some((draw) => draw.alpha <= 0.06), true);
+    const first = draws.map((draw) => draw.alpha).join(',');
+    draws.length = 0;
+    for (let step = 0; step < 6; step += 1) advanceLibraryParticles(systems, 1 / 60);
+    drawLibraryParticles(ctx as unknown as CanvasRenderingContext2D, systems, 1920, 1080, 1);
+    check('a later frame draws a different set', draws.map((draw) => draw.alpha).join(',') !== first, true);
+  } finally {
+    canvasProto.getContext = realCtx;
+    Math.random = realRandom;
+  }
+}
+
+/* --- a scene package can be imported as the picture ----------------------- */
+{
+  const fs = await import('node:fs');
+  const pathMod = await import('node:path');
+  const { PkgWallpaperError, isScenePkg, pictureFromScenePkg } = await import('./src/lib/scene/pkg-wallpaper');
+  // The repository keeps the standard Wallpaper Engine fixture package; it is
+  // read from disk (data/ is gitignored, so check:repo does not see it).
+  const candidates = [
+    pathMod.join(process.cwd(), '..', 'data', 'backgrounds', 'rossi.pkg'),
+    pathMod.join(process.cwd(), 'data', 'backgrounds', 'rossi.pkg'),
+  ];
+  const pkgPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? '';
+  check('the scene package fixture is there', pkgPath !== '', true);
+  if (pkgPath) {
+    const bytes = fs.readFileSync(pkgPath);
+    const notes: string[] = [];
+    const picture = await pictureFromScenePkg(new w.File([bytes], 'rossi.pkg'), (note: string) => notes.push(note));
+    check('the complete picture is read from the package', [picture.width, picture.height], [3840, 2160]);
+    check('as the layer texture, not a rendered frame', picture.source, 'layer');
+    check('at the size the texture says', picture.bytes, 7687542);
+    check(
+      'named after the texture it came from',
+      [picture.fileName.endsWith('.png'), picture.note.includes('142584003_p0')],
+      [true, true],
+    );
+    const magic = new Uint8Array(await picture.blob.slice(0, 8).arrayBuffer());
+    check('and it is a PNG', Array.from(magic), [137, 80, 78, 71, 13, 10, 26, 10]);
+    check(
+      'with progress for the dialog',
+      notes.some((note) => note.includes('读取场景包')) && notes.some((note) => note.includes('完整的壁纸图')),
+      true,
+    );
+
+    const refuse = async (file: File) => {
+      try {
+        await pictureFromScenePkg(file);
+        return 'no error';
+      } catch (err) {
+        return err instanceof PkgWallpaperError ? err.message : 'wrong error type: ' + (err as Error).message;
+      }
+    };
+    check('a file that is not a package is named as such', await refuse(new w.File([bytes], 'picture.png')), '这不是 .pkg 场景包');
+    check('an empty package is refused', await refuse(new w.File([], 'empty.pkg')), '这个场景包是空的');
+    check(
+      'and bytes that are not a package',
+      (await refuse(new w.File([new Uint8Array(12)], 'junk.pkg'))).includes('不是 Wallpaper Engine 的场景包'),
+      true,
+    );
+    check('isScenePkg is just the extension test it uses', [isScenePkg(new w.File([], 'a.PKG')), isScenePkg(new w.File([], 'a.png'))], [true, false]);
+  }
+}
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

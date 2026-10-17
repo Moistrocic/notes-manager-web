@@ -18,11 +18,12 @@ import { useEffect, useRef, useState } from 'react';
 import { api, backgroundFileUrl } from '../lib/api';
 import { cn } from '../lib/cn';
 import { formatBytes } from '../lib/format';
+import { isScenePkg, pictureFromScenePkg } from '../lib/scene/pkg-wallpaper';
 import { sceneStillUrl } from '../lib/scene/render-still';
 import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
 import { CUSTOM_EFFECT_DEFAULTS, shrinkWallpaperImage } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
-import { CustomWallpaper, CustomWallpaperControls } from './CustomWallpaper';
+import { CustomWallpaperControls } from './CustomWallpaper';
 import { StatusDetail, StatusPill } from './StatusPill';
 import { WallpaperCrop } from './WallpaperCrop';
 import { Badge, Button, Field, Input, Modal, Switch } from './ui/primitives';
@@ -36,7 +37,7 @@ const BACKGROUND_KINDS: { value: BackgroundSettings['kind']; label: string; hint
   { value: 'image', label: '图片', hint: 'JPG / PNG / WebP / GIF' },
   { value: 'video', label: '视频', hint: 'MP4 / WebM' },
   { value: 'scene', label: '场景壁纸', hint: 'Wallpaper Engine 的 .pkg，可实时渲染' },
-  { value: 'custom', label: '自定义壁纸', hint: '图片 + 晃动 + 粒子，图片先缩图再上传' },
+  { value: 'custom', label: '自定义壁纸', hint: '图片或 .pkg 取出的完整壁纸图 + 晃动 + 粒子，缩图后上传' },
 ];
 
 const KIND_LABELS: Record<string, string> = {
@@ -118,6 +119,8 @@ export function SettingsDialog() {
   /** The custom background's picture picker. */
   const backgroundFileRef = useRef<HTMLInputElement | null>(null);
   const [uploadingBackground, setUploadingBackground] = useState(false);
+  /** What the custom background import is doing right now. */
+  const [backgroundNote, setBackgroundNote] = useState<string | null>(null);
   // Reported by /api/system/status, so it is the running server's own version.
   const version = useAppStore((s) => s.status?.version);
 
@@ -212,23 +215,46 @@ export function SettingsDialog() {
   const uploadCustomBackground = async (file: File | undefined) => {
     if (!file) return;
     setUploadingBackground(true);
+    const startedAt = performance.now();
     try {
-      const shrunk = await shrinkWallpaperImage(file);
+      // Same as the personal custom wallpaper: a scene package is reduced to its
+      // complete wallpaper picture first, then that picture is shrunk and
+      // uploaded - the server only ever sees a WebP, never the 45 MB container.
+      let picture = file;
+      let origin = '';
+      if (isScenePkg(file)) {
+        setBackgroundNote('正在从场景包里取图…');
+        const extracted = await pictureFromScenePkg(file, setBackgroundNote);
+        picture = new File([extracted.blob], extracted.fileName, { type: extracted.blob.type || 'image/png' });
+        origin =
+          (extracted.source === 'layer' ? '已从场景包取出完整壁纸图' : '场景包里没有可直接取出的贴图，已渲染一帧') +
+          `：${extracted.width}×${extracted.height}、${formatBytes(extracted.bytes)}`;
+      }
+      setBackgroundNote('正在缩小图片…');
+      const shrunk = await shrinkWallpaperImage(picture);
       const stored = await api.uploadBackground(
         new File([shrunk.blob], shrunk.fileName, { type: shrunk.blob.type || 'image/webp' }),
         shrunk.fileName,
       );
       await refreshAdminBackground();
       setBackground((current) => ({ ...current, kind: 'custom', file: stored.file.name }));
+      const seconds = ((performance.now() - startedAt) / 1000).toFixed(1);
       pushToast({
         title: '背景图片已上传',
-        message: `${formatBytes(shrunk.before)} → ${formatBytes(shrunk.after)}，已选为自定义壁纸（点保存生效）`,
+        message: [origin, `${formatBytes(shrunk.before)} → ${formatBytes(shrunk.after)}`, `耗时 ${seconds}s`]
+          .filter(Boolean)
+          .join('；') + '，已选为自定义壁纸（点保存生效）',
         tone: 'success',
       });
     } catch (err) {
-      pushToast({ title: '背景图片上传失败', message: (err as Error).message, tone: 'error' });
+      pushToast({
+        title: isScenePkg(file) ? '场景包取图失败' : '背景图片上传失败',
+        message: (err as Error).message,
+        tone: 'error',
+      });
     } finally {
       setUploadingBackground(false);
+      setBackgroundNote(null);
       if (backgroundFileRef.current) backgroundFileRef.current.value = '';
     }
   };
@@ -451,7 +477,7 @@ export function SettingsDialog() {
                   <input
                     ref={backgroundFileRef}
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.pkg"
                     className="hidden"
                     data-background-import
                     onChange={(event) => void uploadCustomBackground(event.target.files?.[0])}
@@ -463,19 +489,16 @@ export function SettingsDialog() {
                     onClick={() => backgroundFileRef.current?.click()}
                   >
                     <Upload className="h-3.5 w-3.5" />
-                    导入图片（缩图后上传）
+                    导入图片或场景包（缩图后上传）
                   </Button>
                   <span className="text-[11px] text-[var(--faint)]">
                     也可以把图片放进 backgrounds/ 再点「重新读取」
                   </span>
-                </div>
-                <div
-                  role="img"
-                  aria-label="默认自定义壁纸预览"
-                  data-admin-custom-preview
-                  className="relative h-24 w-full overflow-hidden rounded-xl border border-[var(--line)]"
-                >
-                  <CustomWallpaper settings={background} url={previewUrl} />
+                  {uploadingBackground && backgroundNote ? (
+                    <span className="text-[11px] text-[var(--faint)]" data-admin-import-note>
+                      {backgroundNote}
+                    </span>
+                  ) : null}
                 </div>
                 <CustomWallpaperControls
                   value={background}
@@ -561,7 +584,7 @@ export function SettingsDialog() {
                   </div>
                 ) : null}
 
-                <div className="space-y-2">
+                <div className="space-y-2" data-crop-section>
                   <div className="flex items-baseline justify-between gap-2">
                     <span className="text-[12px] text-[var(--muted)]">取景区</span>
                     <span className="text-[11px] text-[var(--faint)]">框住的部分会填满屏幕</span>

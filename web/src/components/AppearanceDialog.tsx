@@ -19,6 +19,7 @@ import {
 import { formatBytes } from '../lib/format';
 import { canPlayScenes } from '../lib/scene/play-scene';
 import { renderSceneStillFrom } from '../lib/scene/render-still';
+import { isScenePkg, pictureFromScenePkg } from '../lib/scene/pkg-wallpaper';
 import {
   acceptFor,
   clearWallpaperFile,
@@ -28,7 +29,7 @@ import {
   type WallpaperKind,
   type WallpaperSource,
 } from '../lib/wallpaper';
-import { CustomWallpaper, CustomWallpaperControls } from './CustomWallpaper';
+import { CustomWallpaperControls } from './CustomWallpaper';
 import { FontSettings } from './FontSettings';
 import { WallpaperCrop } from './WallpaperCrop';
 import { useAppStore } from '../store/useAppStore';
@@ -128,6 +129,8 @@ export function AppearanceDialog() {
   const [busy, setBusy] = useState(false);
   /** True while an imported picture is being shrunk. */
   const [shrinking, setShrinking] = useState(false);
+  /** What the custom import is doing right now: reading a pkg, then shrinking. */
+  const [importNote, setImportNote] = useState<string | null>(null);
 
   // The local library lives outside the store: it is a listing of files on this
   // machine, not a setting, and it has to be re-established on every page load.
@@ -323,24 +326,46 @@ export function AppearanceDialog() {
   const importCustomPicture = async (file: File | undefined) => {
     if (!file) return;
     setShrinking(true);
+    const startedAt = performance.now();
     try {
-      const shrunk = await shrinkWallpaperImage(file);
+      // A scene package is not a picture: read the complete wallpaper image out
+      // of it first (its bottom layer's texture, or one rendered frame), then
+      // put that through the same shrink path as any other import.
+      let picture = file;
+      let origin = '';
+      if (isScenePkg(file)) {
+        setImportNote('正在从场景包里取图…');
+        const extracted = await pictureFromScenePkg(file, setImportNote);
+        picture = new File([extracted.blob], extracted.fileName, { type: extracted.blob.type || 'image/png' });
+        origin =
+          (extracted.source === 'layer' ? '已从场景包取出完整壁纸图' : '场景包里没有可直接取出的贴图，已渲染一帧') +
+          `：${extracted.width}×${extracted.height}、${formatBytes(extracted.bytes)}（${extracted.note}）`;
+      }
+      setImportNote('正在缩小图片…');
+      const shrunk = await shrinkWallpaperImage(picture);
       await setWallpaperFile(
         new File([shrunk.blob], shrunk.fileName, { type: shrunk.blob.type || 'image/webp' }),
         'file',
         'custom',
       );
+      const seconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+      const sizeNote = shrunk.shrunk
+        ? `${picture.name}：${formatBytes(shrunk.before)} → ${formatBytes(shrunk.after)}（长边 ${Math.max(shrunk.width, shrunk.height)}px）`
+        : `${picture.name}：${formatBytes(shrunk.before)}`;
       pushToast({
         title: shrunk.shrunk ? '图片已缩小并设为自定义壁纸' : '这张图片已经足够小，直接使用',
-        message: shrunk.shrunk
-          ? `${file.name}：${formatBytes(shrunk.before)} → ${formatBytes(shrunk.after)}（长边 ${Math.max(shrunk.width, shrunk.height)}px）`
-          : `${file.name}：${formatBytes(shrunk.before)}`,
+        message: [origin, sizeNote, `耗时 ${seconds}s`].filter(Boolean).join('；'),
         tone: 'success',
       });
     } catch (err) {
-      pushToast({ title: '图片导入失败', message: (err as Error).message, tone: 'error' });
+      pushToast({
+        title: isScenePkg(file) ? '场景包取图失败' : '图片导入失败',
+        message: (err as Error).message,
+        tone: 'error',
+      });
     } finally {
       setShrinking(false);
+      setImportNote(null);
       if (customFileRef.current) customFileRef.current.value = '';
     }
   };
@@ -482,27 +507,18 @@ export function AppearanceDialog() {
               all there is - this kind exists to show a picture, not a palette. */}
           {!locked && wallpaper.kind === 'custom' ? (
             <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
-              <div
-                role="img"
-                aria-label="自定义壁纸预览"
-                data-custom-preview
-                className="relative h-24 w-full overflow-hidden rounded-xl border border-[var(--line)]"
-              >
-                <CustomWallpaper settings={wallpaper} url={wallpaperUrl} crop={wallpaper.crop} />
-              </div>
-
               <div className="flex flex-wrap items-center gap-2">
                 <input
                   ref={customFileRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/*,.pkg"
                   className="hidden"
                   data-custom-import
                   onChange={(event) => void importCustomPicture(event.target.files?.[0])}
                 />
                 <Button variant="outline" loading={shrinking} onClick={() => customFileRef.current?.click()}>
                   <Upload className="h-3.5 w-3.5" />
-                  {wallpaperUrl ? '更换图片' : '导入图片'}
+                  {wallpaperUrl ? '更换图片或场景包' : '导入图片或场景包'}
                 </Button>
                 {wallpaperUrl ? (
                   <Button variant="ghost" size="sm" onClick={clearCustomPicture}>
@@ -511,11 +527,17 @@ export function AppearanceDialog() {
                 ) : (
                   <span className="text-[11px] text-[var(--faint)]">还没有图片，当前显示的是主题渐变占位</span>
                 )}
+                {shrinking && importNote ? (
+                  <span className="text-[11px] text-[var(--faint)]" data-custom-import-note>
+                    {importNote}
+                  </span>
+                ) : null}
               </div>
               <p className="text-[11px] leading-relaxed text-[var(--faint)]">
                 图片在浏览器里先缩小（长边 ≤2560、WebP 0.82）再存入本地 IndexedDB，不上传服务器，
-                一张 10 MB 的照片通常只剩几百 KB。晃动与粒子参数对齐 wallpaper-scene-layers 的
-                drift / oscillateposition 语义。
+                一张 10 MB 的照片通常只剩几百 KB。选 .pkg 场景包时，会先取出它的完整壁纸图
+                （一般是最底层图片层的贴图，取不到时渲染一帧），再按同样的方式缩图。
+                晃动与粒子参数对齐 wallpaper-scene-layers 的 drift / oscillateposition 语义。
               </p>
 
               <CropSection

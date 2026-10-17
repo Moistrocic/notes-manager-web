@@ -14,6 +14,13 @@ import {
   type ResolvedCustomEffect,
   type ResolvedCustomWallpaper,
 } from '../lib/wallpaper';
+import {
+  ParticleSystem,
+  createBuiltinImage,
+  parseParticleDefinition,
+  type ParticleDefinition,
+  type ParticleOptions,
+} from 'wallpaper-scene-layers';
 import { Switch } from './ui/primitives';
 
 /**
@@ -377,8 +384,6 @@ export function customSwayKeyframes(
   return { x, y, scale };
 }
 
-const FALLBACK_COLORS = { a: '#6d4cff', b: '#0ea5e9', surface: '#060a16' };
-
 /** A 2D context, or null where there is none (SSR, jsdom, old browsers). */
 function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null {
   if (!canvas) return null;
@@ -387,6 +392,232 @@ function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D |
   } catch {
     return null;
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/* The particle look, from the scene renderer's own particle system           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Two particle definitions taken from the Rossi scene the wallpaper is compared
+ * with: the ember sprite ("灰烬大") and its glow child ("emberglow").
+ *
+ * The simulation used to be a hand written imitation. It moved along the right
+ * curve but looked nothing like the scene: hard circles instead of the measured
+ * halo sprite, no additive blending, sizes two orders of magnitude too small,
+ * and a lifetime/alpha distribution nobody could point at the engine for. The
+ * renderer's particle system is pure TypeScript with no WebGL dependency, so the
+ * honest fix is to run the engine's own simulation and only write the drawing
+ * here. Sizes are in scene units, which the orthographic volume (3840 x 2160,
+ * see sceneUnitScale) turns into pixels.
+ *
+ * The layer in the scene scales its emitter (scale 2.85) and emits from a
+ * 512 x 256 box near one side; the custom wallpaper covers the whole screen, so
+ * the box is the screen and the counts are raised to keep the same density.
+ */
+const EMBER_DEFINITION_JSON: Record<string, unknown> = {
+  material: 'materials/presets/ember.json',
+  maxcount: 160,
+  starttime: 0,
+  emitter: [{ name: 'boxrandom', rate: 40, directions: '0 1 0', distancemax: '1920 1080 0' }],
+  // The engine's own ember preset, with sizes multiplied by the scene layer's
+  // 2.85 scale (50-200 engine units become 142-570 scene units here) and the
+  // rate raised so a full screen keeps a similar number of embers in the air.
+  initializer: [
+    { name: 'lifetimerandom', min: 3, max: 5 },
+    { name: 'sizerandom', min: 140, max: 560 },
+    { name: 'colorrandom', min: '255 143 102', max: '255 218 108' },
+    { name: 'turbulentvelocityrandom', offset: -0.5, scale: 0.1 },
+  ],
+  operator: [
+    { name: 'movement', drag: 0 },
+    { name: 'alphafade', fadeintime: 0.1, fadeouttime: 1 },
+    { name: 'turbulence', mask: '1 0.4 0', speedmin: 250, speedmax: 1000, phasemin: 5, phasemax: 50, timescale: 50 },
+    { name: 'oscillatealpha', frequencymax: 20, scalemin: 0.7 },
+    { name: 'sizechange', starttime: 0.7 },
+  ],
+  renderer: [{ name: 'sprite' }],
+};
+
+const EMBER_GLOW_DEFINITION_JSON: Record<string, unknown> = {
+  material: 'materials/presets/emberglow.json',
+  maxcount: 8,
+  starttime: 0,
+  emitter: [{ name: 'boxrandom', rate: 0.8, directions: '1 0 0', distancemax: '200 256 0' }],
+  initializer: [
+    { name: 'lifetimerandom', min: 3, max: 5 },
+    { name: 'sizerandom', min: 1200, max: 2400 },
+    { name: 'colorrandom', min: '255 196 175', max: '255 221 155' },
+    // A tenth of the reference's opacity: on a full-screen wallpaper the same
+    // handful of 1000 px halos would wash the whole picture out, whereas in the
+    // scene they sit over a dark corner.
+    { name: 'alpharandom', exponent: 2, min: 0.02, max: 0.06 },
+  ],
+  operator: [
+    { name: 'movement', gravity: '0 0 0' },
+    { name: 'alphafade', fadeintime: 0.5 },
+  ],
+  renderer: [{ name: 'sprite' }],
+};
+
+/** Parsed once: the definitions are constants, the systems are per wallpaper. */
+const EMBER_DEFINITIONS: { root: ParticleDefinition; glow: ParticleDefinition } = {
+  root: parseParticleDefinition(EMBER_DEFINITION_JSON),
+  glow: parseParticleDefinition(EMBER_GLOW_DEFINITION_JSON),
+};
+
+export interface LibraryParticles {
+  root: ParticleSystem;
+  glow: ParticleSystem;
+}
+
+/**
+ * The drift model itself: the seven controls are `ParticleDriftOptions` fields
+ * (the engine's "灰烬大" preset tuned them to rise 240 / speed 200 /
+ * forwardRatio 0.7), and the turbulence weight is the library's own 0.15 for
+ * drift mode.
+ */
+export function createLibraryParticles(effect: ResolvedCustomEffect): LibraryParticles {
+  const options: ParticleOptions = {
+    drift: {
+      rise: effect.rise,
+      speed: effect.drift,
+      forwardRatio: effect.direction,
+      spread: 0.6,
+      turbulence: 0.15,
+    },
+  };
+  const root = new ParticleSystem(EMBER_DEFINITIONS.root, undefined, options);
+  // The glow child mirrors the embers one to one, at a tenth of the opacity and
+  // twenty times the size - that pairing is what makes the embers glow.
+  const glow = new ParticleSystem(EMBER_DEFINITIONS.glow, root, options);
+  return { root, glow };
+}
+
+export function advanceLibraryParticles(systems: LibraryParticles, deltaSeconds: number): void {
+  // The library clamps internally as well; clamp before it so both systems share
+  // exactly the same clock after a suspended tab.
+  const dt = Math.min(Math.max(deltaSeconds, 0), 1 / 20);
+  systems.root.update(dt);
+  systems.glow.update(dt);
+}
+
+/**
+ * Runs the simulation forward before the first frame.
+ *
+ * The scene's ember layer starts empty (the engine spawns as time passes, and the
+ * preset's own starttime is 3 s). A wallpaper that is blank for the first three
+ * seconds reads as broken, so the background is warmed up to its steady state
+ * first - one frame at 60 Hz per step, the same delta the loop feeds it.
+ */
+export function warmUpLibraryParticles(systems: LibraryParticles, seconds = 3.2): void {
+  const steps = Math.ceil(seconds * 60);
+  for (let step = 0; step < steps; step += 1) advanceLibraryParticles(systems, 1 / 60);
+}
+
+/** The measured halo sprites, rasterised once per document. */
+const SPRITE_CACHE = new Map<string, HTMLCanvasElement>();
+
+function builtinSprite(name: 'particle/halo_4' | 'particle/halo'): HTMLCanvasElement | null {
+  const cached = SPRITE_CACHE.get(name);
+  if (cached) return cached;
+  if (typeof document === 'undefined') return null;
+  const image = createBuiltinImage(name);
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  const pixels = new Uint8ClampedArray(image.pixels.length);
+  pixels.set(image.pixels);
+  context.putImageData(new ImageData(pixels, image.width, image.height), 0, 0);
+  SPRITE_CACHE.set(name, canvas);
+  return canvas;
+}
+
+/** Tints of one measured sprite, keyed by an 8 step colour bucket. */
+const TINTED_SPRITES = new Map<string, HTMLCanvasElement>();
+
+function tintedSprite(base: HTMLCanvasElement, r: number, g: number, b: number): HTMLCanvasElement {
+  const red = Math.max(0, Math.min(255, Math.round(r * 255)));
+  const green = Math.max(0, Math.min(255, Math.round(g * 255)));
+  const blue = Math.max(0, Math.min(255, Math.round(b * 255)));
+  const key = `${base.width}:${red >> 5}:${green >> 5}:${blue >> 5}`;
+  const cached = TINTED_SPRITES.get(key);
+  if (cached) return cached;
+  const canvas = document.createElement('canvas');
+  canvas.width = base.width;
+  canvas.height = base.height;
+  const context = canvas.getContext('2d');
+  if (!context) return base;
+  context.drawImage(base, 0, 0);
+  // The halo sprite is white with an alpha profile; painting the particle colour
+  // "only where it is visible" tints it while keeping the measured falloff.
+  context.globalCompositeOperation = 'source-atop';
+  context.fillStyle = `rgb(${red >> 5 << 5}, ${green >> 5 << 5}, ${blue >> 5 << 5})`;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  if (TINTED_SPRITES.size > 96) {
+    const oldest = TINTED_SPRITES.keys().next().value;
+    if (oldest !== undefined) TINTED_SPRITES.delete(oldest);
+  }
+  TINTED_SPRITES.set(key, canvas);
+  return canvas;
+}
+
+let quadScratch: Float32Array | null = null;
+
+/**
+ * Draws both systems' live particles as additive sprites.
+ *
+ * `buildVertices` is the library's own writer for the GPU path - it already
+ * bakes in the size ramp, the alpha fade/oscillation, the rotation and the
+ * velocity stretch - so reading the quads back from it means the picture here
+ * cannot drift away from what the scene renderer would draw for the same
+ * particle.
+ */
+export function drawLibraryParticles(
+  context: CanvasRenderingContext2D,
+  systems: LibraryParticles,
+  width: number,
+  height: number,
+  unitScale: number,
+): void {
+  if (!quadScratch || quadScratch.length < 9 * 6 * 200) quadScratch = new Float32Array(9 * 6 * 256);
+  context.globalCompositeOperation = 'lighter';
+  context.globalAlpha = 1;
+  const sprites: Array<[ParticleSystem, HTMLCanvasElement | null]> = [
+    [systems.root, builtinSprite('particle/halo_4')],
+    [systems.glow, builtinSprite('particle/halo')],
+  ];
+  for (const [system, sprite] of sprites) {
+    if (!sprite) return;
+    const vertices = system.buildVertices(quadScratch, 9, 1);
+    for (let vertex = 0; vertex + 6 <= vertices; vertex += 6) {
+      const base = vertex * 9;
+      const next = base + 9;
+      const after = base + 18;
+      const last = base + 45;
+      const cornersX = [quadScratch[base], quadScratch[next], quadScratch[after], quadScratch[last]];
+      const cornersY = [quadScratch[base + 1], quadScratch[next + 1], quadScratch[after + 1], quadScratch[last + 1]];
+      const centerX = (cornersX[0] + cornersX[1] + cornersX[2] + cornersX[3]) / 4;
+      const centerY = (cornersY[0] + cornersY[1] + cornersY[2] + cornersY[3]) / 4;
+      const widthPx = Math.hypot(cornersX[1] - cornersX[0], cornersY[1] - cornersY[0]) * unitScale;
+      const heightPx = Math.hypot(cornersX[2] - cornersX[1], cornersY[2] - cornersY[1]) * unitScale;
+      const alpha = quadScratch[base + 8];
+      if (alpha <= 0.003 || widthPx < 0.75 || heightPx < 0.75) continue;
+      const tinted = tintedSprite(sprite, quadScratch[base + 5], quadScratch[base + 6], quadScratch[base + 7]);
+      context.globalAlpha = Math.min(1, alpha);
+      context.save();
+      // Scene units have y up, the canvas has y down: mirror the centre, and
+      // with it the rotation.
+      context.translate(width / 2 + centerX * unitScale, height / 2 - centerY * unitScale);
+      context.rotate(-Math.atan2(cornersY[1] - cornersY[0], cornersX[1] - cornersX[0]));
+      context.drawImage(tinted, -widthPx / 2, -heightPx / 2, widthPx, heightPx);
+      context.restore();
+    }
+  }
+  context.globalAlpha = 1;
+  context.globalCompositeOperation = 'source-over';
 }
 
 export interface CustomWallpaperProps {
@@ -449,29 +680,15 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     // SSR): the picture itself is still the wallpaper.
     if (!frame || (!effect.sway && !context)) return undefined;
 
-    const root = document.documentElement;
-    const readVariable = (name: string) => {
-      try {
-        return getComputedStyle(root).getPropertyValue(name);
-      } catch {
-        return '';
-      }
-    };
-    /** Resolved once per layout / theme change, never per frame. */
-    let particleColor = '';
-    let dark = root.classList.contains('dark');
-    const refreshPalette = () => {
-      dark = root.classList.contains('dark');
-      particleColor = readVariable('--accent').trim() || FALLBACK_COLORS.a;
-    };
-
     let width = 1;
     let height = 1;
+    /** Scene units per CSS pixel, from the library's orthographic volume. */
+    let unit = 1;
     /** Sway displacement in CSS pixels, from the slider's share of the short edge. */
     let amplitude = 0;
     let scale = 1;
-    let config = particleConfig(effect, 1);
-    let field: CustomParticle[] = [];
+    // The engine's own particle simulation, warmed up before the first frame.
+    const systems = createLibraryParticles(effect);
     let raf = 0;
     let running = false;
     let last = 0;
@@ -493,22 +710,20 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       height = Math.max(1, window.innerHeight || 800);
       amplitude = (effect.amplitude / 100) * Math.min(width, height);
       scale = 1 + (2 * effect.amplitude) / 100 + 0.01;
+      unit = sceneUnitScale(width, height);
       if (context && canvas) {
         // A retina screen is worth two pixels per CSS pixel and no more.
         const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
         canvas.width = Math.round(width * dpr);
         canvas.height = Math.round(height * dpr);
         context.setTransform(dpr, 0, 0, dpr, 0, 0);
-        // scene units/s -> px/s with the library's orthographic volume.
-        config = particleConfig(effect, sceneUnitScale(width, height));
       }
-      refreshPalette();
     };
 
     const paintParticles = () => {
       if (!context) return;
       context.clearRect(0, 0, width, height);
-      paintCustomParticles(context, field, particleColor, dark);
+      drawLibraryParticles(context, systems, width, height, unit);
     };
 
     const tick = (now: number) => {
@@ -519,7 +734,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
       time += delta / 1000;
       paintSway();
       if (context) {
-        advanceCustomParticles(field, delta / 1000, time, config, width, height);
+        advanceLibraryParticles(systems, delta / 1000);
         paintParticles();
       }
     };
@@ -538,7 +753,9 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
 
     layout();
     if (context) {
-      field = createCustomParticles(PARTICLE.count, config, width, height);
+      // The scene starts empty; three odd seconds of simulation means the first
+      // paint already has embers in it instead of a blank screen.
+      warmUpLibraryParticles(systems);
       paintParticles();
     }
     // The first pose is written before the first frame, so the picture starts on
@@ -548,12 +765,7 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
 
     const onResize = () => {
       layout();
-      if (context) {
-        // The particles are in pixels: a new surface gets a fresh field rather
-        // than one squeezed into the old coordinates.
-        field = createCustomParticles(PARTICLE.count, config, width, height);
-        paintParticles();
-      }
+      paintParticles();
       paintSway();
     };
     const onVisibility = () => {
@@ -563,22 +775,10 @@ export function CustomWallpaper({ settings, url, crop = FULL_CROP }: CustomWallp
     window.addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', onVisibility);
 
-    // Switching between the light and dark themes changes the accent the
-    // particles are drawn in.
-    let observer: MutationObserver | null = null;
-    if (typeof MutationObserver !== 'undefined') {
-      observer = new MutationObserver(() => {
-        refreshPalette();
-        paintParticles();
-      });
-      observer.observe(root, { attributes: true, attributeFilter: ['class'] });
-    }
-
     return () => {
       stop();
       window.removeEventListener('resize', onResize);
       document.removeEventListener('visibilitychange', onVisibility);
-      observer?.disconnect();
     };
     // The drift numbers are what shapes the field; a change is a different field.
   }, [picture, effect.sway, effect.particles, effect.amplitude, effect.frequency, effect.rise, effect.drift, effect.direction]);
