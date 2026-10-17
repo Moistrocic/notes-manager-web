@@ -2,7 +2,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   ArrowDown,
   ArrowUp,
+  ChevronDown,
   ChevronLeft,
+  ChevronUp,
   Cloud,
   CloudOff,
   FileText,
@@ -11,6 +13,7 @@ import {
   Plus,
   Search,
   Send,
+  ListOrdered,
   SlidersHorizontal,
   Sparkles,
   Star,
@@ -30,14 +33,13 @@ import {
   type SortKey,
   type SortOrder,
 } from '../store/useAppStore';
-import { NoteTree } from './NoteTree';
+import { NoteTree, compareNotes } from './NoteTree';
 import { SessionFooter } from './Sidebar';
 import { PublishDialog } from './publish/PublishDialog';
 import { PublishManagerDialog } from './publish/PublishManagerDialog';
 import { Badge, Button, Field, Input, Modal, Select, Skeleton, Tooltip } from './ui/primitives';
 
-/** What each sort is called. Titles first: an alphabetical list is the one that
- * can be scanned, and the timestamp sorts are a click away. */
+/** What each sort key is called, wherever it is shown. */
 const SORT_LABELS: Record<SortKey, string> = {
   title: '标题',
   updated: '最近更新',
@@ -54,6 +56,25 @@ const ORDERS: { value: SortOrder; label: string; hint: string; Icon: typeof Arro
   { value: 'asc', label: '升序', hint: '升序排列', Icon: ArrowUp },
   { value: 'desc', label: '降序', hint: '降序排列（倒序）', Icon: ArrowDown },
 ];
+
+/**
+ * What a prompt's inputs tell the browser and the password managers.
+ *
+ * A small dialog that appears out of nowhere asking for a name looks exactly
+ * like a login form to them: Chrome offers to save a password, Bitwarden /
+ * 1Password / LastPass paint their icon over the field. These are each
+ * manager's own opt-out, plus the generic autocomplete and spellcheck ones.
+ */
+const PROMPT_INPUT_GUARDS = {
+  autoComplete: 'off',
+  autoCorrect: 'off',
+  autoCapitalize: 'off',
+  spellCheck: false,
+  name: 'prompt-value',
+  'data-bwignore': 'true',
+  'data-1p-ignore': 'true',
+  'data-lpignore': 'true',
+} as const;
 
 /**
  * What the inline prompt is asking for.
@@ -96,12 +117,15 @@ export function NotesPanel() {
   const setQuery = useAppStore((s) => s.setQuery);
   const sort = useAppStore((s) => s.sort);
   const setSort = useAppStore((s) => s.setSort);
+  const sortKeys = useAppStore((s) => s.sortKeys);
+  const moveSortKey = useAppStore((s) => s.moveSortKey);
   const sortOrder = useAppStore((s) => s.sortOrder);
   const setSortOrder = useAppStore((s) => s.setSortOrder);
   const activeTag = useAppStore((s) => s.activeTag);
   const setActiveTag = useAppStore((s) => s.setActiveTag);
   const activeFolder = useAppStore((s) => s.activeFolder);
   const setActiveFolder = useAppStore((s) => s.setActiveFolder);
+  const lastFolder = useAppStore((s) => s.lastFolder);
   const favoriteOnly = useAppStore((s) => s.favoriteOnly);
   const pinnedOnly = useAppStore((s) => s.pinnedOnly);
   const setPinnedOnly = useAppStore((s) => s.setPinnedOnly);
@@ -167,25 +191,11 @@ export function NotesPanel() {
       ].filter((f): f is (n: NoteSummary) => boolean => f !== null);
       list = fields.length === 0 ? [] : list.filter((n) => fields.some((match) => match(n)));
     }
-    // Pinned first whatever the sort, then the sort itself, then its direction.
-    // One comparator rather than four: the direction is a property of the
-    // ordering, not of any one key, so flipping it has to flip all of them.
-    const direction = sortOrder === 'desc' ? -1 : 1;
-    return [...list].sort((a, b) => {
-      const pin = Number(b.pinned) - Number(a.pinned);
-      if (pin !== 0) return pin;
-      switch (sort) {
-        case 'created':
-          return (Date.parse(b.created) - Date.parse(a.created)) * direction;
-        case 'title':
-          return a.title.localeCompare(b.title, 'zh-Hans-CN') * direction;
-        case 'words':
-          return (b.wordCount - a.wordCount) * direction;
-        default:
-          return (Date.parse(b.updated) - Date.parse(a.updated)) * direction;
-      }
-    });
-  }, [notes, query, sort, sortOrder, activeTag, favoriteOnly, searchScope, pinnedOnly]);
+    // The same comparator the tree uses, so a note cannot be counted here in a
+    // different order than it is drawn - the order belongs to the list, not to
+    // either view of it.
+    return [...list].sort((a, b) => compareNotes(a, b, sortKeys, sortOrder));
+  }, [notes, query, sortKeys, sortOrder, activeTag, favoriteOnly, searchScope, pinnedOnly]);
 
   /**
    * A quick move names one dragged row, and which request that means depends on
@@ -197,6 +207,10 @@ export function NotesPanel() {
    */
   const quickMove = (id: string, folder: string) =>
     folders.some((entry) => entry.path === id) ? moveFolder(id, folder) : moveNote(id, folder);
+
+  // Where a new note goes: the folder of the note last opened, or the folder
+  // last clicked in the tree - as long as it is still a folder that exists.
+  const newNoteFolder = lastFolder !== '' && folders.some((folder) => folder.path === lastFolder) ? lastFolder : '';
 
   const filterLabel = favoriteOnly ? '收藏' : activeTag ? `#${activeTag}` : activeFolder !== null ? `/${activeFolder}` : '全部笔记';
 
@@ -258,7 +272,7 @@ export function NotesPanel() {
           size="md"
           className="flex-1 justify-center"
           disabled={!canWrite}
-          onClick={() => setDialog({ kind: 'newNote', value: '', folder: activeFolder ?? '' })}
+          onClick={() => setDialog({ kind: 'newNote', value: '', folder: newNoteFolder })}
           hint={canWrite ? '新建笔记' : (readOnlyReason ?? '没有写入权限')}
         >
           <Plus className="h-4 w-4" />
@@ -343,7 +357,9 @@ export function NotesPanel() {
               by default: most searches want the defaults, but a search aimed at
               tags alone is a different question and needs asking properly. */}
           <Tooltip
-            label="搜索范围与筛选"
+            // The state is a word rather than a wider button: the icon says what
+            // the control is, and the label says what it is doing.
+            label={narrowed ? '搜索范围与筛选（已筛选）' : '搜索范围与筛选'}
             side="top"
             // The offsets have to sit on the wrapper: it is the positioned
             // element, so an absolutely placed child would resolve against it.
@@ -363,7 +379,6 @@ export function NotesPanel() {
               )}
             >
               <SlidersHorizontal className="h-3 w-3" />
-              {narrowed ? '已筛选' : ''}
             </button>
           </Tooltip>
         </div>
@@ -485,6 +500,64 @@ export function NotesPanel() {
           </div>
         </div>
 
+        {/* The order the four keys take part in. Left out in the open rather
+            than folded away: which column decides the order is what the list is
+            doing, and a setting nobody can see is one nobody uses. Each row is
+            one key; the arrows move it in the order, and the first row decides
+            the order outright. */}
+        <div
+          data-testid="sort-priority"
+          role="group"
+          aria-label="排序优先级"
+          className="rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-2)_40%,transparent)] px-2 py-1.5"
+        >
+          <div className="mb-0.5 flex items-center gap-1 text-[10.5px] text-[var(--faint)]">
+            <ListOrdered className="h-3 w-3 shrink-0" />
+            <span>排序优先级</span>
+            <span className="ml-auto">从上到下</span>
+          </div>
+          <ol className="space-y-0.5">
+            {sortKeys.map((key, index) => (
+              <li
+                key={key}
+                data-testid={'sort-priority-item-' + key}
+                className="flex items-center gap-1 rounded-md px-1 py-0.5 text-[11.5px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_5%,transparent)]"
+              >
+                <span aria-hidden className="w-3 shrink-0 text-[10px] tabular-nums text-[var(--faint)]">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{SORT_LABELS[key]}</span>
+                {/* The direction is one setting for the whole order, so every row
+                    carries the same arrow: it says which way these keys run, not
+                    that this row has a direction of its own. */}
+                <span aria-hidden className="shrink-0 text-[10px] text-[var(--faint)]">
+                  {sortOrder === 'asc' ? '↑' : '↓'}
+                </span>
+                <button
+                  type="button"
+                  data-testid={'sort-priority-up-' + key}
+                  aria-label={'上移 ' + SORT_LABELS[key]}
+                  disabled={index === 0}
+                  onClick={() => moveSortKey(key, -1)}
+                  className="focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronUp className="h-3 w-3" />
+                </button>
+                <button
+                  type="button"
+                  data-testid={'sort-priority-down-' + key}
+                  aria-label={'下移 ' + SORT_LABELS[key]}
+                  disabled={index === sortKeys.length - 1}
+                  onClick={() => moveSortKey(key, 1)}
+                  className="focus-ring flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--faint)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+
         {activeTag || favoriteOnly || activeFolder !== null ? (
           <motion.button
             initial={{ opacity: 0, y: -4 }}
@@ -525,7 +598,7 @@ export function NotesPanel() {
           <EmptyState
             hasQuery={Boolean(query) || Boolean(activeTag) || favoriteOnly}
             canCreate={canWrite}
-            onCreate={() => setDialog({ kind: 'newNote', value: '', folder: activeFolder ?? '' })}
+            onCreate={() => setDialog({ kind: 'newNote', value: '', folder: newNoteFolder })}
           />
         ) : (
           <NoteTree
@@ -539,6 +612,7 @@ export function NotesPanel() {
               // Asks for the name rather than inventing one: a folder called
               // 新文件夹 that has to be renamed straight away is a step wasted.
               onCreateChild: (path) => setDialog({ kind: 'newFolder', parent: path, value: '新文件夹' }),
+              onCreateNote: (folder) => setDialog({ kind: 'newNote', value: '', folder }),
               onRenameFolder: (path) =>
                 setDialog({ kind: 'renameFolder', path, value: path.split('/').pop() ?? path }),
               onMoveFolder: (path) => setDialog({ kind: 'moveFolder', path, value: '' }),
@@ -762,7 +836,17 @@ export function PromptDialog({
   const options = info.exclude
     ? folders.filter((path) => path !== info.exclude && !path.startsWith(`${info.exclude}/`))
     : folders;
-  const ready = !info.field?.required || value.trim().length > 0;
+  // The destination is typed now, so it has to name a folder exactly: an empty
+  // answer is the root, and a near miss would put the note somewhere the user
+  // did not mean. Trimming is what keeps a stray space from being a typo.
+  const typedFolder = folder.trim();
+  const folderError =
+    typedFolder === '' || options.includes(typedFolder)
+      ? null
+      : folders.includes(typedFolder)
+        ? '不能移动到这个文件夹'
+        : '没有这个文件夹';
+  const ready = (!info.field?.required || value.trim().length > 0) && folderError === null;
 
   return (
     <Modal
@@ -781,7 +865,7 @@ export function PromptDialog({
             size="sm"
             data-testid="dialog-confirm"
             disabled={!ready}
-            onClick={() => onConfirm(value, folder)}
+            onClick={() => onConfirm(value, typedFolder)}
           >
             确定
           </Button>
@@ -792,6 +876,7 @@ export function PromptDialog({
         {info.field ? (
           <Field label={info.field.label}>
             <Input
+              {...PROMPT_INPUT_GUARDS}
               value={value}
               autoFocus
               aria-label={info.field.aria}
@@ -799,26 +884,39 @@ export function PromptDialog({
               placeholder={info.field.placeholder}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && ready) onConfirm(value, folder);
+                if (e.key === 'Enter' && ready) onConfirm(value, typedFolder);
               }}
             />
           </Field>
         ) : null}
         {info.picker ? (
-          <Field label="目标目录">
-            <Select
+          <Field label="目标目录" hint="留空表示根目录，也可以直接输入路径">
+            <Input
+              {...PROMPT_INPUT_GUARDS}
+              name="prompt-folder"
               value={folder}
               aria-label="目标目录"
               data-testid="dialog-folder-select"
+              list="prompt-folder-options"
+              placeholder="根目录"
               onChange={(e) => setFolder(e.target.value)}
-            >
-              <option value="">根目录</option>
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && ready) onConfirm(value, typedFolder);
+              }}
+            />
+            {/* The browser's own suggestion list: every folder the prompt would
+                accept, and no invented ones. An empty value is the root, which
+                is the placeholder rather than a choice. */}
+            <datalist id="prompt-folder-options">
               {options.map((path) => (
-                <option key={path} value={path}>
-                  {path}
-                </option>
+                <option key={path} value={path} />
               ))}
-            </Select>
+            </datalist>
+            {folderError ? (
+              <p data-testid="dialog-folder-error" className="mt-1 text-[11px] text-[var(--danger)]">
+                {folderError}
+              </p>
+            ) : null}
           </Field>
         ) : null}
       </div>

@@ -9,7 +9,14 @@
  * wrong section.
  */
 import { marked } from 'marked';
-import { extractHeadings, normaliseHeading, stripInlineMarkdown } from './src/lib/outline';
+import {
+  buildOutlineTree,
+  collapsibleHeadingIndexes,
+  extractHeadings,
+  normaliseHeading,
+  stripInlineMarkdown,
+  visibleOutlineRows,
+} from './src/lib/outline';
 import { slugifyHeading } from './src/lib/markdown';
 
 let failed = 0;
@@ -221,6 +228,86 @@ check('unicode letters survive', slugifyHeading('Café résumé'), 'café-résum
   check('source and rendered slugs agree', fromSource, fromRendered);
   check('the anchor from the report resolves', fromSource[0], '11-分层');
 }
+
+/* -------------------------------------------------------------------------- */
+/* The outline as a tree                                                       */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('the outline tree');
+
+/** Headings as the extractor would hand them over, one per line. */
+const headingsOf = (spec: [number, string][]) =>
+  spec.map(([level, text], index) => ({ level, text, line: index + 1 }));
+
+{
+  // A skipped level hangs off the shallower heading: the outline is a picture of
+  // the document, not of a perfectly shaped tree.
+  const tree = buildOutlineTree(headingsOf([[1, 'A'], [3, 'C'], [2, 'B'], [1, 'D']]));
+  check(
+    'a skipped level hangs off the shallower heading',
+    tree.map((node) => [node.heading.text, node.children.map((child) => child.heading.text)]),
+    [['A', ['C', 'B']], ['D', []]],
+  );
+  check(
+    'each node keeps its place in the flat list',
+    [tree[0].index, tree[0].children[0].index, tree[0].children[1].index, tree[1].index],
+    [0, 1, 2, 3],
+  );
+  check('only headings with sections can fold', collapsibleHeadingIndexes(tree), [0]);
+  check(
+    'folded, only the top level is drawn',
+    visibleOutlineRows(tree, new Set([0])).map((row) => [row.heading.text, row.depth, row.hasChildren, row.collapsed]),
+    [
+      ['A', 0, true, true],
+      ['D', 0, false, false],
+    ],
+  );
+  check(
+    'opened, its sections come out with the indent of their level',
+    visibleOutlineRows(tree, new Set()).map((row) => [row.heading.text, row.depth]),
+    [
+      ['A', 0],
+      ['C', 1],
+      ['B', 1],
+      ['D', 0],
+    ],
+  );
+}
+
+{
+  // Nested sections: a folded parent hides everything under it, however its
+  // children are folded, and a child is drawn folded until it is opened.
+  const tree = buildOutlineTree(headingsOf([[1, 'A'], [2, 'B'], [3, 'C'], [2, 'D']]));
+  check(
+    'the tree nests what is written under it',
+    tree[0].children.map((node) => [node.heading.text, node.children.map((child) => child.heading.text)]),
+    [['B', ['C']], ['D', []]],
+  );
+  check('every section that can fold is listed', collapsibleHeadingIndexes(tree), [0, 1]);
+  check(
+    'a folded parent hides its children however they are folded',
+    visibleOutlineRows(tree, new Set([0])).map((row) => row.heading.text),
+    ['A'],
+  );
+  check(
+    'opening the parent shows the level below, still folded',
+    visibleOutlineRows(tree, new Set([1])).map((row) => [row.heading.text, row.collapsed]),
+    [
+      ['A', false],
+      ['B', true],
+      ['D', false],
+    ],
+  );
+  check(
+    'and opening the child shows everything',
+    visibleOutlineRows(tree, new Set()).map((row) => row.heading.text),
+    ['A', 'B', 'C', 'D'],
+  );
+}
+
+check('an empty document has no tree', buildOutlineTree([]), []);
+check('and nothing to fold', collapsibleHeadingIndexes([]), []);
+check('nor any row to draw', visibleOutlineRows([], new Set()), []);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

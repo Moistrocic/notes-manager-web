@@ -9,8 +9,14 @@
 /**
  * "scene" is a Wallpaper Engine scene.pkg kept as-is and rendered live, rather
  * than a picture: the file stored is the container, not an image.
+ *
+ * "custom" is drawn by the app itself - two slowly wandering colour fields and
+ * a handful of particles on a canvas - so the only thing it stores is a palette
+ * and three numbers. It is the answer to "an animated background without the
+ * 40 MB file": the artwork is a few hundred bytes of code, not a downloaded
+ * video, and nothing about it depends on a file staying reachable.
  */
-export type WallpaperKind = 'none' | 'image' | 'video' | 'scene';
+export type WallpaperKind = 'none' | 'image' | 'video' | 'scene' | 'custom';
 /** Where the current wallpaper came from. "library" means a local folder. */
 export type WallpaperSource = 'url' | 'file' | 'library';
 
@@ -69,6 +75,18 @@ export interface WallpaperSettings {
   autoAccent: boolean;
   /** The colour to use when autoAccent is off. Empty means the theme's own. */
   accentColor: string;
+
+  /* The custom wallpaper's palette, and the three numbers that shape it. */
+  /** First colour; empty means the theme's accent. */
+  customA: string;
+  /** Second colour; empty means the theme's secondary accent. */
+  customB: string;
+  /** How far the colour fields wander, 0 - 1. */
+  customDrift: number;
+  /** How fast they wander, 0.2 - 2 (1 is the designed pace). */
+  customSpeed: number;
+  /** How many particles float over them, 0 - CUSTOM_MAX_PARTICLES. */
+  customDensity: number;
 }
 
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
@@ -84,7 +102,73 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   useAdminBackground: true,
   autoAccent: true,
   accentColor: '',
+  customA: '',
+  customB: '',
+  customDrift: 0.5,
+  customSpeed: 1,
+  customDensity: 60,
 };
+
+/** The most particles the custom wallpaper will draw, whatever a setting says. */
+export const CUSTOM_MAX_PARTICLES = 120;
+
+/** The two colours the custom wallpaper is drawn with. */
+export interface WallpaperColors {
+  a: string;
+  b: string;
+}
+
+/**
+ * The custom wallpaper's palette, as CSS the browser can resolve.
+ *
+ * Empty means the theme's own accents, and those are written as var() rather
+ * than read here: the still backdrop is a plain <div>, so it can follow a theme
+ * change without any JavaScript running.
+ */
+export function customColors(a: string, b: string): WallpaperColors {
+  return {
+    a: (a ?? '').trim() || 'var(--accent)',
+    b: (b ?? '').trim() || 'var(--accent-2)',
+  };
+}
+
+/**
+ * The still version of the custom wallpaper.
+ *
+ * The layer shows this before the canvas exists, on the server (which has no
+ * canvas at all), in jsdom, and anywhere a 2D context is unavailable. It is the
+ * same three-layer picture the canvas paints, flattened into CSS - so "the
+ * browser cannot animate it" costs the movement, not the look.
+ */
+export function customBackdrop(colors: WallpaperColors): string {
+  return (
+    `radial-gradient(120% 120% at 18% 12%, ${colors.a}, transparent 62%), ` +
+    `radial-gradient(110% 110% at 82% 78%, ${colors.b}, transparent 66%), ` +
+    `linear-gradient(140deg, ${colors.a}, ${colors.b})`
+  );
+}
+
+/** The particle count for a density setting, clamped to what the canvas will draw. */
+export function customParticleCount(density: number): number {
+  return Math.round(clamp(Number(density), 0, CUSTOM_MAX_PARTICLES));
+}
+
+/**
+ * A colour a canvas can paint with.
+ *
+ * A canvas cannot resolve CSS variables, so `var(--accent)` has to become the
+ * value `--accent` currently holds. `read` is passed in rather than looked up
+ * here: this stays a pure function, and the caller owns the one getComputedStyle
+ * call of a frame.
+ */
+export function resolveCssColor(value: string, read: (name: string) => string, fallback: string): string {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return fallback;
+  const variable = /^var\(\s*(--[A-Za-z0-9-]+)\s*\)$/.exec(trimmed);
+  if (!variable) return trimmed;
+  const found = read(variable[1]).trim();
+  return found || fallback;
+}
 
 /**
  * Positions a media element so the crop rectangle fills its container.
@@ -246,6 +330,13 @@ export function loadWallpaperSettings(): WallpaperSettings {
       useAdminBackground: parsed.useAdminBackground !== false,
       autoAccent: parsed.autoAccent !== false,
       accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : '',
+      // Settings written before the custom wallpaper existed hold none of
+      // these; the defaults are what it looked like the day it shipped.
+      customA: typeof parsed.customA === 'string' ? parsed.customA : '',
+      customB: typeof parsed.customB === 'string' ? parsed.customB : '',
+      customDrift: clamp(Number(parsed.customDrift ?? DEFAULT_WALLPAPER.customDrift), 0, 1),
+      customSpeed: clamp(Number(parsed.customSpeed ?? DEFAULT_WALLPAPER.customSpeed), 0.2, 2),
+      customDensity: customParticleCount(parsed.customDensity ?? DEFAULT_WALLPAPER.customDensity),
     };
   } catch {
     return { ...DEFAULT_WALLPAPER };

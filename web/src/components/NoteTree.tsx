@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Download,
   File,
+  FilePlus2,
   FileText,
   Folder,
   FolderInput,
@@ -29,6 +30,8 @@ export interface NoteTreeActions {
   onSelectNote: (id: string) => void;
   /** Opens the naming prompt; an empty path means the notes root. */
   onCreateChild: (path: string) => void;
+  /** Opens the new-note prompt with this folder already filled in. */
+  onCreateNote: (folder: string) => void;
   onRenameFolder: (path: string) => void;
   /** Opens the "move folder to..." prompt. */
   onMoveFolder: (path: string) => void;
@@ -103,28 +106,44 @@ function childrenOf(folders: FolderCount[], descending: boolean): Map<string, Fo
   return map;
 }
 
+/** How strongly `a` sorts before `b` on one key, ascending. */
+function compareOn(a: NoteSummary, b: NoteSummary, key: SortKey): number {
+  switch (key) {
+    case 'created':
+      return Date.parse(a.created) - Date.parse(b.created);
+    case 'words':
+      return a.wordCount - b.wordCount;
+    case 'title':
+      return a.title.localeCompare(b.title, 'zh-Hans-CN');
+    default:
+      return Date.parse(a.updated) - Date.parse(b.updated);
+  }
+}
+
 /**
  * The order of the notes inside one folder.
  *
- * Pinned notes stay on top whatever the column: being pinned is a property of
+ * Pinned notes stay on top whatever the order: being pinned is a property of
  * the note rather than a field being sorted on, and the one arrangement people
- * reach for when a note "must not get lost" should not be undone by switching
- * to a different column.
+ * reach for when a note "must not get lost" should not be undone by rearranging
+ * the columns.
+ *
+ * `keys` is the full priority order, most significant first: the first key that
+ * separates two notes decides, and only a tie passes the question to the next
+ * one. `order` is the single direction for the whole comparison - one direction
+ * rather than one per key, because a list that runs one way for its first column
+ * and the other way for its second is impossible to predict from the panel; the
+ * cost is that a tie breaks the same way as the key that decided it.
  */
-function compareNotes(a: NoteSummary, b: NoteSummary, sort: SortKey, order: SortOrder): number {
+export function compareNotes(a: NoteSummary, b: NoteSummary, keys: SortKey[], order: SortOrder): number {
   const pinned = Number(b.pinned) - Number(a.pinned);
   if (pinned !== 0) return pinned;
   const direction = order === 'desc' ? -1 : 1;
-  switch (sort) {
-    case 'created':
-      return direction * (Date.parse(a.created) - Date.parse(b.created));
-    case 'words':
-      return direction * (a.wordCount - b.wordCount);
-    case 'title':
-      return direction * a.title.localeCompare(b.title, 'zh-Hans-CN');
-    default:
-      return direction * (Date.parse(a.updated) - Date.parse(b.updated));
+  for (const key of keys) {
+    const result = compareOn(a, b, key);
+    if (result !== 0) return direction * result;
   }
+  return 0;
 }
 
 /**
@@ -159,10 +178,11 @@ export function NoteTree({
   canWrite: boolean;
   actions: NoteTreeActions;
 }) {
-  const sort = useAppStore((s) => s.sort);
+  const sortKeys = useAppStore((s) => s.sortKeys);
   const sortOrder = useAppStore((s) => s.sortOrder);
   const expandedFolders = useAppStore((s) => s.expandedFolders);
   const setExpandedFolders = useAppStore((s) => s.setExpandedFolders);
+  const setLastFolder = useAppStore((s) => s.setLastFolder);
   const selection = useAppStore((s) => s.selection);
   const toggleSelection = useAppStore((s) => s.toggleSelection);
   const clearSelection = useAppStore((s) => s.clearSelection);
@@ -175,9 +195,9 @@ export function NoteTree({
       list.push(note);
       map.set(note.folder, list);
     }
-    for (const list of map.values()) list.sort((a, b) => compareNotes(a, b, sort, sortOrder));
+    for (const list of map.values()) list.sort((a, b) => compareNotes(a, b, sortKeys, sortOrder));
     return map;
-  }, [notes, sort, sortOrder]);
+  }, [notes, sortKeys, sortOrder]);
 
   const tree = useMemo(() => childrenOf(folders, sortOrder === 'desc'), [folders, sortOrder]);
 
@@ -395,9 +415,10 @@ export function NoteTree({
   /**
    * Where a drag would land, read from the point the pointer is at.
    *
-   * A folder row is a destination; below the last row the tree itself is one,
-   * and that means the notes root. Anything else - a note, anywhere outside
-   * the tree - is nowhere to drop.
+   * A folder row is a destination; a note or a file is not a container, but the
+   * folder it lives in is - dropping on a file means "put it here, beside this
+   * one". Below the last row the tree itself is a destination, and that means
+   * the notes root. Anywhere outside the tree is nowhere to drop.
    */
   const dropTargetAt = (x: number, y: number): string | null => {
     const under = elementAt(x, y);
@@ -408,8 +429,13 @@ export function NoteTree({
       return canDrop('') ? '' : null;
     }
     const entry = entryOfRowKey(row.getAttribute('data-tree-row'));
-    if (entry?.kind !== 'folder') return null;
-    return canDrop(entry.id) ? entry.id : null;
+    if (!entry) return null;
+    if (entry.kind === 'folder') return canDrop(entry.id) ? entry.id : null;
+    // Every row's summary carries its folder, pictures included - their id is a
+    // hash of the path, not the path, so it says nothing about where they live.
+    const summary = notes.find((item) => item.id === entry.id);
+    const folder = (summary?.folder ?? '').replace(/^\/+|\/+$/g, '');
+    return canDrop(folder) ? folder : null;
   };
 
   /** Points the tree at wherever the pointer is, and says what it would take. */
@@ -749,6 +775,13 @@ export function NoteTree({
     return withBatch(
       [
         {
+          id: 'folder-new-note',
+          label: '在此新建笔记',
+          icon: <FilePlus2 className="h-3.5 w-3.5" />,
+          disabled: !canWrite,
+          run: () => actions.onCreateNote(path),
+        },
+        {
           id: 'folder-new-child',
           label: '新建子文件夹',
           icon: <FolderPlus className="h-3.5 w-3.5" />,
@@ -819,7 +852,18 @@ export function NoteTree({
             // filtering the list to one of its own branches is what the tree
             // exists to avoid - unless rows are being picked, and then the
             // click picks this row instead of unfolding it.
-            onActivate={(event) => activate(entry, () => toggle(folder.path), event)}
+            onActivate={(event) =>
+              activate(
+                entry,
+                () => {
+                  // Clicking a folder says where the user is working, and so
+                  // where the next new note goes.
+                  setLastFolder(folder.path);
+                  toggle(folder.path);
+                },
+                event,
+              )
+            }
             onContextMenu={(event) =>
               openMenuAt(event, folder.path, folderMenu(folder.path, picked))
             }

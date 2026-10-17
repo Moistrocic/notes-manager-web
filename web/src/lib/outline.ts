@@ -77,3 +77,86 @@ export function stripInlineMarkdown(text: string): string {
 export function normaliseHeading(text: string): string {
   return text.replace(/\s+/g, ' ').trim().toLowerCase();
 }
+
+/* -------------------------------------------------------------------------- */
+/* The outline as a tree                                                       */
+/* -------------------------------------------------------------------------- */
+
+/** One heading and the sections written under it. */
+export interface OutlineNode {
+  heading: Heading;
+  /** Position in the flat heading list - the index navigation scrolls to. */
+  index: number;
+  children: OutlineNode[];
+}
+
+/**
+ * The outline as the sections the document describes.
+ *
+ * A heading belongs under the nearest earlier heading above its own level. A
+ * skipped level - `# A` followed straight by `### C` - hangs the deeper heading
+ * off the shallower one rather than inventing the missing h2: the outline is a
+ * picture of the document, not of a perfectly shaped tree.
+ */
+export function buildOutlineTree(headings: Heading[]): OutlineNode[] {
+  const roots: OutlineNode[] = [];
+  /** The open chain of sections seen so far, deepest last. */
+  const stack: OutlineNode[] = [];
+  headings.forEach((heading, index) => {
+    while (stack.length > 0 && stack[stack.length - 1].heading.level >= heading.level) stack.pop();
+    const node: OutlineNode = { heading, index, children: [] };
+    const parent = stack[stack.length - 1];
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+    stack.push(node);
+  });
+  return roots;
+}
+
+/** The flat indexes of the headings that have sections under them. */
+export function collapsibleHeadingIndexes(tree: OutlineNode[]): number[] {
+  const out: number[] = [];
+  const walk = (nodes: OutlineNode[]) => {
+    for (const node of nodes) {
+      if (node.children.length > 0) out.push(node.index);
+      walk(node.children);
+    }
+  };
+  walk(tree);
+  return out;
+}
+
+/** A row of the outline as drawn: the depth indents it, the index navigates. */
+export interface OutlineRow {
+  heading: Heading;
+  index: number;
+  /** 0 for a top-level heading. */
+  depth: number;
+  /** Whether the row can be folded at all. */
+  hasChildren: boolean;
+  /** Whether the sections under it are currently hidden. */
+  collapsed: boolean;
+}
+
+/**
+ * The rows that are actually on screen.
+ *
+ * `collapsed` holds the flat indexes of the folded headings. A folded row is
+ * still drawn itself - it is the way back to what it hides - but nothing below
+ * it is, and a row under a folded parent is not drawn however it is folded.
+ * That is what makes "all folded" a list of the top level rather than an empty
+ * pane.
+ */
+export function visibleOutlineRows(tree: OutlineNode[], collapsed: ReadonlySet<number>): OutlineRow[] {
+  const rows: OutlineRow[] = [];
+  const walk = (nodes: OutlineNode[], depth: number) => {
+    for (const node of nodes) {
+      const hasChildren = node.children.length > 0;
+      const folded = hasChildren && collapsed.has(node.index);
+      rows.push({ heading: node.heading, index: node.index, depth, hasChildren, collapsed: folded });
+      if (hasChildren && !folded) walk(node.children, depth + 1);
+    }
+  };
+  walk(tree, 0);
+  return rows;
+}

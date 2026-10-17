@@ -41,6 +41,24 @@ export type SortOrder = 'asc' | 'desc';
 export const SORT_KEYS: SortKey[] = ['title', 'updated', 'created', 'words'];
 
 /**
+ * A full priority order built from whatever was stored.
+ *
+ * Stored data is a hint, not a contract: duplicates are dropped and missing
+ * keys are appended in the default order, so a hand-edited, truncated or
+ * outdated value still yields all four keys in some usable order instead of a
+ * short list that silently stops sorting.
+ */
+export function normaliseSortKeys(raw: unknown): SortKey[] {
+  const seen = new Set<SortKey>();
+  if (Array.isArray(raw)) {
+    for (const value of raw) {
+      if (typeof value === 'string' && (SORT_KEYS as readonly string[]).includes(value)) seen.add(value as SortKey);
+    }
+  }
+  return [...seen, ...SORT_KEYS.filter((key) => !seen.has(key))];
+}
+
+/**
  * One row the user has picked out in the tree.
  *
  * Notes are addressed by id and folders by path, so the two live in one list
@@ -109,6 +127,13 @@ interface AppState {
   query: string;
   activeTag: string | null;
   activeFolder: string | null;
+  /**
+   * Where the next new note goes: the folder of the note last opened, or the
+   * folder last clicked in the tree. '' is the notes root.
+   */
+  lastFolder: string;
+  /** Remembers the folder the panel is working in (see lastFolder). */
+  setLastFolder: (folder: string) => void;
   favoriteOnly: boolean;
   pinnedOnly: boolean;
   searchScope: SearchScope;
@@ -117,7 +142,16 @@ interface AppState {
   expandedFolders: string[];
   setExpandedFolders: (paths: string[]) => void;
   setSearchScope: (scope: SearchScope) => void;
+  /** The head of `sortKeys`: the single key the picker still speaks. */
   sort: SortKey;
+  /**
+   * Every sort key, most significant first.
+   *
+   * The order is the user's: the tree compares notes on the first key, and only
+   * when two notes tie does the second one get a say. `sort` stays beside it as
+   * the head of the list so the single-key picker keeps working.
+   */
+  sortKeys: SortKey[];
   /** Ascending by default; the picker flips it. */
   sortOrder: SortOrder;
   /** Rows the tree has picked out, for the batch actions. */
@@ -281,6 +315,10 @@ interface AppState {
   setActiveFolder: (folder: string | null) => void;
   setFavoriteOnly: (value: boolean) => void;
   setSort: (sort: SortKey) => void;
+  /** Replaces the priority order; its first key decides the order outright. */
+  setSortKeys: (keys: SortKey[]) => void;
+  /** Moves one key up (-1) or down (+1) in the priority order. */
+  moveSortKey: (key: SortKey, delta: number) => void;
   setSortOrder: (order: SortOrder) => void;
   setEditorMode: (mode: EditorMode) => void;
   toggleSidebar: (value?: boolean) => void;
@@ -301,6 +339,7 @@ interface AppState {
 
 const THEME_KEY = 'notes-manager-theme';
 const SORT_KEY = 'notes-manager-sort';
+const SORT_KEYS_KEY = 'notes-manager-sort-keys';
 const SORT_ORDER_KEY = 'notes-manager-sort-order';
 const EXPANDED_KEY = 'notes-manager-expanded-folders';
 const MODE_KEY = 'notes-manager-editor-mode';
@@ -331,6 +370,31 @@ function writeLocal(key: string, value: string): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * The saved priority order.
+ *
+ * Older builds remembered one key. When there is no order stored, the key they
+ * remembered becomes the head and the rest keep their default places: the list
+ * the user last saw, with the tie-breakers where they have always been.
+ */
+function readSortKeys(): SortKey[] {
+  try {
+    const raw = localStorage.getItem(SORT_KEYS_KEY);
+    if (raw) return normaliseSortKeys(JSON.parse(raw));
+  } catch {
+    /* fall through to the single key */
+  }
+  const legacy = readLocal<SortKey>(SORT_KEY, 'title');
+  return SORT_KEYS.includes(legacy) ? [legacy, ...SORT_KEYS.filter((key) => key !== legacy)] : [...SORT_KEYS];
+}
+
+function writeSortKeys(keys: SortKey[]): void {
+  writeLocal(SORT_KEYS_KEY, JSON.stringify(keys));
+  // Still written: an older build reads it and opens on the primary key rather
+  // than on the default one.
+  writeLocal(SORT_KEY, keys[0]);
 }
 
 /**
@@ -427,6 +491,15 @@ function samePayload(a: NotePayload | null, b: NotePayload | null): boolean {
 }
 
 /**
+ * The order the store opens with: the saved priority list, and its head as the
+ * single-key `sort` the picker still speaks.
+ */
+const initialSort: { sort: SortKey; sortKeys: SortKey[] } = (() => {
+  const sortKeys = readSortKeys();
+  return { sort: sortKeys[0], sortKeys };
+})();
+
+/**
  * The store is created as a vanilla store so the API object is reachable from
  * outside React (tests, hotkeys, non-component code) while `useAppStore`
  * behaves exactly like the usual zustand hook.
@@ -459,16 +532,15 @@ export const appStore = createStore<AppState>((set, get) => ({
   query: '',
   activeTag: null,
   activeFolder: null,
+  lastFolder: '',
   favoriteOnly: false,
   pinnedOnly: false,
   searchScope: { ...DEFAULT_SEARCH_SCOPE },
   expandedFolders: readExpanded(),
   // Titles are what people look for: an alphabetical list is the one that can
-  // be scanned, and the timestamp sorts are a click away.
-  sort: (() => {
-    const stored = readLocal<SortKey>(SORT_KEY, 'title');
-    return SORT_KEYS.includes(stored) ? stored : 'title';
-  })(),
+  // be scanned, and the timestamp sorts are a click away. The rest of the order
+  // is there to break ties, and the user can rearrange it.
+  ...initialSort,
   sortOrder: readLocal<SortOrder>(SORT_ORDER_KEY, 'asc') === 'desc' ? 'desc' : 'asc',
   selection: [],
   editorMode: readLocal<EditorMode>(MODE_KEY, 'split'),
@@ -619,6 +691,9 @@ export const appStore = createStore<AppState>((set, get) => ({
       const { note } = await api.getNote(id);
       set({
         activeNote: note,
+        // Opening a note says where the user is working: a new note made next
+        // belongs beside the one just opened.
+        lastFolder: trimSlashes(note.folder),
         loadingNote: false,
         dirty: false,
         lastSavedAt: Date.parse(note.updated),
@@ -1088,6 +1163,10 @@ export const appStore = createStore<AppState>((set, get) => ({
       else if (state.activeFolder?.startsWith(`${path}/`)) {
         set({ activeFolder: `${result.path}${state.activeFolder.slice(path.length)}` });
       }
+      if (state.lastFolder === path) set({ lastFolder: result.path });
+      else if (state.lastFolder.startsWith(`${path}/`)) {
+        set({ lastFolder: `${result.path}${state.lastFolder.slice(path.length)}` });
+      }
       await get().refreshNotes({ silent: true });
       get().pushToast({ title: '文件夹已重命名', message: result.path, tone: 'success' });
     } catch (err) {
@@ -1339,6 +1418,10 @@ export const appStore = createStore<AppState>((set, get) => ({
       else if (state.activeFolder?.startsWith(`${path}/`)) {
         set({ activeFolder: `${result.path}${state.activeFolder.slice(path.length)}` });
       }
+      if (state.lastFolder === path) set({ lastFolder: result.path });
+      else if (state.lastFolder.startsWith(`${path}/`)) {
+        set({ lastFolder: `${result.path}${state.lastFolder.slice(path.length)}` });
+      }
       get().pushToast({
         title: '文件夹已移动',
         message: `${path} → ${clean || '根目录'}`,
@@ -1354,6 +1437,9 @@ export const appStore = createStore<AppState>((set, get) => ({
       const result = await api.deleteFolder(path);
       set({ folders: result.folders });
       if (get().activeFolder === path) set({ activeFolder: null });
+      // The folder is gone, and so is anything under it: the next note falls
+      // back to the root rather than to a path that no longer exists.
+      if (get().lastFolder === path || get().lastFolder.startsWith(`${path}/`)) set({ lastFolder: '' });
       await get().refreshNotes({ silent: true });
       get().pushToast({
         title: '文件夹已移入回收站',
@@ -1460,6 +1546,7 @@ export const appStore = createStore<AppState>((set, get) => ({
   setQuery: (value) => set({ query: value }),
   setActiveTag: (tag) => set({ activeTag: tag }),
   setActiveFolder: (folder) => set({ activeFolder: folder }),
+  setLastFolder: (folder) => set({ lastFolder: folder }),
   setFavoriteOnly: (value) => set({ favoriteOnly: value }),
   setPinnedOnly: (value) => set({ pinnedOnly: value }),
 
@@ -1473,8 +1560,26 @@ export const appStore = createStore<AppState>((set, get) => ({
   },
   setSearchScope: (scope) => set({ searchScope: scope }),
   setSort: (sort) => {
-    writeLocal(SORT_KEY, sort);
-    set({ sort });
+    // Compatibility with the single-key picker: the chosen key takes over the
+    // order, and the rest keep breaking ties behind it.
+    const sortKeys = [sort, ...get().sortKeys.filter((key) => key !== sort)];
+    writeSortKeys(sortKeys);
+    set({ sort, sortKeys });
+  },
+  setSortKeys: (keys) => {
+    const sortKeys = normaliseSortKeys(keys);
+    writeSortKeys(sortKeys);
+    set({ sort: sortKeys[0], sortKeys });
+  },
+  moveSortKey: (key, delta) => {
+    const current = get().sortKeys;
+    const from = current.indexOf(key);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= current.length) return;
+    const sortKeys = [...current];
+    sortKeys.splice(from, 1);
+    sortKeys.splice(to, 0, key);
+    get().setSortKeys(sortKeys);
   },
   setSortOrder: (order) => {
     writeLocal(SORT_ORDER_KEY, order);

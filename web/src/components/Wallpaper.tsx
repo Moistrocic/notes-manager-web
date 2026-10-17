@@ -3,8 +3,9 @@ import { extractAccent } from '../lib/accent';
 import { shownWallpaper } from '../lib/admin-background';
 import { playScene, playsScenesLive, type ScenePlayer } from '../lib/scene/play-scene';
 import { sceneStillUrl } from '../lib/scene/render-still';
-import { cropMediaStyle } from '../lib/wallpaper';
+import { cropMediaStyle, customColors } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
+import { CustomWallpaper } from './CustomWallpaper';
 
 /**
  * The wallpaper layer, behind everything else.
@@ -306,7 +307,10 @@ export function Wallpaper() {
    * thing until it arrives.
    */
   useEffect(() => {
-    if (wallpaper.kind === 'none' || wallpaper.kind === 'scene' || !url) return undefined;
+    // Only a picture or a video is fetched here: the built-in and the custom
+    // background are drawn by the page itself, and a scene has its own bar.
+    if (wallpaper.kind !== 'image' && wallpaper.kind !== 'video') return undefined;
+    if (!url) return undefined;
     setLoading({ label: '正在载入背景…', ratio: null, rate: null });
     return () => setLoading(null);
   }, [wallpaper.kind, url, setLoading]);
@@ -345,6 +349,22 @@ export function Wallpaper() {
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, []);
+
+  // The custom wallpaper draws itself: no URL, no file, nothing to fetch, so
+  // it leaves before the code that expects a media source.
+  if (wallpaper.kind === 'custom') {
+    return (
+      <div className="wallpaper-layer" aria-hidden>
+        <CustomWallpaper
+          colors={customColors(wallpaper.customA, wallpaper.customB)}
+          drift={wallpaper.customDrift}
+          speed={wallpaper.customSpeed}
+          density={wallpaper.customDensity}
+        />
+        <div className="wallpaper-scrim" style={{ opacity: wallpaper.dim }} />
+      </div>
+    );
+  }
 
   const picture = wallpaper.kind === 'scene' && !live ? still : url;
   if (wallpaper.kind === 'none' || !picture || !url || failed) return null;

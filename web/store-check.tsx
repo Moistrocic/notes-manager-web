@@ -7,7 +7,7 @@
  * echoing its own state, must not write the file back. `fetch` is stubbed, so
  * every request the store makes is recorded and asserted on.
  */
-import { appStore } from './src/store/useAppStore';
+import { appStore, normaliseSortKeys, SORT_KEYS } from './src/store/useAppStore';
 import type { Note } from './src/lib/types';
 
 let failed = 0;
@@ -104,6 +104,25 @@ globalThis.fetch = (async (input: unknown, init: RequestInit = {}) => {
   const method = (init.method ?? 'GET').toUpperCase();
   const body = typeof init.body === 'string' ? init.body : undefined;
   calls.push({ method, url, body });
+
+  // The panel's own folder endpoints. The path the server answers with is what
+  // the store follows, so it is worked out here the way the server would.
+  if (url.includes('/api/notes/folders/rename')) {
+    const patch = JSON.parse(body ?? '{}') as { path?: string; name?: string };
+    const parent = String(patch.path ?? '')
+      .split('/')
+      .slice(0, -1)
+      .join('/');
+    return json({ ok: true, path: parent ? `${parent}/${patch.name}` : String(patch.name ?? ''), folders: [] });
+  }
+  if (url.includes('/api/notes/folders/move')) {
+    const patch = JSON.parse(body ?? '{}') as { path?: string; target?: string };
+    const name = String(patch.path ?? '').split('/').pop() ?? '';
+    return json({ ok: true, path: patch.target ? `${patch.target}/${name}` : name, folders: [] });
+  }
+  if (url.includes('/api/notes/folders') && method === 'DELETE') {
+    return json({ ok: true, folders: [] });
+  }
 
   const noteMatch = /\/api\/notes\/([^/?]+)/.exec(url);
   if (noteMatch) {
@@ -503,6 +522,129 @@ console.log('deep links');
   await store.getState().refreshNotes({ silent: true });
   await store.getState().selectNote('e6');
   check('the path a note is opened by carries the panel prefix', fakeLocation.pathname.startsWith('/manager/'), true);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Where the next note goes                                                    */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('lastFolder');
+
+// 21. Opening a note says where the user is working: the folder it lives in, and
+// that is where a new note made next belongs.
+{
+  const note = { ...makeNote('f1', 'body\n'), folder: 'A/B', path: '/A/B/c.md' };
+  reset(note);
+  notes.set('f1', note);
+  await store.getState().refreshNotes({ silent: true });
+  await store.getState().selectNote('f1');
+  check('opening a note remembers its folder', store.getState().lastFolder, 'A/B');
+}
+
+// 22. Clicking a folder in the tree is the panel's own call, and the root is a
+// place like any other.
+{
+  reset(makeNote('f2', 'body\n'));
+  store.getState().setLastFolder('A/B');
+  check('a clicked folder is remembered as it is', store.getState().lastFolder, 'A/B');
+  store.getState().setLastFolder('');
+  check('and the root is a place too', store.getState().lastFolder, '');
+}
+
+// 23. A folder that is renamed takes the remembered path with it - including a
+// remembered folder somewhere below it.
+{
+  const note = { ...makeNote('f3', 'body\n'), folder: 'A/B', path: '/A/B/c.md' };
+  reset(note);
+  notes.set('f3', note);
+  await store.getState().refreshNotes({ silent: true });
+  await store.getState().selectNote('f3');
+  await store.getState().renameFolder('A/B', 'B2');
+  check('a renamed folder is followed', store.getState().lastFolder, 'A/B2');
+}
+
+// 24. And so does a moved one.
+{
+  const note = { ...makeNote('f4', 'body\n'), folder: 'A/B', path: '/A/B/c.md' };
+  reset(note);
+  notes.set('f4', note);
+  await store.getState().refreshNotes({ silent: true });
+  await store.getState().selectNote('f4');
+  await store.getState().moveFolder('A/B', 'C');
+  check('a moved folder is followed', store.getState().lastFolder, 'C/B');
+}
+
+// 25. A folder that is gone cannot be remembered: the next note falls back to the
+// root rather than to a path that would have to be refused.
+{
+  const note = { ...makeNote('f5', 'body\n'), folder: 'A/B', path: '/A/B/c.md' };
+  reset(note);
+  notes.set('f5', note);
+  await store.getState().refreshNotes({ silent: true });
+  await store.getState().selectNote('f5');
+  await store.getState().deleteFolder('A/B');
+  check('a deleted folder is forgotten', store.getState().lastFolder, '');
+}
+
+/* -------------------------------------------------------------------------- */
+/* The sort priority order                                                     */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('sort priority');
+
+// 26. Whatever was stored, the order comes back as all four keys once each: a
+// hand-edited, truncated or outdated value still yields a usable order rather
+// than a short list that silently stops sorting.
+{
+  check('a full order is kept as it is', normaliseSortKeys(['words', 'title', 'created', 'updated']), [
+    'words',
+    'title',
+    'created',
+    'updated',
+  ]);
+  check('unknown keys are dropped', normaliseSortKeys(['words', 'nope']), ['words', 'title', 'updated', 'created']);
+  check(
+    'duplicates go',
+    normaliseSortKeys(['title', 'title', 'words', 'words']),
+    ['title', 'words', 'updated', 'created'],
+  );
+  check('missing keys are appended in the default order', normaliseSortKeys(['updated']), [
+    'updated',
+    'title',
+    'created',
+    'words',
+  ]);
+  check('an empty list becomes the default order', normaliseSortKeys([]), SORT_KEYS);
+  check('and so does nonsense', normaliseSortKeys(null), SORT_KEYS);
+  // What a build that remembered only one key leaves behind: that key at the
+  // head, the rest in their default places (readSortKeys does exactly this).
+  check('a single legacy key becomes the head', normaliseSortKeys(['words']), ['words', 'title', 'updated', 'created']);
+}
+
+// 27. Moving a key changes the order the list is in, and the head the picker
+// shows - the first key is the one the picker speaks.
+{
+  store.getState().setSortKeys(SORT_KEYS);
+  check('the order starts as the default', store.getState().sortKeys, SORT_KEYS);
+  check('with the head as the picker value', store.getState().sort, 'title');
+  store.getState().moveSortKey('updated', -1);
+  check('moving a key up changes the order', store.getState().sortKeys, ['updated', 'title', 'created', 'words']);
+  check('and the head with it', store.getState().sort, 'updated');
+  store.getState().moveSortKey('words', 1);
+  check('a key cannot be moved off the end', store.getState().sortKeys, ['updated', 'title', 'created', 'words']);
+  store.getState().moveSortKey('updated', 1);
+  check('down is the other way', store.getState().sortKeys, ['title', 'updated', 'created', 'words']);
+  store.getState().setSort('created');
+  check('the single-key picker promotes its key to the head', store.getState().sortKeys, [
+    'created',
+    'title',
+    'updated',
+    'words',
+  ]);
+  store.getState().setSortKeys(['words']);
+  check('a short order is filled in', store.getState().sortKeys, ['words', 'title', 'updated', 'created']);
+  store.getState().setSortKeys(SORT_KEYS);
+  check('and the default order is put back', store.getState().sortKeys, SORT_KEYS);
 }
 
 /* -------------------------------------------------------------------------- */

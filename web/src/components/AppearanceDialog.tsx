@@ -18,23 +18,36 @@ import {
 } from '../lib/local-wallpapers';
 import { canPlayScenes } from '../lib/scene/play-scene';
 import { renderSceneStillFrom } from '../lib/scene/render-still';
-import { acceptFor, type WallpaperKind, type WallpaperSource } from '../lib/wallpaper';
+import {
+  CUSTOM_MAX_PARTICLES,
+  acceptFor,
+  clearWallpaperFile,
+  customBackdrop,
+  customColors,
+  type WallpaperKind,
+  type WallpaperSource,
+} from '../lib/wallpaper';
 import { FontSettings } from './FontSettings';
 import { WallpaperCrop } from './WallpaperCrop';
 import { useAppStore } from '../store/useAppStore';
 import { Button, Field, Input, Modal, Switch } from './ui/primitives';
 
 /**
- * The three kinds of background.
+ * The kinds of background.
  *
- * Video is not a fourth button: a video file is picked, stored and shown by the
- * same path as a picture, so it lives under 本地图片 rather than taking a slot
- * that would have to be explained.
+ * Video is not a button of its own: a video file is picked, stored and shown by
+ * the same path as a picture, so it lives under 本地图片 rather than taking a
+ * slot that would have to be explained.
+ *
+ * The custom wallpaper is the opposite trade: no file at all, drawn by the app
+ * from a palette and three numbers, so it is the one kind that costs nothing to
+ * store and looks the same on every device it is set on.
  */
 const KINDS: { value: WallpaperKind; label: string; icon: typeof ImageIcon; hint: string }[] = [
   { value: 'none', label: '极光', icon: X, hint: '主题自带的动态背景，可调色' },
   { value: 'image', label: '本地图片', icon: ImageIcon, hint: 'JPG / PNG / WebP，也支持 MP4 / WebM' },
   { value: 'scene', label: '场景壁纸', icon: MonitorPlay, hint: 'Wallpaper Engine 的 .pkg，不保证都能加载' },
+  { value: 'custom', label: '自定义壁纸', icon: Sparkles, hint: '应用自己画的渐变与粒子，零文件体积' },
 ];
 
 const SOURCES: { value: WallpaperSource; label: string }[] = [
@@ -152,6 +165,9 @@ export function AppearanceDialog() {
     // The built-in background has no file behind it, and keeping a 45 MB one
     // around for a background nobody is looking at helps nobody.
     if (kind === 'none') void clearWallpaper();
+    // The custom background has no file either - drawing itself from a palette
+    // is the whole point - so the file the previous wallpaper needed goes too.
+    if (kind === 'custom') void clearWallpaperFile();
   };
 
   const chooseFolder = async () => {
@@ -302,7 +318,7 @@ export function AppearanceDialog() {
             />
           </section>
 
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {KINDS.map((kind) => {
               const Icon = kind.icon;
               const active = wallpaper.kind === kind.value;
@@ -378,9 +394,104 @@ export function AppearanceDialog() {
               )}
             </div>
           ) : null}
+
+          {/* The custom wallpaper is drawn from these: a palette and three
+              numbers, with no file behind any of them. */}
+          {!locked && wallpaper.kind === 'custom' ? (
+            <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
+              <div
+                role="img"
+                aria-label="自定义壁纸预览"
+                data-custom-preview
+                className="h-16 w-full rounded-xl border border-[var(--line)]"
+                style={{ background: customBackdrop(customColors(wallpaper.customA, wallpaper.customB)) }}
+              />
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-[12px] text-[var(--muted)]">配色</span>
+                {(
+                  [
+                    { key: 'customA' as const, label: '主色', fallback: '#6d4cff' },
+                    { key: 'customB' as const, label: '辅色', fallback: '#0ea5e9' },
+                  ] as const
+                ).map((field) => (
+                  <label key={field.key} className="flex items-center gap-2">
+                    <span className="text-[11.5px] text-[var(--faint)]">{field.label}</span>
+                    <input
+                      type="color"
+                      aria-label={`自定义壁纸${field.label}`}
+                      value={wallpaper[field.key] || field.fallback}
+                      onChange={(e) => setWallpaper({ [field.key]: e.target.value } as never)}
+                      className="h-7 w-10 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
+                    />
+                  </label>
+                ))}
+                {wallpaper.customA || wallpaper.customB ? (
+                  <button
+                    type="button"
+                    onClick={() => setWallpaper({ customA: '', customB: '' })}
+                    className="focus-ring rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                  >
+                    恢复主题色
+                  </button>
+                ) : (
+                  <span className="text-[11px] text-[var(--faint)]">当前跟随主题的两个强调色</span>
+                )}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {(
+                  [
+                    {
+                      key: 'customDrift' as const,
+                      label: '晃动幅度',
+                      min: 0,
+                      max: 1,
+                      step: 0.05,
+                      text: `${Math.round(wallpaper.customDrift * 100)}%`,
+                    },
+                    {
+                      key: 'customSpeed' as const,
+                      label: '晃动速度',
+                      min: 0.2,
+                      max: 2,
+                      step: 0.05,
+                      text: `×${wallpaper.customSpeed.toFixed(2)}`,
+                    },
+                    {
+                      key: 'customDensity' as const,
+                      label: '粒子数量',
+                      min: 0,
+                      max: CUSTOM_MAX_PARTICLES,
+                      step: 5,
+                      text: `${Math.round(wallpaper.customDensity)}`,
+                    },
+                  ] as const
+                ).map((control) => (
+                  <label key={control.key} className="space-y-1.5">
+                    <span className="flex items-center justify-between text-[12px] text-[var(--muted)]">
+                      <span>{control.label}</span>
+                      <span className="text-[var(--faint)]">{control.text}</span>
+                    </span>
+                    <input
+                      type="range"
+                      aria-label={control.label}
+                      min={control.min}
+                      max={control.max}
+                      step={control.step}
+                      value={wallpaper[control.key]}
+                      onChange={(e) => setWallpaper({ [control.key]: Number(e.target.value) } as never)}
+                      className="w-full accent-[var(--accent)]"
+                    />
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] leading-relaxed text-[var(--faint)]">
+                背景由应用实时绘制，存的只是两个颜色和三个数字——换一台设备只要重设这些，不占空间。
+              </p>
+            </div>
+          ) : null}
         </section>
 
-        {!locked && wallpaper.kind !== 'none' ? (
+        {!locked && wallpaper.kind !== 'none' && wallpaper.kind !== 'custom' ? (
           <>
             <section className="space-y-3">
               <div className="flex items-center gap-2">

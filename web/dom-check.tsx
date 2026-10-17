@@ -172,12 +172,92 @@ await flush();
 
 console.log('in-note navigation (jsdom)');
 
+/** Opens every branch of the outline: it starts folded, showing top-level headings. */
+const expandOutline = async () => {
+  await act(async () => {
+    host
+      .querySelector('[data-testid="outline-toggle-all"]')
+      ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+};
+
 const outlineButtons = () =>
   Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel button')).filter((b) =>
     b.textContent?.includes('1.2'),
   );
 
-// 1. the outline is rendered with the document's headings
+// 0. The outline folds, and it starts folded to the top level: a long note is for
+// reading, and the outline is for finding a section in it.
+const outlineRows = () => Array.from(host.querySelectorAll('.outline-panel li'));
+const collapseButtons = () =>
+  Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel [data-outline-collapse]'));
+const collapseToggle = () => host.querySelector<HTMLButtonElement>('.outline-panel [data-outline-collapse]');
+const toggleAll = () => host.querySelector<HTMLButtonElement>('[data-testid="outline-toggle-all"]');
+const outlineClick = async (element: Element | null | undefined) => {
+  await act(async () => {
+    element?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
+};
+
+check('the outline starts folded', outlineRows().length, 1);
+check('showing only the top-level heading', outlineRows()[0]?.textContent?.trim(), '1.1 分层');
+check('with a fold control that says it is folded', collapseToggle()?.getAttribute('aria-expanded'), 'false');
+check('named for the section it holds', collapseToggle()?.getAttribute('aria-label'), '展开 1.1 分层');
+check('and one control for all of them', toggleAll()?.getAttribute('aria-label'), '全部展开');
+
+await outlineClick(collapseToggle());
+check('opening a section shows what is under it', outlineRows().length, 2);
+check('which says it is open', collapseToggle()?.getAttribute('aria-expanded'), 'true');
+check('and offers to close it again', collapseToggle()?.getAttribute('aria-label'), '收起 1.1 分层');
+check(
+  'the section under it is drawn but still folded',
+  outlineRows().map((row) => row.textContent?.trim()),
+  ['1.1 分层', '1.2 权限'],
+);
+await outlineClick(collapseButtons()[1]);
+check('opening the nested section shows the deepest heading', outlineRows().length, 3);
+await outlineClick(collapseButtons()[1]);
+check('closing it puts it away again', outlineRows().length, 2);
+await outlineClick(collapseToggle());
+check('closing the parent hides everything under it', outlineRows().length, 1);
+
+// One control for all of them.
+await outlineClick(toggleAll());
+check('opening everything shows every heading', outlineRows().length, 3);
+check('and the control now offers the other way', toggleAll()?.getAttribute('aria-label'), '全部收起');
+check(
+  'each section says it is open',
+  collapseButtons().map((button) => button.getAttribute('aria-expanded')),
+  ['true', 'true'],
+);
+// Navigation is a heading and its place in the flat list, whatever is folded.
+w.history.replaceState(null, '', '/public/Notes/nav.md');
+const detailsButton = Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel button')).find(
+  (button) => button.textContent?.trim() === 'Details',
+);
+check('the deepest heading is there to click', Boolean(detailsButton), true);
+await outlineClick(detailsButton);
+check('and clicking it navigates there', decodeURIComponent(w.location.hash), '#details');
+
+// A different note starts folded again - the outline is about the note in front
+// of you, not about where you were in the last one.
+await act(async () => {
+  appStore.setState({ activeNote: { ...note, id: 'nav2', content: '# A\n\n## B\n\n## C\n' } } as never);
+});
+await flush();
+check('another note starts folded', outlineRows().length, 1);
+check('with its own top-level heading', outlineRows()[0]?.textContent?.trim(), 'A');
+await act(async () => {
+  appStore.setState({ activeNote: note } as never);
+});
+await flush();
+check('and going back starts folded too', outlineRows().length, 1);
+
+// 1. the outline is rendered with the document's headings. It opens folded, so
+// every branch has to be opened before all three are on screen.
+await expandOutline();
 check('outline lists the headings', host.querySelectorAll('.outline-panel li').length, 3);
 
 // 2. clicking an outline entry updates the address bar *and* scrolls the preview
@@ -496,10 +576,15 @@ console.log('\nwallpaper framing and hover labels (jsdom)');
         crop,
         dynamicScene: false,
         useAdminBackground: true,
-      auroraA: '',
+        auroraA: '',
         auroraB: '',
         autoAccent: true,
         accentColor: '',
+        customA: '',
+        customB: '',
+        customDrift: 0.5,
+        customSpeed: 1,
+        customDensity: 60,
       },
       wallpaperUrl: 'https://cdn.example.com/a.png',
     });
@@ -749,6 +834,11 @@ console.log('\nappearance dialog (jsdom)');
       auroraB: '',
       autoAccent: true,
       accentColor: '',
+      customA: '',
+      customB: '',
+      customDrift: 0.5,
+      customSpeed: 1,
+      customDensity: 60,
     },
     wallpaperUrl: null,
   });
@@ -1218,6 +1308,24 @@ async function closeMenu() {
   await settled();
 }
 
+/**
+ * Types into a controlled input the way a browser does.
+ *
+ * React remembers the value it last wrote to the node, so assigning `.value`
+ * directly is noticed - and ignored. The native setter has to be used, then an
+ * `input` event sent, which is what a keystroke ends with.
+ */
+async function typeIntoInput(selector: string, value: string) {
+  const element = document.querySelector<HTMLInputElement>(selector);
+  if (!element) return;
+  const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
+  await act(async () => {
+    setter?.call(element, value);
+    element.dispatchEvent(new w.Event('input', { bubbles: true }));
+  });
+  await flush();
+}
+
 console.log('\nnote list (jsdom)');
 {
   const renderOnce = async (node: React.ReactElement) => {
@@ -1466,7 +1574,48 @@ console.log('\nthe tree\'s own menus (jsdom)');
     openMenuItems().includes('folder-delete') && openMenuLabels().some((label) => label.includes('可恢复')),
     true,
   );
+
+  // A folder can also start a note inside itself, which is where the menu is the
+  // shortest way to say "a new note goes here".
+  check('a folder can start a note in itself', openMenuItems().includes('folder-new-note'), true);
+  check('saying where the note will go', openMenuLabels().some((label) => label.includes('在此新建笔记')), true);
+  await act(async () => {
+    document.querySelector<HTMLElement>('[data-menu-item="folder-new-note"]')?.click();
+  });
+  await flush();
+  check(
+    'which opens the new-note dialog already pointed there',
+    [
+      document.querySelector('[data-testid="dialog-title"]')?.textContent,
+      (document.querySelector('[data-testid="dialog-folder-select"]') as HTMLInputElement | null)?.value,
+    ],
+    ['新建笔记', 'proj'],
+  );
+  await act(async () => {
+    Array.from(document.querySelectorAll('button')).find((item) => item.textContent?.trim() === '取消')?.click();
+  });
+  await flush();
   await closeMenu();
+
+  // A read-only account is shown the same menu, with the verbs switched off rather
+  // than hidden: the row is still where it is, and it is still worth saying so.
+  await act(async () => {
+    appStore.setState({
+      capabilities: { ...WRITABLE, writable: false, permissions: { write: false, rename: false, move: false, remove: false } },
+    } as never);
+  });
+  await flush();
+  await rightClick(row('folder:proj') as Element);
+  check(
+    'a read-only account cannot start a note there',
+    document.querySelector('[data-menu-item="folder-new-note"]')?.hasAttribute('disabled'),
+    true,
+  );
+  await closeMenu();
+  await act(async () => {
+    appStore.setState({ capabilities: WRITABLE } as never);
+  });
+  await flush();
 
   await rightClick(row('folder:proj/deep') as Element);
   check(
@@ -1646,9 +1795,13 @@ console.log('\nholding a row and moving it by hand (jsdom)');
       summaryNote('b', '项目笔记', 'proj'),
       summaryNote('p', '风景.png', '', { kind: 'image', size: 2048, excerpt: '' }),
       summaryNote('z', '档案.zip', 'proj', { kind: 'file', size: 512, excerpt: '' }),
+      // A picture inside a folder. Its id is the hash the server sends for a file
+      // without front matter, not its path: the folder has to come from the
+      // summary, or a drop on this row would think the file lives at the root.
+      summaryNote('f0a1b2c3d4e5f607', '示意图.png', 'proj', { kind: 'image', size: 1024, excerpt: '' }),
     ],
     folders: [
-      { path: 'proj', name: 'proj', count: 2, depth: 0 },
+      { path: 'proj', name: 'proj', count: 3, depth: 0 },
       { path: 'proj/deep', name: 'deep', count: 0, depth: 1 },
       { path: 'archive', name: 'archive', count: 0, depth: 0 },
     ],
@@ -1819,22 +1972,87 @@ console.log('\nholding a row and moving it by hand (jsdom)');
   await closingClick();
   await forget();
 
-  // A drag that finds no destination carries nothing anywhere, and picks nothing
-  // either: it is a drag that ended nowhere.
+  // A note row is a destination by way of the folder it lives in: dropping on a
+  // note means "put it here, beside this one". The row is not the container - the
+  // folder it names is.
   moved.length = 0;
   document.elementFromPoint = () => row('note:b');
   await press('note:a');
   await moveTo(40, 20);
-  check('a note is not a destination', hintValue(), null);
-  check('and no row claims the drop', row('note:b')?.getAttribute('data-drop-target'), null);
+  check('a note row stands for the folder it lives in', hintValue(), 'proj');
+  check('and the row itself claims no drop', row('note:b')?.getAttribute('data-drop-target'), null);
+  check('in words, naming that folder', (hint()?.textContent ?? '').includes('松开移动到 proj'), true);
+  check('though the card is up', Boolean(ghost()), true);
+  check('and nothing is picked', appStore.getState().selection, []);
+  await release();
+  check('letting go moves it beside that note', moved, ['note a → proj']);
+  check('and picks nothing either', appStore.getState().selection, []);
+  check('with no bar', Boolean(toolbar()), false);
+  await settled();
+  check('and the card goes', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // A picture row is the same kind of destination: it lives in a folder, and that
+  // folder is what takes the drop. Which folder it lives in comes from the
+  // summary - a file's id is a hash, so there is no path to read it out of.
+  moved.length = 0;
+  document.elementFromPoint = () => row('note:f0a1b2c3d4e5f607');
+  await press('note:a');
+  await moveTo(60, 300);
+  check('a picture row stands for its folder too', hintValue(), 'proj');
+  check('and names the folder, not the file', (hint()?.textContent ?? '').trim(), '松开移动到 proj');
+  check('with the file name nowhere in it', (hint()?.textContent ?? '').includes('示意图'), false);
+  await release();
+  check('and dropping on it takes the note there', moved, ['note a → proj']);
+  await settled();
+  check('with the card gone', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // A file that lives at the root is a drop on the root, which is the empty
+  // folder - the badge spells it out in words rather than leaving it blank.
+  moved.length = 0;
+  document.elementFromPoint = () => row('note:p');
+  await press('note:b');
+  await moveTo(60, 300);
+  check('a picture at the root is a drop on the root', hintValue(), 'root');
+  check('which the badge says in words', (hint()?.textContent ?? '').trim(), '松开移动到 根目录');
+  check('and still without the file name', (hint()?.textContent ?? '').includes('风景'), false);
+  await release();
+  check('so the note moves to the root beside it', moved, ['note b → ']);
+  await settled();
+  check('and the card goes', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // Nowhere to go: a row in the folder the note already lives in would move
+  // nothing, so it is not offered as a destination at all.
+  moved.length = 0;
+  document.elementFromPoint = () => row('note:p');
+  await press('note:a');
+  await moveTo(40, 20);
+  check('a row in the same folder is not a destination', hintValue(), null);
+  check('and no row claims the drop', row('note:p')?.getAttribute('data-drop-target'), null);
   check('though the card is up', Boolean(ghost()), true);
   check('and nothing is picked', appStore.getState().selection, []);
   await release();
   check('so letting go moves nothing', moved, []);
   check('and picks nothing either', appStore.getState().selection, []);
-  check('with no bar', Boolean(toolbar()), false);
   await settled();
   check('and the card goes', Boolean(ghost()), false);
+  await closingClick();
+  await forget();
+
+  // Nor is anywhere outside the tree.
+  moved.length = 0;
+  document.elementFromPoint = () => document.body;
+  await press('note:a');
+  await moveTo(400, 400);
+  check('outside the tree is nowhere to drop', hintValue(), null);
+  await release();
+  check('and letting go there moves nothing', moved, []);
+  await settled();
   await closingClick();
   await forget();
 
@@ -1986,9 +2204,18 @@ console.log('\nthe blog card summary (styles.css)');
 console.log('\nsorting the panel (jsdom)');
 {
   const hold = appStore.getState();
+  // The saved priority order is per-browser state: put back whatever was there.
+  const savedKeys = w.localStorage.getItem('notes-manager-sort-keys');
+  const savedPrimary = w.localStorage.getItem('notes-manager-sort');
+  // Distinct timestamps and lengths, so a test can tell which key decided.
+  const notesFixture = [
+    summaryNote('s1', 'Alpha', 'proj', { updated: '2026-01-02T00:00:00.000Z', created: '2026-01-02T00:00:00.000Z', wordCount: 30 }),
+    summaryNote('s2', 'Beta', 'proj', { updated: '2026-01-01T00:00:00.000Z', created: '2026-01-03T00:00:00.000Z', wordCount: 10 }),
+    summaryNote('s3', 'Gamma', '', { updated: '2026-01-03T00:00:00.000Z', created: '2026-01-01T00:00:00.000Z', wordCount: 20 }),
+  ];
   appStore.setState({
     capabilities: WRITABLE,
-    notes: [summaryNote('s1', 'Alpha', 'proj'), summaryNote('s2', 'Beta', 'proj'), summaryNote('s3', 'Gamma', '')],
+    notes: notesFixture,
     folders: [{ path: 'proj', name: 'proj', count: 2, depth: 0 }],
     expandedFolders: ['proj'],
     activeFolder: null,
@@ -1996,6 +2223,7 @@ console.log('\nsorting the panel (jsdom)');
     query: '',
     selection: [],
     sort: 'title',
+    sortKeys: ['title', 'updated', 'created', 'words'],
     sortOrder: 'asc',
     loadingNotes: false,
     notesError: null,
@@ -2025,6 +2253,69 @@ console.log('\nsorting the panel (jsdom)');
   check('showing which direction is on', desc()?.getAttribute('aria-pressed'), 'true');
   check('and which is not', asc()?.getAttribute('aria-pressed'), 'false');
 
+  /* --- the priority order -------------------------------------------------- */
+  // Every key breaks the tie left by the ones above it, and which order they run
+  // in is the reader's to say rather than a fixed chain behind the picker.
+  const priorityKeys = () =>
+    Array.from(panel.host.querySelectorAll('[data-testid^="sort-priority-item-"]')).map((item) =>
+      item.getAttribute('data-testid')?.replace('sort-priority-item-', ''),
+    );
+  const priorityUp = (key: string) =>
+    panel.host.querySelector<HTMLButtonElement>('[data-testid="sort-priority-up-' + key + '"]');
+  const priorityDown = (key: string) =>
+    panel.host.querySelector<HTMLButtonElement>('[data-testid="sort-priority-down-' + key + '"]');
+  const clickOn = async (element: Element | null | undefined) => {
+    await act(async () => {
+      element?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    });
+    await flush();
+  };
+
+  check('the priority list is there', Boolean(panel.host.querySelector('[data-testid="sort-priority"]')), true);
+  check(
+    'and says what it is for',
+    panel.host.querySelector('[data-testid="sort-priority"]')?.getAttribute('aria-label'),
+    '排序优先级',
+  );
+  check('listing every sort key', priorityKeys(), ['title', 'updated', 'created', 'words']);
+  check('the first row cannot go up', priorityUp('title')?.disabled, true);
+  check('and the last cannot go down', priorityDown('words')?.disabled, true);
+  check(
+    'while the ones in between can',
+    [priorityUp('words')?.disabled ?? true, priorityDown('title')?.disabled ?? true],
+    [false, false],
+  );
+  check('the arrows name what they move', priorityDown('title')?.getAttribute('aria-label'), '下移 标题');
+
+  // Ascending again, then let the second key decide the order.
+  await clickOn(asc());
+  await clickOn(priorityDown('title'));
+  check('moving a key down changes the order', appStore.getState().sortKeys, ['updated', 'title', 'created', 'words']);
+  check('and the list shows it', priorityKeys(), ['updated', 'title', 'created', 'words']);
+  check('the picker follows the head', appStore.getState().sort, 'updated');
+  check('and the value it shows', sortKey?.value, 'updated');
+  // The tree follows the whole order, not only the head: by updated, Beta is the
+  // oldest and Gamma the newest.
+  check('the notes are ordered by the new head', order(), ['folder:proj', 'note:s2', 'note:s1', 'note:s3']);
+  check(
+    'and the order is written down',
+    w.localStorage.getItem('notes-manager-sort-keys'),
+    JSON.stringify(['updated', 'title', 'created', 'words']),
+  );
+  check('with the old single key kept in step', w.localStorage.getItem('notes-manager-sort'), 'updated');
+
+  // Any key can move, not only the head - the ends are just where it stops.
+  await clickOn(priorityUp('words'));
+  check('a key can move up', appStore.getState().sortKeys, ['updated', 'title', 'words', 'created']);
+  await clickOn(priorityDown('words'));
+  check('and back down again', appStore.getState().sortKeys, ['updated', 'title', 'created', 'words']);
+  await clickOn(priorityUp('title'));
+  check('until the picker value is the head again', [appStore.getState().sortKeys[0], sortKey?.value], ['title', 'title']);
+
+  if (savedKeys === null) w.localStorage.removeItem('notes-manager-sort-keys');
+  else w.localStorage.setItem('notes-manager-sort-keys', savedKeys);
+  if (savedPrimary === null) w.localStorage.removeItem('notes-manager-sort');
+  else w.localStorage.setItem('notes-manager-sort', savedPrimary);
   await panel.unmount();
   appStore.setState(hold);
 }
@@ -2044,9 +2335,25 @@ console.log('\nthe panel\'s controls (jsdom)');
     activeFolder: null,
     activeId: null,
     query: '',
+    lastFolder: '',
     selection: [],
     loadingNotes: false,
     notesError: null,
+  } as never);
+
+  // Where a confirmed dialog sends its answer, recorded rather than performed.
+  const created: string[] = [];
+  const movedTo: string[] = [];
+  appStore.setState({
+    createNote: async (input?: { title?: string; folder?: string }) => {
+      created.push((input?.folder ?? '') + '|' + (input?.title ?? ''));
+    },
+    moveNote: async (id: string, folder: string) => {
+      movedTo.push(id + '|' + folder);
+    },
+    moveFolder: async (path: string, target: string) => {
+      movedTo.push(path + '|' + target);
+    },
   } as never);
 
   // The app's shortcuts sit above the panel; the "/" that used to jump into the
@@ -2080,35 +2387,165 @@ console.log('\nthe panel\'s controls (jsdom)');
       | HTMLButtonElement
       | null;
 
-  // Making a note asks where it goes first: the folder is a choice, not
-  // something inferred from whatever was clicked last.
+  // The scope control is one icon. A word on it would eat the width the search
+  // box needs, so what state it is in is said in its name instead.
+  const scope = () => host.querySelector<HTMLButtonElement>('button[aria-label^="搜索范围与筛选"]');
+  check('the scope control says what it is', scope()?.getAttribute('aria-label'), '搜索范围与筛选');
+  check('and says it with an icon rather than a word', scope()?.textContent?.trim() ?? null, '');
+  await act(async () => {
+    appStore.setState({ favoriteOnly: true } as never);
+  });
+  await flush();
+  check('a filter in force is said in that name', scope()?.getAttribute('aria-label'), '搜索范围与筛选（已筛选）');
+  check('still without a word on the button', scope()?.textContent?.trim() ?? null, '');
+  await act(async () => {
+    appStore.setState({ favoriteOnly: false } as never);
+  });
+  await flush();
+
+  // Clicking a folder says where the user is working, which is where the next
+  // note should go.
+  await act(async () => {
+    host
+      .querySelector<HTMLElement>('[data-tree-row="folder:proj"]')
+      ?.querySelector('button')
+      ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  await flush();
+  check('clicking a folder remembers it', appStore.getState().lastFolder, 'proj');
+
+  const folderField = () => document.querySelector<HTMLInputElement>('[data-testid="dialog-folder-select"]');
+  const folderError = () => document.querySelector('[data-testid="dialog-folder-error"]')?.textContent ?? null;
+  const confirm = () => document.querySelector<HTMLButtonElement>('[data-testid="dialog-confirm"]');
+  const suggestions = () =>
+    Array.from(document.querySelectorAll('#prompt-folder-options option')).map((option) => option.getAttribute('value'));
+
+  // Making a note asks where it goes: the destination is a field you type into,
+  // with the folders offered as suggestions - a list of every folder gets long,
+  // and an exact answer is the only one taken.
   await act(async () => {
     button('新建笔记')?.click();
   });
   await flush();
   check('making a note asks where it goes', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
   check('with a title to give it', Boolean(document.querySelector('[data-testid="dialog-input"]')), true);
-  const picker = document.querySelector<HTMLSelectElement>('[data-testid="dialog-folder-select"]');
-  check('and a destination dropdown', picker?.getAttribute('aria-label'), '目标目录');
-  check('whose first choice is the root', picker?.options[0]?.textContent, '根目录');
+  check('and a destination field', folderField()?.getAttribute('aria-label'), '目标目录');
+  check('which starts in the folder that was just clicked', folderField()?.value, 'proj');
+  check('offering the folders as suggestions', folderField()?.getAttribute('list'), 'prompt-folder-options');
+  check('every folder there is', suggestions(), ['proj', 'proj/deep']);
+  check('with no empty suggestion standing for the root', suggestions().includes(''), false);
+  check('and a way to confirm it', Boolean(confirm()), true);
+
+  // A small dialog that appears out of nowhere asking for a name looks like a
+  // login form to a password manager: each one has its own opt-out, and both
+  // fields set them all.
+  const guards = (input: HTMLInputElement | null) => ({
+    autocomplete: input?.getAttribute('autocomplete'),
+    autocorrect: input?.getAttribute('autocorrect'),
+    autocapitalize: input?.getAttribute('autocapitalize'),
+    spellcheck: input?.getAttribute('spellcheck'),
+    bwignore: input?.getAttribute('data-bwignore'),
+    onepassword: input?.getAttribute('data-1p-ignore'),
+    lastpass: input?.getAttribute('data-lpignore'),
+  });
+  const noAutofill = {
+    autocomplete: 'off',
+    autocorrect: 'off',
+    autocapitalize: 'off',
+    spellcheck: 'false',
+    bwignore: 'true',
+    onepassword: 'true',
+    lastpass: 'true',
+  };
+  check('the title field is not a login form', guards(document.querySelector<HTMLInputElement>('[data-testid="dialog-input"]')), noAutofill);
+  check('nor is the destination field', guards(folderField()), noAutofill);
   check(
-    'listing every folder there is',
-    Array.from(picker?.options ?? []).map((option) => option.value),
-    ['', 'proj', 'proj/deep'],
+    'and neither carries a name a password manager knows',
+    [document.querySelector('[data-testid="dialog-input"]')?.getAttribute('name'), folderField()?.getAttribute('name')],
+    ['prompt-value', 'prompt-folder'],
   );
-  check('and a way to confirm it', Boolean(document.querySelector('[data-testid="dialog-confirm"]')), true);
+
+  // A typed path has to name a folder exactly: a near miss is refused rather than
+  // guessed at.
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  check('a folder that exists is accepted', [folderError(), confirm()?.disabled], [null, false]);
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/nope');
+  check('a path that names nothing is refused', folderError(), '没有这个文件夹');
+  check('and the dialog will not confirm it', confirm()?.disabled, true);
+  await typeIntoInput('[data-testid="dialog-folder-select"]', '');
+  check('an empty answer means the root', [folderField()?.value, folderError(), confirm()?.disabled], ['', null, false]);
+
+  // Confirming sends that folder with the note.
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  await typeIntoInput('[data-testid="dialog-input"]', '会议记录');
+  await act(async () => {
+    confirm()?.click();
+  });
+  await flush();
+  check('confirming makes the note in that folder', created, ['proj/deep|会议记录']);
+  check('and puts the dialog away', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
+
+  // A remembered folder that no longer exists falls back to the root rather than
+  // to a path that would have to be refused.
+  await act(async () => {
+    appStore.setState({ lastFolder: 'gone/folder' } as never);
+  });
+  await act(async () => {
+    button('新建笔记')?.click();
+  });
+  await flush();
+  check('a folder that is gone is not offered', folderField()?.value, '');
   await act(async () => {
     cancel()?.click();
   });
   await flush();
   check('cancelling puts it away', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
+  check('and sends nothing', created, ['proj/deep|会议记录']);
+
+  // Moving a note asks the same question, starting from where the note already is.
+  await rightClick(host.querySelector('[data-tree-row="note:b"]') as Element);
+  await act(async () => {
+    document.querySelector<HTMLElement>('[data-menu-item="note-move"]')?.click();
+  });
+  await flush();
+  check('moving a note asks where to', document.querySelector('[data-testid="dialog-title"]')?.textContent, '移动笔记');
+  check('starting where it already is', folderField()?.value, 'proj');
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  await act(async () => {
+    confirm()?.click();
+  });
+  await flush();
+  check('and the typed folder is the one it moves to', movedTo, ['b|proj/deep']);
+
+  // A folder cannot be moved into itself or into its own subtree: those are left
+  // out of the suggestions and refused if typed anyway.
+  await rightClick(host.querySelector('[data-tree-row="folder:proj"]') as Element);
+  await act(async () => {
+    document.querySelector<HTMLElement>('[data-menu-item="folder-move"]')?.click();
+  });
+  await flush();
+  check('moving a folder asks where to', document.querySelector('[data-testid="dialog-title"]')?.textContent, '移动文件夹');
+  check('and offers no place inside itself', suggestions(), []);
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj');
+  check('typing itself is refused', folderError(), '不能移动到这个文件夹');
+  await typeIntoInput('[data-testid="dialog-folder-select"]', 'proj/deep');
+  check('and so is its own subfolder', folderError(), '不能移动到这个文件夹');
+  check('with the dialog held shut', confirm()?.disabled, true);
+  await typeIntoInput('[data-testid="dialog-folder-select"]', '');
+  check('the root is always somewhere to go', [folderError(), confirm()?.disabled], [null, false]);
+  await act(async () => {
+    confirm()?.click();
+  });
+  await flush();
+  check('and that is the move it makes', movedTo, ['b|proj/deep', 'proj|']);
 
   await act(async () => {
     host.querySelector<HTMLButtonElement>('button[aria-label="上传文件"]')?.click();
   });
   await flush();
   check('uploading asks the same question', document.querySelector('[data-testid="dialog-title"]')?.textContent, '上传文件');
-  check('with the same destination dropdown', Boolean(document.querySelector('[data-testid="dialog-folder-select"]')), true);
+  check('with the same destination field', Boolean(folderField()), true);
+  check('starting from the remembered folder, which is gone', folderField()?.value, '');
   check(
     'and no title field, since the files carry their own names',
     Boolean(document.querySelector('[data-testid="dialog-input"]')),
@@ -2637,7 +3074,14 @@ console.log('\nkeeping two panes level (jsdom)');
 
   // A jump the preview makes on its own - an outline entry, an anchor - is not
   // followed either: mirroring those positions drags the editor along with the
-  // animation and the two panes end up jittering against each other.
+  // animation and the two panes end up jittering against each other. The outline
+  // starts folded, so its branch has to be opened first.
+  await act(async () => {
+    host
+      .querySelector('[data-testid="outline-toggle-all"]')
+      ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  });
+  await flush();
   const outlineEntry = Array.from(host.querySelectorAll<HTMLButtonElement>('.outline-panel button')).find((item) =>
     (item.textContent ?? '').includes('1.2'),
   );
