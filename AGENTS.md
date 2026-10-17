@@ -126,12 +126,20 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   永远是 `extractHeadings` 里的位置（`onNavigate(heading, index)` 用的就是它）。折叠状态是
   `OutlinePanel` 的局部 state，按 `activeNote.id` 重置——切换笔记必须回到「全部收起」，
   但同一篇笔记里编辑不要重置（否则刚展开的章节会在打字时自己合上）。
-- **自定义壁纸现在「有图片才动」**：`CustomWallpaper.tsx` 只在有图片、有 2D 上下文、且没开
-  reduced-motion 时才跑粒子 rAF；没有图片时渲染 `[data-custom-placeholder]` 的主题渐变占位
-  （SSR / jsdom 同样如此，不能留空洞）。晃动是 CSS keyframes（`customSwayKeyframes` 采样一周期），
-  不是每帧计算。清理必须在 effect 的 cleanup 里做完（`cancelAnimationFrame`、resize /
-  visibilitychange / matchMedia 监听、MutationObserver），否则切走壁纸后还在画。
-  调色板只在布局和主题变化时 `getComputedStyle` 一次，别每帧读；DPR 上限 2。
+- **自定义壁纸「有图片才动」，且不再被 reduced-motion 停掉**：晃动由一个 rAF 循环直接写
+  `[data-custom-image-frame]` 的 `transform`（与粒子同一个循环，按库的 `oscillateposition` 精确算），
+  粒子画在 `[data-custom-particles]` 上；没有 2D 上下文时晃动照常跑、只是不画粒子。
+  `prefers-reduced-motion` **不整体停用**（场景库也一样会动），显式开关
+  （`customSway` / `customShowParticles`）才是唯一的停用方式——断言里「reduced-motion 下 0 次 rAF」
+  已翻成「仍然调度、transform 帧间变化」。没有图片时仍渲染 `[data-custom-placeholder]` 主题渐变占位。
+  清理在 effect 的 cleanup 里（`cancelAnimationFrame`、resize / visibilitychange / matchMedia 监听），
+  否则切走壁纸后还在画；DPR 上限 2。
+- **别再用 framer-motion 的 keyframes 做壁纸晃动**：首挂那次动画不启动，背景图会停在第一帧
+  （真实 Chromium 上肉眼可见）；要「挂上就动、暂停能停、卸载能清」就用 rAF 自己写 transform。
+- **自定义壁纸的取景区与晃动写在不同元素上**：图片按 `cropMediaStyle(crop)`（width/height/left/top）
+  摆在自己的 img 上，晃动写在外层 frame 的 transform 上（满幅时才用 `object-cover`）——
+  两者不能写同一个元素，否则一次晃动会把取景覆盖掉。外观对话框与管理员设置都渲染同一个
+  `CropSection`（`[data-crop-section]`，8 个 `aria-label="调整 …"` 手柄），没图片时只给提示。
 - **`lastFolder` 是「新建笔记默认目录」的唯一来源**：`selectNote` 写笔记所在目录、树里点文件夹写
   该路径；`renameFolder` / `moveFolder` 会让它跟着改，`deleteFolder` 清空。对话框打开时还要再查
   一遍「这个目录现在还在不在」——不在就回退根目录，不能把一个不存在的路径塞进输入框。
@@ -161,7 +169,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
   数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
   `customParticleRise`（0–500）/ `customParticleDrift`（0–400）/ `customParticleDirection`（0–1）。
-  映射：晃动 = 库 `oscillateposition`（x=sin、y=cos，采样一周期成 keyframes，图片放大
+  映射：晃动 = 库 `oscillateposition`（x=sin、y=cos，由 rAF 循环直接写 transform，图片放大
   `1 + 2·amplitude% + 0.01` 才不会露出边缘）；粒子 = `ParticleDriftOptions`
   （rise / speed / forwardRatio，spread 固定 0.6）；场景单位→px 用库的 3840×2160 正交视图
   cover 换算（`sceneUnitScale`）。**没有图片时是主题渐变占位（`data-custom-placeholder`），
