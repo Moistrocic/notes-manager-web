@@ -134,6 +134,7 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   再挂一个 glow 子发射器（放大 ~20 倍、全屏时 alpha 压到 0.02–0.06）；出生位置与速度由
   `placeSpawnedEmbers` 改写（见「9 个控件」那条）；生产定义是「长寿命」的一套（寿命 9–12s、槽位 300、发射 30/s），开屏先 `warmUpParticleFlow` 预热 12.5 秒，让第一帧就已经铺满整条上升路径。
   断言里先固定 `Math.random`（mulberry32）再取统计量，否则 aliveCount / 尺寸类断言会偶发红。
+  上升速度每颗在 `[rise/2, rise]` 随机，平均是 3/4·rise，断言别按固定 rise 算。
   `prefers-reduced-motion` **不整体停用**（场景库也一样会动），显式开关
   （`customSway` / `customShowParticles`）才是唯一的停用方式——断言里「reduced-motion 下 0 次 rAF」
   已翻成「仍然调度、transform 帧间变化」。没有图片时仍渲染 `[data-custom-placeholder]` 主题渐变占位。
@@ -181,21 +182,28 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 - **自定义壁纸有 9 个控件（6 滑块 + 2 开关 + 1 取色）**：`resolveCustomEffect()`（web）与
   `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
   数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
-  `customParticleRise`（0–500）/ `customParticleDrift`（0–400）/ `customParticleDirection`（0–1）。
+  `customParticleRise`（0–1000）/ `customParticleDrift`（0–1000）/ `customParticleDirection`（0–1）。
   晃动 = 库 `oscillateposition`（x=sin、y=cos，由 rAF 循环直接写 transform，图片放大
   `1 + 2·amplitude% + 0.01` 才不会露出边缘）。粒子（批次 P 之后）：**发射器在屏幕外下方**
   （`spawnEmberPosition`：y 严格小于下边缘、横向铺满；`spawnEmberVelocity`：水平速度大小
-  `[0, drift]` 均匀、符号以 `direction` 概率向右，上升速度 `rise`±15%）；`placeSpawnedEmbers`
+  `[0, drift]` 均匀、符号以 `direction` 概率向右，上升速度 `vy = rise × random(0.5, 1)`，即
+  `[rise/2, rise]` 均匀——两个速度滑块都是**最大值**）；`placeSpawnedEmbers`
   在每步 `update()` 之后改写新出生粒子的 position/velocity/driftVelocity（库没有 spawn 钩子，
   这是仅有的接缝），`createFlowParticles` 给库的 drift 只留 `rise` 且 `speed: 0`、无
   `forwardRatio`，`rise=0` 时湍流权重也归零（否则库的向下扰动会把「静止」粒子抬起来）。
   对外语义：drift=**最大**横向速度、direction=**向右概率**（UI 标签「粒子方向比例」，显示
   「向右 70%」「最大 200 单位/秒」）。生产路径是 `createFlowParticles` / `advanceParticleFlow` /
   `warmUpParticleFlow`；`createLibraryParticles`/`warmUpLibraryParticles` 只剩兼容测试在用。
-  密度与基色（1.7 新增）：`customParticleDensity`（0–600，默认 300）是**同屏粒子上限**——
-  `particleEmissionForDensity` 映射为 `maxCount = density`、`rate = density / 10.5`（10.5s 是
-  生产预设的平均寿命），density=0 时 maxCount 仍为 1 但 rate=0（库的 slot 数组不能为空类），
-  **不建画布**、`data-custom-particles="false"`。`customParticleColor` 是 `#rrggbb` 或空串：
+  密度与基色（1.7 新增）：`customParticleDensity`（0–600，默认 300）是**同屏可见粒子数**——
+  `particleVisibilityModel(rise, drift, direction, sceneWidthUnits=3840, sceneHeightUnits=2160)` 用固定 PRNG
+  确定性采样（屏下出生、`vy=rise×random(0.5,1)`、寿命 9–12s、顶部/侧边出口），返回
+  `{visibleFraction, slotSeconds}`；`particleEmissionForDensity(density, rise, drift, direction,
+  sceneWidthUnits, sceneHeightUnits)` 给出 `maxCount = round(density / visibleFraction)`（上限 2000）、
+  `rate = maxCount / slotSeconds`——rise 调高时槽位在屏时间变短、池子缩小、发射率提高，可见数仍≈density
+  （实测 d300/rise240→306、rise1000→272、d120→120/104）。density=0 时 maxCount 1 / rate 0，
+  **不建画布**、`data-custom-particles="false"`；画布每 0.5s 写 `data-visible-particles =
+  countVisibleEmbers(systems, field)`，断言里别再假设 `maxCount == density`。槽位常量在
+  `CUSTOM_PARTICLE_LIFETIME`（9–12s）与 `CUSTOM_PARTICLE_SPAWN`（尺寸 140–560、gap 20、jitter 80）。`customParticleColor` 是 `#rrggbb` 或空串：
   `normaliseParticleColor` 大小写/三位简写归一、非法值一律空串；`resolveParticleColorValue`
   的优先级是「手选颜色 → --accent → 主题默认 `#6d4cff`」，`parseParticleColor` 给 0–1 通道；
   画布上的光晕用 `applyParticleColor(systems, state, color)` 原地重绘（主题 accent 变化且颜色为空
@@ -236,6 +244,15 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （`.webp`/`.png`/`.jpg`/`.gif`），body 为空 400 `empty_body`、不是图片 400 `invalid_background`、
   匿名 401、非管理员 403；201 返回 `{file, available}`。`PUT /api/system/settings` 选 kind=custom 时
   还会校验文件存在（400 `background_missing`）且是图片（`background_kind_mismatch`）。
+  删除走同一条路由的 `DELETE /api/background?name=<percent-encoded>`（requireAdmin）：200
+  `{removed, available, configured, kind, reset}`；400 `invalid_background_name`（空名、带分隔符、
+  点开头、清单/未知扩展名——存储层 `isRemovableName` 只放行 `backgrounds/` 下的普通文件，符号链接
+  也不行）；401 `unauthenticated` / 403 `forbidden`；404 `background_not_found`（不存在或已删）。
+  删的若是当前使用中的背景，同一请求里把 settings 写成 `kind: off` / `file: 空` 并返回 `reset: true`，
+  否则 `reset: false`、设置不动；删完清对应的 hash 缓存。前端每行有
+  `data-testid="background-delete-<name>"`（第一次只 arm、不发请求，4s 自动复位；第二次变成
+  `background-delete-confirm-<name>`，请求中 disabled 且文案「删除中…」），`reset: true` 时表单直接
+  落到 off 并 toast「正在使用的背景已切换为关闭」——否则保存会把已删文件写回去。
 - **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
   博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
   状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
