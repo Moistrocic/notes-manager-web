@@ -21,6 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '../lib/cn';
 import type { NoteSummary } from '../lib/types';
 import {
@@ -812,21 +813,45 @@ export function PromptDialog({
   const [folder, setFolder] = useState('');
   /** Whether the folder field has the keyboard, which shows its suggestions. */
   const [folderFocused, setFolderFocused] = useState(false);
+  /** Which suggestion the keyboard is on, or -1 for none. */
+  const [highlighted, setHighlighted] = useState(-1);
+  /** Set once a suggestion is taken: the list stays out of the way until the
+   * field is typed in again. */
+  const [suggestionsHidden, setSuggestionsHidden] = useState(false);
+  /** Where the popover sits, in page coordinates. */
+  const [popoverAt, setPopoverAt] = useState<{ left: number; top: number; width: number } | null>(null);
+  /** The input's box, which the popover is anchored to. */
+  const folderAnchor = useRef<HTMLDivElement | null>(null);
+  /** The pending blur that would close the list, so it can be called off. */
+  const blurTimer = useRef<number | null>(null);
 
   useEffect(() => {
     setValue(state && 'value' in state ? state.value : '');
     setFolder(state ? initialFolder(state) : '');
     setFolderFocused(false);
+    setHighlighted(-1);
+    setSuggestionsHidden(false);
+    setPopoverAt(null);
   }, [state]);
 
-  if (!state) return null;
+  // A dialog that goes away cancels any blur it was still waiting on.
+  useEffect(
+    () => () => {
+      if (blurTimer.current !== null) window.clearTimeout(blurTimer.current);
+    },
+    [],
+  );
 
-  const info = dialogInfo(state);
+  // Everything below is computed before the "nothing to show" return, because
+  // the popover's position is state: a closed dialog still runs the same hooks.
+  const info = state ? dialogInfo(state) : null;
   // A folder cannot be moved into itself or into what is already below it, so
   // those are left out rather than offered and then refused.
-  const options = info.exclude
-    ? folders.filter((path) => path !== info.exclude && !path.startsWith(`${info.exclude}/`))
-    : folders;
+  const options = !info
+    ? []
+    : info.exclude
+      ? folders.filter((path) => path !== info.exclude && !path.startsWith(`${info.exclude}/`))
+      : folders;
   // The destination is typed by hand and then checked: it names a folder
   // exactly, or it does not. Trimming and the segment check happen first, so
   // ` proj ` is `proj` and `a//b` is `a/b`.
@@ -835,7 +860,7 @@ export function PromptDialog({
   const folderExists = folderPath === '' || folders.includes(folderPath);
   // A new note may name a folder that does not exist yet - it is created with
   // the note. Every other prompt only moves things to a folder already there.
-  const canCreateFolder = state.kind === 'newNote';
+  const canCreateFolder = state?.kind === 'newNote';
   const folderAllowed = folderPath === '' || options.includes(folderPath);
   const folderHint =
     typedFolder.error ??
@@ -848,7 +873,7 @@ export function PromptDialog({
           : '没有这个文件夹');
   const folderInvalid =
     typedFolder.error !== null || (!folderAllowed && !(canCreateFolder && !folderExists));
-  const ready = (!info.field?.required || value.trim().length > 0) && !folderInvalid;
+  const ready = (!info?.field?.required || value.trim().length > 0) && !folderInvalid;
   // Suggestions follow the prefix typed so far - `pro` offers `proj` and
   // `proj/deep` - and only folders this prompt would accept, capped so the
   // list stays a glance rather than a second dialog.
@@ -856,7 +881,71 @@ export function PromptDialog({
   const prefixMatches = options
     .filter((candidate) => candidate.toLowerCase().startsWith(suggestionPrefix))
     .slice(0, 8);
-  const showSuggestions = prefixMatches.length > 0 && (folderFocused || folder.trim() !== '');
+  const showSuggestions =
+    Boolean(info?.picker) &&
+    !suggestionsHidden &&
+    prefixMatches.length > 0 &&
+    (folderFocused || folder.trim() !== '');
+  /** The suggestion the keyboard is on, or -1 when it is on none. */
+  const activeIndex = highlighted >= 0 && highlighted < prefixMatches.length ? highlighted : -1;
+
+  // The list is a layer of its own rather than a child of the field. The dialog
+  // body scrolls, so an absolutely positioned child of it would be clipped at
+  // the scroll edge - and because it is out of the body's flow (and out of the
+  // body), opening it cannot change the dialog's height either. It is measured
+  // from the input's box and pinned in page coordinates, which is why it also
+  // follows the page when the dialog is scrolled.
+  useEffect(() => {
+    if (!showSuggestions) {
+      setPopoverAt(null);
+      return undefined;
+    }
+    const place = () => {
+      const rect = folderAnchor.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPopoverAt({
+        left: rect.left + window.scrollX,
+        top: rect.bottom + 4 + window.scrollY,
+        width: rect.width,
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [showSuggestions, folder, prefixMatches.length]);
+
+  /** Takes a suggestion: the field is filled and the list steps out of the way. */
+  const chooseFolder = (path: string) => {
+    setFolder(path);
+    setSuggestionsHidden(true);
+    setHighlighted(-1);
+  };
+
+  // A click on a suggestion arrives a moment after the blur that would close
+  // the list; the delay is what keeps the list alive long enough to be clicked.
+  const closeSuggestionsSoon = () => {
+    if (blurTimer.current !== null) window.clearTimeout(blurTimer.current);
+    blurTimer.current = window.setTimeout(() => {
+      blurTimer.current = null;
+      setFolderFocused(false);
+      setSuggestionsHidden(true);
+    }, 150);
+  };
+
+  const keepFolderFocus = () => {
+    if (blurTimer.current !== null) {
+      window.clearTimeout(blurTimer.current);
+      blurTimer.current = null;
+    }
+    setFolderFocused(true);
+    setSuggestionsHidden(false);
+  };
+
+  if (!state || !info) return null;
 
   return (
     <Modal
@@ -906,7 +995,7 @@ export function PromptDialog({
           <Field label="目标目录" hint="留空表示根目录；输入后按前缀匹配，不存在则新建">
             {/* The old test id stays on the wrapper: the field itself is a text
                 input now, and anything that only looked for it keeps working. */}
-            <div data-testid="dialog-folder-select" className="relative">
+            <div ref={folderAnchor} data-testid="dialog-folder-select" className="relative">
               <Input
                 {...PROMPT_INPUT_GUARDS}
                 type={PROMPT_INPUT_TYPE}
@@ -919,48 +1008,108 @@ export function PromptDialog({
                 aria-expanded={showSuggestions}
                 aria-controls="prompt-folder-suggestions"
                 aria-autocomplete="list"
+                aria-activedescendant={activeIndex >= 0 ? 'folder-suggestion-' + activeIndex : undefined}
                 placeholder="根目录"
-                onFocus={() => setFolderFocused(true)}
-                onBlur={() => setFolderFocused(false)}
-                onChange={(e) => setFolder(e.target.value)}
+                onFocus={keepFolderFocus}
+                onBlur={closeSuggestionsSoon}
+                onChange={(e) => {
+                  setFolder(e.target.value);
+                  setSuggestionsHidden(false);
+                  setHighlighted(-1);
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && ready) onConfirm(value, folderPath);
+                  if (e.key === 'Escape' && showSuggestions) {
+                    // Escape belongs to the list first: it closes the list, not
+                    // the dialog the list is in.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSuggestionsHidden(true);
+                    setHighlighted(-1);
+                    return;
+                  }
+                  if (showSuggestions && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                    e.preventDefault();
+                    const step = e.key === 'ArrowDown' ? 1 : -1;
+                    const next =
+                      activeIndex < 0
+                        ? step > 0
+                          ? 0
+                          : prefixMatches.length - 1
+                        : (activeIndex + step + prefixMatches.length) % prefixMatches.length;
+                    setHighlighted(next);
+                    return;
+                  }
+                  if (e.key !== 'Enter') return;
+                  if (showSuggestions && activeIndex >= 0) {
+                    e.preventDefault();
+                    chooseFolder(prefixMatches[activeIndex]);
+                    return;
+                  }
+                  if (ready) onConfirm(value, folderPath);
                 }}
               />
-              {showSuggestions ? (
-                <div
-                  id="prompt-folder-suggestions"
-                  data-testid="folder-suggestions"
-                  role="listbox"
-                  aria-label="匹配的文件夹"
-                  className="absolute left-0 right-0 top-full z-20 mt-1 max-h-40 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--elevated)] p-1 shadow-strong"
-                >
-                  {prefixMatches.map((candidate) => (
-                    <button
-                      key={candidate}
-                      type="button"
-                      role="option"
-                      aria-selected={candidate === folderPath}
-                      data-testid={'folder-suggestion-' + candidate}
-                      // Keeps the keyboard in the field: the dialog is not done.
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => setFolder(candidate)}
-                      className="focus-ring block w-full truncate rounded-lg px-2 py-1 text-left font-mono text-[11.5px] text-[var(--muted)] transition-colors hover:bg-[color-mix(in_srgb,var(--text)_6%,transparent)] hover:text-[var(--text)]"
+              {/* The list is rendered into the page rather than into the field:
+                  the dialog body scrolls, and a popover inside it would be
+                  clipped at the scroll edge. Being a layer of its own also means
+                  it cannot take part in the dialog's layout, so the dialog does
+                  not grow when it appears. */}
+              {showSuggestions && popoverAt && typeof document !== 'undefined'
+                ? createPortal(
+                    <div
+                      id="prompt-folder-suggestions"
+                      data-testid="folder-suggestions"
+                      data-folder-popover="true"
+                      role="listbox"
+                      aria-label="匹配的文件夹"
+                      style={{
+                        position: 'absolute',
+                        left: popoverAt.left,
+                        top: popoverAt.top,
+                        width: popoverAt.width,
+                        zIndex: 120,
+                      }}
+                      className="glass max-h-[240px] overflow-y-auto rounded-2xl border border-[var(--line)] p-1.5 shadow-strong"
                     >
-                      {candidate}
-                    </button>
-                  ))}
-                </div>
+                      {prefixMatches.map((candidate, index) => (
+                        <button
+                          key={candidate}
+                          id={'folder-suggestion-' + index}
+                          type="button"
+                          role="option"
+                          aria-selected={index === activeIndex}
+                          data-testid={'folder-suggestion-' + candidate}
+                          data-folder-highlighted={index === activeIndex ? 'true' : undefined}
+                          // Keeps the keyboard in the field: the dialog is not done.
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setHighlighted(index)}
+                          onClick={() => chooseFolder(candidate)}
+                          className={cn(
+                            'focus-ring block w-full truncate rounded-xl px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors',
+                            index === activeIndex
+                              ? 'bg-[var(--accent-soft)] text-[var(--accent)]'
+                              : 'text-[var(--muted)] hover:bg-[color-mix(in_srgb,var(--text)_7%,transparent)] hover:text-[var(--text)]',
+                          )}
+                        >
+                          {candidate}
+                        </button>
+                      ))}
+                    </div>,
+                    document.body,
+                  )
+                : null}
+            </div>
+            {/* The line is reserved whether or not there is anything in it: a
+                hint appearing as the user types must not resize the dialog. */}
+            <div data-testid="dialog-folder-hint-slot" className="mt-1 min-h-4 text-[11px] leading-4">
+              {folderHint ? (
+                <p
+                  data-testid="dialog-folder-hint"
+                  className={folderInvalid ? 'text-[var(--danger)]' : 'text-[var(--faint)]'}
+                >
+                  {folderHint}
+                </p>
               ) : null}
             </div>
-            {folderHint ? (
-              <p
-                data-testid="dialog-folder-hint"
-                className={cn('mt-1 text-[11px]', folderInvalid ? 'text-[var(--danger)]' : 'text-[var(--faint)]')}
-              >
-                {folderHint}
-              </p>
-            ) : null}
           </Field>
         ) : null}
       </div>

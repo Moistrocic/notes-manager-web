@@ -1,36 +1,43 @@
 import { motion } from 'framer-motion';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  CUSTOM_WALLPAPER_SLIDERS,
+  CUSTOM_EFFECT_SLIDERS,
+  CUSTOM_EFFECT_TOGGLES,
   customBackdrop,
-  resolveCssColor,
-  resolveCustomWallpaper,
-  type CustomWallpaperParams,
+  customColors,
+  customSwayCurve,
+  resolveCustomEffect,
+  sceneUnitScale,
+  type CustomEffectParams,
+  type ResolvedCustomEffect,
   type ResolvedCustomWallpaper,
 } from '../lib/wallpaper';
+import { Switch } from './ui/primitives';
 
 /**
- * The custom wallpaper: an imported picture that drifts slowly, with particles
- * floating over it.
+ * The custom wallpaper: one uploaded picture, a slow sway, and drifting
+ * particles.
  *
  * It exists to answer one problem: Wallpaper Engine scenes look good and cost
- * forty megabytes. Here the same kind of look is made of code - the picture is
- * shrunk once in the browser (see wallpaper.ts shrinkWallpaperImage), the drift
- * is a CSS transform the compositor can animate for free, and the particles are
- * a two-dimensional re-implementation of the engine's particle system. What is
- * stored is a few hundred kilobytes of WebP and a dozen numbers.
+ * forty megabytes, and the first visit has to download all of it. Here the same
+ * kind of look is made of code - the picture is shrunk once in the browser (see
+ * wallpaper.ts shrinkWallpaperImage), the sway is a transform the compositor can
+ * animate for free, and the particles are a two-dimensional re-implementation of
+ * the engine's particle system. What is stored is a few hundred kilobytes of
+ * WebP and seven numbers; the CSS placeholder is all there is before a picture
+ * has been imported.
  *
- * The particle model follows the Wallpaper Engine defaults this repository's
- * own scene renderer encodes (lib/wallpaper-scene-layers/packages/we-scene/src/
+ * The particle model follows the Wallpaper Engine defaults this repository's own
+ * scene renderer encodes (lib/wallpaper-scene-layers/packages/we-scene/src/
  * render/particles.ts and particle-defaults.ts): value noise on a fixed
  * permutation lattice, a divergence-free curl field built from it, a lifetime
- * initialiser, an alpha fade and a size ramp. The numbers that can be traced to
- * the engine are named in wallpaper.ts CUSTOM_DEFAULTS.
+ * initialiser, an alpha fade and a size ramp. The seven exposed controls are the
+ * renderer's drift model - rise, speed, forwardRatio - and the sway follows its
+ * `oscillateposition` curve: sin for x, cos for y at the same frequency.
  *
  * Everything degrades: no 2D context (SSR, jsdom, an old browser) keeps the
- * picture and the CSS backdrop; reduced motion keeps the picture and draws one
- * still frame of particles; a hidden tab and an unmounted component stop the
- * loop.
+ * picture; reduced motion keeps a still picture and one still particle frame; a
+ * hidden tab and an unmounted component stop the loop.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -56,7 +63,23 @@ export interface CustomParticle {
   phase: number;
 }
 
-export type CustomParticleConfig = ResolvedCustomWallpaper['particles'];
+/**
+ * Everything one particle needs.
+ *
+ * The first eight fields are the 1.5.x shape (and the tests that came with it);
+ * the drift half of the engine model is optional and its defaults are the
+ * library's: rise 120 / speed 200 / forwardRatio 0.8 / spread 0.6 in
+ * ParticleDriftOptions, and this wallpaper's own defaults come from the Rossi
+ * preset (rise 240 / speed 200 / forwardRatio 0.7).
+ */
+export type CustomParticleConfig = ResolvedCustomWallpaper['particles'] & {
+  /** Library drift.rise, px/s. Defaults to 240. */
+  rise?: number;
+  /** Library drift.forwardRatio, 0 - 1. Defaults to 0.7. */
+  direction?: number;
+  /** Library drift.spread, radians. Defaults to 0.6. */
+  spread?: number;
+};
 
 /*
  * 3D value noise and its curl, re-implemented from the scene renderer's
@@ -131,6 +154,10 @@ export function curlNoise(x: number, y: number, z: number, out: [number, number]
 const TURBULENCE_SPATIAL = 0.0025;
 /** turbulence.timescale 10 x the renderer's 0.02 time factor. */
 const TURBULENCE_TIME = 0.2;
+/** ParticleDriftOptions defaults from the scene renderer's particles.ts. */
+const DEFAULT_DRIFT = { rise: 240, speed: 200, forwardRatio: 0.7, spread: 0.6 };
+/** Drift mode keeps 25% of the emitter's velocity as jitter (DRIFT_JITTER). */
+const DRIFT_JITTER = 0.25;
 
 /** Seeds one particle. Deterministic when `random` is injected. */
 function seedParticle(
@@ -153,13 +180,21 @@ function seedParticle(
   particle.phase = random() * Math.PI * 2;
   particle.turbulence = config.turbulence * config.speed * (0.5 + random() * 1.5);
 
-  const angle = (config.wind * Math.PI) / 180;
-  const speed = config.speed * (0.6 + random() * 0.8);
-  // drift.forwardRatio is 0.8 in the engine: most particles follow the wind,
-  // the rest are blown back, but all of them still rise.
-  const forward = random() < 0.8 ? 1 : -1;
-  particle.vx = Math.cos(angle) * speed * forward;
-  particle.vy = -Math.abs(Math.sin(angle)) * speed - config.speed * 0.3;
+  // The drift model from particles.ts applyDrift(), with the emitter pointing up
+  // (the engine's "0 1 0"): a forward particle follows the emitter direction,
+  // the rest (1 - forwardRatio) are blown back, and the spread jitters the angle.
+  // A little of the emitter's own velocity is kept as sideways jitter.
+  const rise = config.rise ?? DEFAULT_DRIFT.rise;
+  const speed = config.speed;
+  const forwardRatio = Math.min(1, Math.max(0, config.direction ?? DEFAULT_DRIFT.forwardRatio));
+  const spread = config.spread ?? DEFAULT_DRIFT.spread;
+  const forward = random() < forwardRatio ? 1 : -1;
+  const jitter = (random() * 2 - 1) * spread;
+  const jitterX = (random() * 2 - 1) * speed * DRIFT_JITTER;
+  const jitterY = (random() * 2 - 1) * speed * DRIFT_JITTER;
+  // Canvas y grows downwards: an upward drift is a negative vy.
+  particle.vx = -Math.sin(jitter) * speed * forward + jitterX;
+  particle.vy = -(rise + Math.cos(jitter) * speed * forward + jitterY);
 }
 
 /** A field of `count` particles spread over a `width` x `height` picture. */
@@ -197,9 +232,9 @@ export function createCustomParticles(
 /**
  * Advances the simulation by `dt` seconds.
  *
- * Pure and injectable (`random` is only used when a particle respawns), which
- * is what lets a probe assert an exact position for a given seed and time
- * instead of eyeballing a moving picture.
+ * Pure and injectable (`random` is only used when a particle respawns), which is
+ * what lets a probe assert an exact position for a given seed and time instead
+ * of eyeballing a moving picture.
  */
 export function advanceCustomParticles(
   particles: CustomParticle[],
@@ -227,10 +262,13 @@ export function advanceCustomParticles(
       CURL_SCRATCH,
     );
     const length = Math.hypot(fx, fy) || 1;
-    const vx = particle.vx + (fx / length) * particle.turbulence;
-    const vy = particle.vy + (fy / length) * particle.turbulence;
-    particle.x += vx * step;
-    particle.y += vy * step;
+    // The engine lets turbulence wobble the upward drift but never turn it into
+    // a downward one (particles.ts clamps that at 60% of the drift).
+    const baseUp = -particle.vy;
+    const wobbleUp = (fy / length) * particle.turbulence;
+    const up = baseUp + Math.max(wobbleUp, -baseUp * 0.6);
+    particle.x += (particle.vx + (fx / length) * particle.turbulence) * step;
+    particle.y -= up * step;
     // Nothing that has left the screen is ever coming back: respawn it on the
     // other side instead of keeping a particle nobody can see.
     if (particle.x < -32 || particle.x > width + 32 || particle.y < -32 || particle.y > height + 32) {
@@ -280,63 +318,64 @@ export function paintCustomParticles(
   context.globalCompositeOperation = 'source-over';
 }
 
-/**
- * The colour-field backdrop the first version drew.
- *
- * Still here for the wallpaper that has no picture: three soft radial fields
- * wandering on sine paths. On a dark theme they add light; on a light one they
- * tint the surface, because adding light to white only makes white.
- */
-export function paintCustomField(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  time: number,
-  colors: { a: string; b: string; surface: string },
-  drift: number,
-  dark: boolean,
-): void {
-  const reach = Math.max(width, height) * 0.62;
-  const swing = (0.02 + drift * 0.09) * Math.min(width, height);
-  context.globalCompositeOperation = 'source-over';
-  context.globalAlpha = 1;
-  context.fillStyle = colors.surface;
-  context.fillRect(0, 0, width, height);
-  context.globalCompositeOperation = dark ? 'lighter' : 'source-over';
-  context.globalAlpha = dark ? 0.85 : 0.5;
-  const fields = [
-    { color: colors.a, x: 0.28, y: 0.3, phase: 0, swayX: 0.9, swayY: 0.7 },
-    { color: colors.b, x: 0.74, y: 0.62, phase: 2.1, swayX: 0.7, swayY: 1 },
-    { color: colors.a, x: 0.5, y: 0.92, phase: 4.2, swayX: 1, swayY: 0.6 },
-  ];
-  for (const field of fields) {
-    const x = field.x * width + Math.sin(time * 0.16 + field.phase) * swing * field.swayX;
-    const y = field.y * height + Math.cos(time * 0.12 + field.phase) * swing * field.swayY;
-    const glow = context.createRadialGradient(x, y, 0, x, y, reach);
-    glow.addColorStop(0, field.color);
-    glow.addColorStop(1, 'transparent');
-    context.fillStyle = glow;
-    context.fillRect(0, 0, width, height);
-  }
-  context.globalAlpha = 1;
-  context.globalCompositeOperation = 'source-over';
-}
-
 /* -------------------------------------------------------------------------- */
 /* The component                                                              */
 /* -------------------------------------------------------------------------- */
 
-const FALLBACK_COLORS = { a: '#6d4cff', b: '#0ea5e9', surface: '#060a16' };
+/**
+ * The fixed half of the particle system.
+ *
+ * The seven controls cover what a viewer can tell apart; everything else is a
+ * library default with one value, so it is fixed here rather than exposed as a
+ * knob nobody wants to touch:
+ * - count: 160 for a full-screen field (the emitter's rate/maxcount territory;
+ *   150 is the engine's sphererandom preview rate);
+ * - size: 22 scene units through sizerandom's exponent-2 curve (12-50 units),
+ *   about 6-25 CSS pixels on a 1080p screen;
+ * - opacity: 0.5 stands in for the ember sprite's own texture alpha;
+ * - life: 3 s, the middle of lifetimerandom.min 1 / max 5;
+ * - turbulence: 0.15, DEFAULT_DRIFT_TURBULENCE in the scene renderer;
+ * - spread: 0.6, DEFAULT_DRIFT.spread.
+ */
+const PARTICLE = {
+  count: 160,
+  sizeUnits: 22,
+  opacity: 0.5,
+  life: 3,
+  turbulence: 0.15,
+  spread: 0.6,
+} as const;
 
-/** Does the system ask for reduced motion right now? */
-function prefersReducedMotion(): boolean {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-  try {
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
-  } catch {
-    return false;
+/** How many points one sway cycle is sampled into for the compositor. */
+const SWAY_SAMPLES = 24;
+
+/**
+ * The sway keyframes: one full `oscillateposition` cycle, sampled.
+ *
+ * `customSwayCurve()` is sin for x and cos for y, and sampling one period keeps
+ * the picture's transform a plain keyframe animation the compositor runs without
+ * the main thread - the curve only has to be right, not evaluated per frame.
+ */
+export function customSwayKeyframes(
+  effect: ResolvedCustomEffect,
+  viewport: { width: number; height: number },
+): { x: number[]; y: number[]; scale: number } {
+  const amplitude = (effect.amplitude / 100) * Math.min(viewport.width, viewport.height);
+  const x: number[] = [];
+  const y: number[] = [];
+  for (let index = 0; index <= SWAY_SAMPLES; index += 1) {
+    const seconds = index / SWAY_SAMPLES / effect.frequency;
+    const point = customSwayCurve(effect.frequency, seconds);
+    x.push(Math.round(point.x * amplitude * 100) / 100);
+    y.push(Math.round(point.y * amplitude * 100) / 100);
   }
+  // The picture has to stay bigger than the frame by twice the sway amplitude,
+  // or the bare page shows through at the edge of every swing.
+  const scale = 1 + (2 * effect.amplitude) / 100 + 0.01;
+  return { x, y, scale };
 }
+
+const FALLBACK_COLORS = { a: '#6d4cff', b: '#0ea5e9', surface: '#060a16' };
 
 /** A 2D context, or null where there is none (SSR, jsdom, old browsers). */
 function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D | null {
@@ -348,33 +387,45 @@ function context2d(canvas: HTMLCanvasElement | null): CanvasRenderingContext2D |
   }
 }
 
+/** Does the system ask for reduced motion right now? */
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface CustomWallpaperProps {
   /**
    * The wallpaper settings. Only the custom fields are read, so the
    * administrator's BackgroundSettings is accepted here too.
    */
-  settings: CustomWallpaperParams;
-  /** The imported picture, when there is one; null draws the colour field. */
+  settings: CustomEffectParams;
+  /** The uploaded picture. Without one the neutral theme placeholder shows. */
   url?: string | null;
 }
 
 export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
-  const custom = resolveCustomWallpaper(settings);
-  const { particles } = custom;
+  const effect = resolveCustomEffect(settings);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [reduced, setReduced] = useState(false);
-  /** A picture that will not decode leaves the colour field to be the wallpaper. */
+  /** A picture that will not decode leaves the neutral placeholder to be the wallpaper. */
   const [failed, setFailed] = useState(false);
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window === 'undefined' ? 1280 : window.innerWidth || 1280,
+    height: typeof window === 'undefined' ? 800 : window.innerHeight || 800,
+  }));
   const picture = url && !failed ? url : null;
-  const backdrop = customBackdrop(custom.colors);
 
   // The picture a failed decode replaced is a different wallpaper worth trying.
   useEffect(() => {
     setFailed(false);
   }, [url]);
 
-  // Reduced motion is read from the media query rather than from a prop, and it
-  // is watched: the setting can change while the page is open.
+  // Reduced motion is read from the media query and watched: the system setting
+  // can change while the page is open.
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -394,13 +445,26 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
     };
   }, []);
 
+  // The sway is sized from the window, not from layout: one read on resize.
+  useEffect(() => {
+    const measure = () => setViewport({ width: window.innerWidth || 1280, height: window.innerHeight || 800 });
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  const sway = useMemo(
+    () => customSwayKeyframes(effect, viewport),
+    [effect.amplitude, effect.frequency, viewport.width, viewport.height],
+  );
+
   // The particle loop. One effect owns the canvas, the simulation and every
   // listener; the cleanup puts all of it back.
   useEffect(() => {
+    if (!picture || !effect.particles) return undefined;
     const canvas = canvasRef.current;
     const context = context2d(canvas);
-    // No 2D canvas: the picture (or the CSS backdrop) is the wallpaper and the
-    // particles simply do not exist. Nothing to clean up.
+    // No 2D canvas: the picture is the wallpaper and the particles simply do not
+    // exist. Nothing to clean up.
     if (!canvas || !context) return undefined;
 
     const root = document.documentElement;
@@ -412,25 +476,17 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       }
     };
     /** Resolved once per layout / theme change, never per frame. */
-    let palette: { a: string; b: string; surface: string; particle: string } = {
-      ...FALLBACK_COLORS,
-      particle: FALLBACK_COLORS.a,
-    };
+    let particleColor = '';
     let dark = root.classList.contains('dark');
     const refreshPalette = () => {
       dark = root.classList.contains('dark');
-      palette = {
-        a: resolveCssColor(custom.colors.a, readVariable, FALLBACK_COLORS.a),
-        b: resolveCssColor(custom.colors.b, readVariable, FALLBACK_COLORS.b),
-        surface: readVariable('--surface').trim() || (dark ? '#060a16' : '#f4f5fb'),
-        particle: resolveCssColor(particles.color, readVariable, ''),
-      };
-      if (!palette.particle) palette.particle = readVariable('--accent').trim() || FALLBACK_COLORS.a;
+      particleColor = readVariable('--accent').trim() || FALLBACK_COLORS.a;
     };
 
     let width = 1;
     let height = 1;
-    let field = createCustomParticles(particles.count, particles, 1, 1);
+    let config = particleConfig(effect, 1);
+    let field = createCustomParticles(PARTICLE.count, config, 1, 1);
     let raf = 0;
     let running = false;
     let last = 0;
@@ -444,18 +500,14 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // scene units/s -> px/s with the library's orthographic volume.
+      config = particleConfig(effect, sceneUnitScale(width, height));
       refreshPalette();
     };
 
     const paint = () => {
-      if (picture) {
-        // The picture is an <img> of its own being moved by the compositor; the
-        // canvas only carries the particles over it.
-        context.clearRect(0, 0, width, height);
-      } else {
-        paintCustomField(context, width, height, time, palette, custom.drift, dark);
-      }
-      if (particles.count > 0) paintCustomParticles(context, field, palette.particle, dark);
+      context.clearRect(0, 0, width, height);
+      paintCustomParticles(context, field, particleColor, dark);
     };
 
     const tick = (now: number) => {
@@ -463,8 +515,8 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       // A tab that was asleep hands back a huge delta; cap it.
       const delta = Math.min(64, Math.max(0, now - last));
       last = now;
-      time += (delta / 1000) * custom.speed;
-      advanceCustomParticles(field, delta / 1000, time, particles, width, height);
+      time += delta / 1000;
+      advanceCustomParticles(field, delta / 1000, time, config, width, height);
       paint();
     };
 
@@ -485,7 +537,7 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
     };
 
     layout();
-    field = createCustomParticles(particles.count, particles, width, height);
+    field = createCustomParticles(PARTICLE.count, config, width, height);
     paint();
     start();
 
@@ -493,7 +545,7 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       layout();
       // The particles are in pixels: a new surface gets a fresh field rather
       // than one squeezed into the old coordinates.
-      field = createCustomParticles(particles.count, particles, width, height);
+      field = createCustomParticles(PARTICLE.count, config, width, height);
       paint();
     };
     const onVisibility = () => {
@@ -503,8 +555,8 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
     window.addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', onVisibility);
 
-    // Switching between the light and dark themes changes the surface and the
-    // theme accents the palette falls back to.
+    // Switching between the light and dark themes changes the accent the
+    // particles are drawn in.
     let observer: MutationObserver | null = null;
     if (typeof MutationObserver !== 'undefined') {
       observer = new MutationObserver(() => {
@@ -520,19 +572,12 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       document.removeEventListener('visibilitychange', onVisibility);
       observer?.disconnect();
     };
-  }, [picture, custom.colors.a, custom.colors.b, custom.drift, custom.speed, particles.count, particles.size, particles.opacity, particles.life, particles.speed, particles.turbulence, particles.color, particles.wind, reduced]);
+    // The drift numbers are what shapes the field; a change is a different field.
+  }, [picture, effect.particles, effect.rise, effect.drift, effect.direction, reduced]);
 
-  // The picture's drift: a CSS transform on the compositor, so the main thread
-  // is free for typing. Percentage translates are relative to the picture's own
-  // box - no layout is read, and no number has to know the viewport.
-  const amplitude = 1 + custom.drift * 5;
-  const duration = Math.max(4, 32 / custom.speed);
   const animate =
-    picture && !reduced
-      ? {
-          x: [`-${amplitude}%`, `${amplitude}%`, `-${amplitude}%`],
-          y: [`${amplitude * 0.6}%`, `-${amplitude * 0.6}%`, `${amplitude * 0.6}%`],
-        }
+    picture && effect.sway && !reduced
+      ? { x: sway.x, y: sway.y }
       : undefined;
 
   return (
@@ -540,52 +585,72 @@ export function CustomWallpaper({ settings, url }: CustomWallpaperProps) {
       className="absolute inset-0 overflow-hidden"
       data-custom-wallpaper
       data-custom-picture={picture ? 'true' : undefined}
-      style={picture ? undefined : { background: backdrop }}
+      data-custom-sway={effect.sway ? 'true' : 'false'}
+      data-custom-particles={effect.particles ? 'true' : 'false'}
     >
       {picture ? (
-        <motion.img
-          key={picture}
-          src={picture}
-          alt=""
-          data-custom-image
-          className="absolute inset-0 h-full w-full object-cover"
-          style={{ scale: 1.08 }}
+        <motion.div
+          className="absolute inset-0"
+          style={{ scale: sway.scale }}
           initial={false}
           animate={animate}
-          transition={animate ? { duration, repeat: Infinity, ease: 'easeInOut' } : undefined}
-          onError={() => setFailed(true)}
+          transition={animate ? { duration: 1 / effect.frequency, repeat: Infinity, ease: 'linear' } : undefined}
+        >
+          <img
+            src={picture}
+            alt=""
+            data-custom-image
+            className="absolute inset-0 h-full w-full object-cover"
+            onError={() => setFailed(true)}
+          />
+        </motion.div>
+      ) : (
+        // No picture yet: a neutral theme gradient, not an editable colour field.
+        <div
+          data-custom-placeholder
+          className="absolute inset-0"
+          style={{ background: customBackdrop(customColors('', '')) }}
         />
-      ) : null}
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden data-custom-particles />
+      )}
+      {picture ? <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" aria-hidden /> : null}
     </div>
   );
+}
+
+/** The internal particle config for the resolved seven controls. */
+export function particleConfig(effect: ResolvedCustomEffect, unitScale: number): CustomParticleConfig {
+  return {
+    count: PARTICLE.count,
+    size: PARTICLE.sizeUnits * unitScale,
+    opacity: PARTICLE.opacity,
+    life: PARTICLE.life,
+    speed: effect.drift * unitScale,
+    turbulence: PARTICLE.turbulence,
+    color: '',
+    wind: 0,
+    rise: effect.rise * unitScale,
+    direction: effect.direction,
+    spread: PARTICLE.spread,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
 /* The controls both dialogs draw                                             */
 /* -------------------------------------------------------------------------- */
 
-/** The number each slider currently shows, from the resolved settings. */
-function sliderValue(resolved: ResolvedCustomWallpaper, key: string): number {
+/** The current value of each slider, from the resolved settings. */
+function resolvedValue(effect: ResolvedCustomEffect, key: string): number {
   switch (key) {
-    case 'customDrift':
-      return resolved.drift;
-    case 'customSpeed':
-      return resolved.speed;
-    case 'customDensity':
-      return resolved.particles.count;
-    case 'customParticleSize':
-      return resolved.particles.size;
-    case 'customParticleOpacity':
-      return resolved.particles.opacity;
-    case 'customParticleLife':
-      return resolved.particles.life;
-    case 'customParticleSpeed':
-      return resolved.particles.speed;
-    case 'customParticleTurbulence':
-      return resolved.particles.turbulence;
-    case 'customParticleWind':
-      return resolved.particles.wind;
+    case 'customSwayAmplitude':
+      return effect.amplitude;
+    case 'customSwayFrequency':
+      return effect.frequency;
+    case 'customParticleRise':
+      return effect.rise;
+    case 'customParticleDrift':
+      return effect.drift;
+    case 'customParticleDirection':
+      return effect.direction;
     default:
       return 0;
   }
@@ -593,61 +658,37 @@ function sliderValue(resolved: ResolvedCustomWallpaper, key: string): number {
 
 export interface CustomWallpaperControlsProps {
   /** The values being edited; missing ones show the defaults. */
-  value: CustomWallpaperParams;
-  onChange: (patch: CustomWallpaperParams) => void;
-  /** Show the two field colours as well (the personal wallpaper, not the admin one). */
-  palette?: boolean;
+  value: CustomEffectParams;
+  onChange: (patch: CustomEffectParams) => void;
   disabled?: boolean;
 }
 
 /**
- * The custom wallpaper's sliders, shared by the appearance dialog and the
- * administrator's settings dialog so both describe the background in the same
- * terms. `CUSTOM_WALLPAPER_SLIDERS` is the single list; this renders it.
+ * The seven controls, shared by the appearance dialog and the administrator's
+ * settings dialog so both describe the background in the same terms.
  */
-export function CustomWallpaperControls({ value, onChange, palette = false, disabled = false }: CustomWallpaperControlsProps) {
-  const resolved = resolveCustomWallpaper(value);
+export function CustomWallpaperControls({ value, onChange, disabled = false }: CustomWallpaperControlsProps) {
+  const effect = resolveCustomEffect(value);
   return (
     <div className="space-y-3" data-custom-controls>
-      {palette ? (
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="text-[12px] text-[var(--muted)]">纯色场配色</span>
-          {(
-            [
-              { key: 'customA' as const, label: '主色', fallback: '#6d4cff' },
-              { key: 'customB' as const, label: '辅色', fallback: '#0ea5e9' },
-            ] as const
-          ).map((field) => (
-            <label key={field.key} className="flex items-center gap-2">
-              <span className="text-[11.5px] text-[var(--faint)]">{field.label}</span>
-              <input
-                type="color"
-                aria-label={`自定义壁纸${field.label}`}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+        {CUSTOM_EFFECT_TOGGLES.map((toggle) => {
+          const checked = toggle.key === 'customSway' ? effect.sway : effect.particles;
+          return (
+            <label key={toggle.key} className="flex items-center gap-2">
+              <Switch
+                checked={checked}
                 disabled={disabled}
-                value={value[field.key] || field.fallback}
-                onChange={(event) => onChange({ [field.key]: event.target.value } as CustomWallpaperParams)}
-                className="h-7 w-10 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
+                onChange={(next) => onChange({ [toggle.key]: next } as CustomEffectParams)}
               />
+              <span className="text-[12px] text-[var(--muted)]">{toggle.label}</span>
             </label>
-          ))}
-          {value.customA || value.customB ? (
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChange({ customA: '', customB: '' })}
-              className="focus-ring rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-            >
-              恢复主题色
-            </button>
-          ) : (
-            <span className="text-[11px] text-[var(--faint)]">当前跟随主题的两个强调色</span>
-          )}
-        </div>
-      ) : null}
-
-      <div className="grid gap-3 sm:grid-cols-3">
-        {CUSTOM_WALLPAPER_SLIDERS.map((control) => {
-          const current = sliderValue(resolved, String(control.key));
+          );
+        })}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {CUSTOM_EFFECT_SLIDERS.map((control) => {
+          const current = resolvedValue(effect, String(control.key));
           return (
             <label key={String(control.key)} className="space-y-1.5">
               <span className="flex items-center justify-between text-[12px] text-[var(--muted)]">
@@ -662,42 +703,17 @@ export function CustomWallpaperControls({ value, onChange, palette = false, disa
                 max={control.max}
                 step={control.step}
                 value={current}
-                onChange={(event) => onChange({ [control.key]: Number(event.target.value) } as CustomWallpaperParams)}
+                onChange={(event) => onChange({ [control.key]: Number(event.target.value) } as CustomEffectParams)}
                 className="w-full accent-[var(--accent)]"
               />
             </label>
           );
         })}
       </div>
-
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-[12px] text-[var(--muted)]">粒子颜色</span>
-        <label className="flex items-center gap-2">
-          <input
-            type="color"
-            aria-label="粒子颜色"
-            disabled={disabled}
-            value={value.customParticleColor || '#8b6cff'}
-            onChange={(event) => onChange({ customParticleColor: event.target.value })}
-            className="h-7 w-10 cursor-pointer rounded-lg border border-[var(--line)] bg-transparent"
-          />
-        </label>
-        {value.customParticleColor ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => onChange({ customParticleColor: '' })}
-            className="focus-ring rounded-lg border border-[var(--line)] px-2 py-1 text-[11px] text-[var(--muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]"
-          >
-            跟随主题
-          </button>
-        ) : (
-          <span className="text-[11px] text-[var(--faint)]">当前跟随主题强调色</span>
-        )}
-        <span className="ml-auto text-[11px] text-[var(--faint)]">
-          {resolved.particles.count} 个粒子，由应用实时绘制
-        </span>
-      </div>
+      <p className="text-[11px] leading-relaxed text-[var(--faint)]">
+        晃动与粒子参数对齐 wallpaper-scene-layers 的 drift / oscillateposition 语义：频率是每秒往复次数，
+        粒子的升降与漂移以场景单位/秒计（库的 3840×2160 正交视图）。
+      </p>
     </div>
   );
 }

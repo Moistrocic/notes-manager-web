@@ -76,47 +76,69 @@ export interface WallpaperSettings {
   /** The colour to use when autoAccent is off. Empty means the theme's own. */
   accentColor: string;
 
-  /* The custom wallpaper's palette, its motion, and its particles. */
-  /** First colour of the still field; empty means the theme's accent. */
-  customA: string;
-  /** Second colour of the still field; empty means the theme's secondary accent. */
-  customB: string;
-  /** How far the picture (or colour field) wanders, 0 - 1. */
-  customDrift: number;
-  /** How fast it wanders, 0.2 - 2 (1 is the designed pace). */
-  customSpeed: number;
-  /**
-   * The particle system, tuned against the Wallpaper Engine defaults this
-   * repository's own scene renderer implements (see
-   * lib/wallpaper-scene-layers/.../render/particles.ts and particle-defaults.ts).
-   * They are optional because settings files written before v2 have none of
-   * them: resolveCustomWallpaper() fills in and clamps the real values.
+  /*
+   * The custom wallpaper's seven controls (1.6).
+   *
+   * Six of them come straight from the Wallpaper Engine drift model the vendored
+   * scene renderer implements (lib/wallpaper-scene-layers/.../render/particles.ts:
+   * ParticleDriftOptions { rise, speed, forwardRatio, spread }); the two booleans
+   * turn the two halves of the effect off. They are optional because settings
+   * files written before each version have fewer fields than the current ones:
+   * resolveCustomEffect() is the one place that fills and clamps them.
    */
-  /** How many particles: 0 - CUSTOM_MAX_PARTICLES. */
+  /** Draw the picture's slow sway at all. */
+  customSway?: boolean;
+  /** Sway displacement, percent of the viewport's short edge (0 - 8). */
+  customSwayAmplitude?: number;
+  /** Sway frequency in Hz, 0.02 - 0.5. */
+  customSwayFrequency?: number;
+  /** Draw particles at all. */
+  customShowParticles?: boolean;
+  /** Drift rise: scene units per second, i.e. the engine's drift.rise. */
+  customParticleRise?: number;
+  /** Drift speed: scene units per second, i.e. the engine's drift.speed. */
+  customParticleDrift?: number;
+  /** Fraction of particles blown along the main direction: drift.forwardRatio. */
+  customParticleDirection?: number;
+  /*
+   * The 1.5.x knobs. Kept in the type (all optional) so an old settings file
+   * still parses and the existing tests still compile; the UI and the store no
+   * longer read or write them. loadWallpaperSettings() drops them.
+   */
+  /** @deprecated 1.5.x palette; the placeholder is the theme gradient now. */
+  customA?: string;
+  /** @deprecated 1.5.x palette; see customA. */
+  customB?: string;
+  /** @deprecated 1.5.x motion knob; use customSwayAmplitude/customSwayFrequency. */
+  customDrift?: number;
+  /** @deprecated 1.5.x motion knob; see customDrift. */
+  customSpeed?: number;
+  /** @deprecated 1.5.x particle knobs; the density is fixed now. */
   customDensity?: number;
-  /** Particle radius in CSS pixels, 0.6 - 6. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleSize?: number;
-  /** How opaque a particle starts, 0.05 - 1. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleOpacity?: number;
-  /** Particle lifetime in seconds, 1 - 12. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleLife?: number;
-  /** How fast particles travel, 0 - 120 px/s. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleSpeed?: number;
-  /** How strongly the curl-noise field stirs them, 0 - 1. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleTurbulence?: number;
-  /** Particle colour; empty means the theme's accent. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleColor?: string;
-  /** Direction of the drift in degrees: 90 is upward, 0 is to the right. */
+  /** @deprecated 1.5.x particle knobs. */
   customParticleWind?: number;
 }
 
 /**
- * The custom wallpaper's defaults.
+ * The custom wallpaper's 1.5.x defaults.
  *
- * Where a number can be traced to Wallpaper Engine's own defaults (this
- * repository re-implements its particle system in
- * lib/wallpaper-scene-layers/.../render/particles.ts), the source is written
- * next to it; the rest are chosen for how they look over a photograph.
+ * @deprecated Kept because the 1.5.x settings format, helpers and tests still
+ * refer to it; the UI reads CUSTOM_EFFECT_DEFAULTS. Where a number can be traced
+ * to Wallpaper Engine's own defaults (this repository re-implements its particle
+ * system in lib/wallpaper-scene-layers/.../render/particles.ts), the source is
+ * written next to it; the rest are chosen for how they look over a photograph.
  */
 export const CUSTOM_DEFAULTS = {
   /** The drawn field's sway; the picture's is the same knob. */
@@ -144,6 +166,157 @@ export const CUSTOM_DEFAULTS = {
 /** The most particles the custom wallpaper will draw, whatever a setting says. */
 export const CUSTOM_MAX_PARTICLES = 240;
 
+/**
+ * The 1.5.x custom wallpaper fields, dropped whenever settings are loaded.
+ *
+ * Old settings files (and old tests) mention them; the current wallpaper has no
+ * use for any of them, and writing them back would keep dead bytes in
+ * localStorage forever. @deprecated
+ */
+export const LEGACY_CUSTOM_KEYS = [
+  'customA',
+  'customB',
+  'customDrift',
+  'customSpeed',
+  'customDensity',
+  'customParticleSize',
+  'customParticleOpacity',
+  'customParticleLife',
+  'customParticleSpeed',
+  'customParticleTurbulence',
+  'customParticleColor',
+  'customParticleWind',
+] as const;
+
+/* -------------------------------------------------------------------------- */
+/* The custom wallpaper's seven controls (1.6)                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The custom background's controls, in the user's words: whether the picture
+ * sways and how far/fast, whether particles show and how they rise, drift, and
+ * how many go the main way.
+ *
+ * The motion half is the Wallpaper Engine drift model the vendored renderer
+ * implements: `ParticleDriftOptions` in
+ * lib/wallpaper-scene-layers/packages/we-scene/src/render/particles.ts
+ * ({ rise: 120, speed: 200, forwardRatio: 0.8, spread: 0.6 } are that renderer's
+ * defaults), and the library's Rossi preset uses rise 240 / speed 200 /
+ * forwardRatio 0.7 - which is where this wallpaper's defaults come from. The
+ * sway half follows that renderer's `oscillateposition` operator curve:
+ * displacement = sin/cos(elapsed * frequency * 2π). The scene there displaces a
+ * 3D camera/quad; here the same curve and units displace a 2D picture.
+ */
+export interface CustomEffectParams {
+  customSway?: boolean;
+  customSwayAmplitude?: number;
+  customSwayFrequency?: number;
+  customShowParticles?: boolean;
+  customParticleRise?: number;
+  customParticleDrift?: number;
+  customParticleDirection?: number;
+}
+
+/** The custom wallpaper with every number filled in and clamped. */
+export interface ResolvedCustomEffect {
+  sway: boolean;
+  /** Displacement amplitude, percent of the viewport's short edge. */
+  amplitude: number;
+  /** Cycles per second. */
+  frequency: number;
+  particles: boolean;
+  /** Scene units per second; the engine's drift.rise. */
+  rise: number;
+  /** Scene units per second; the engine's drift.speed. */
+  drift: number;
+  /** The engine's drift.forwardRatio, 0 - 1. */
+  direction: number;
+}
+
+/** The custom wallpaper's defaults, taken from the library's Rossi preset. */
+export const CUSTOM_EFFECT_DEFAULTS = {
+  sway: true,
+  /** 2.5% of the short edge: a few tens of pixels, the calm of a scene camera. */
+  amplitude: 2.5,
+  /** 0.1 Hz = one full sway every ten seconds. */
+  frequency: 0.1,
+  particles: true,
+  /** ROSSI_WALLPAPER.particles.drift.rise in the vendored library. */
+  rise: 240,
+  /** ROSSI_WALLPAPER.particles.drift.speed. */
+  drift: 200,
+  /** ROSSI_WALLPAPER.particles.drift.forwardRatio. */
+  direction: 0.7,
+} as const;
+
+/**
+ * The orthographic volume the library renders a scene into.
+ *
+ * scene/types.ts: "Orthographic view volume in scene units (3840 x 2160 by
+ * default)". One scene unit is therefore `max(width/3840, height/2160)` CSS
+ * pixels under the renderer's default "cover" fit, which is how the drift
+ * speeds (scene units/s) become pixels/s here.
+ */
+export const CUSTOM_ORTHO = { width: 3840, height: 2160 } as const;
+
+/** CSS pixels per scene unit at a viewport size, for the library's cover fit. */
+export function sceneUnitScale(width: number, height: number): number {
+  const w = Math.max(1, Number(width) || 0);
+  const h = Math.max(1, Number(height) || 0);
+  return Math.max(w / CUSTOM_ORTHO.width, h / CUSTOM_ORTHO.height);
+}
+
+/** Fills in and clamps the seven controls; the one reader of these fields. */
+export function resolveCustomEffect(settings: CustomEffectParams): ResolvedCustomEffect {
+  return {
+    sway: settings.customSway !== false,
+    amplitude: between(settings.customSwayAmplitude, 0, 8, CUSTOM_EFFECT_DEFAULTS.amplitude),
+    frequency: between(settings.customSwayFrequency, 0.02, 0.5, CUSTOM_EFFECT_DEFAULTS.frequency),
+    particles: settings.customShowParticles !== false,
+    rise: between(settings.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
+    drift: between(settings.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
+    direction: between(settings.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
+  };
+}
+
+/**
+ * The sway at a moment, in units of the amplitude: sin for x, cos for y.
+ *
+ * That is the `oscillateposition` curve from the vendored renderer
+ * (render/particles.ts: `position[0] += sin(elapsed * frequency * 2π + seed) *
+ * scale * dt`, and cos for y), kept as a pure function so the 2D image
+ * transform can be asserted against it instead of eyeballed.
+ */
+export function customSwayCurve(frequency: number, seconds: number): { x: number; y: number } {
+  const angle = 2 * Math.PI * frequency * seconds;
+  return { x: Math.sin(angle), y: Math.cos(angle) };
+}
+
+/** One slider of the seven controls (the two booleans are toggles). */
+export interface CustomEffectControl {
+  key: keyof CustomEffectParams;
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  format: (value: number) => string;
+}
+
+/** The two switches, in the user's words. */
+export const CUSTOM_EFFECT_TOGGLES: readonly { key: 'customSway' | 'customShowParticles'; label: string }[] = [
+  { key: 'customSway', label: '背景晃动' },
+  { key: 'customShowParticles', label: '显示粒子' },
+];
+
+/** The five sliders, in the user's words. */
+export const CUSTOM_EFFECT_SLIDERS: readonly CustomEffectControl[] = [
+  { key: 'customSwayAmplitude', label: '背景晃动幅度', min: 0, max: 8, step: 0.25, format: (v) => `${v.toFixed(2)}%` },
+  { key: 'customSwayFrequency', label: '背景晃动频率', min: 0.02, max: 0.5, step: 0.01, format: (v) => `${v.toFixed(2)} Hz` },
+  { key: 'customParticleRise', label: '粒子上升速度', min: 0, max: 500, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
+  { key: 'customParticleDrift', label: '粒子漂移速度', min: 0, max: 400, step: 10, format: (v) => `${Math.round(v)} 单位/秒` },
+  { key: 'customParticleDirection', label: '粒子有向概率', min: 0, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%` },
+];
+
 export const DEFAULT_WALLPAPER: WallpaperSettings = {
   kind: 'none',
   source: 'url',
@@ -157,18 +330,13 @@ export const DEFAULT_WALLPAPER: WallpaperSettings = {
   useAdminBackground: true,
   autoAccent: true,
   accentColor: '',
-  customA: '',
-  customB: '',
-  customDrift: CUSTOM_DEFAULTS.drift,
-  customSpeed: CUSTOM_DEFAULTS.speed,
-  customDensity: CUSTOM_DEFAULTS.density,
-  customParticleSize: CUSTOM_DEFAULTS.particleSize,
-  customParticleOpacity: CUSTOM_DEFAULTS.particleOpacity,
-  customParticleLife: CUSTOM_DEFAULTS.particleLife,
-  customParticleSpeed: CUSTOM_DEFAULTS.particleSpeed,
-  customParticleTurbulence: CUSTOM_DEFAULTS.particleTurbulence,
-  customParticleColor: CUSTOM_DEFAULTS.particleColor,
-  customParticleWind: CUSTOM_DEFAULTS.particleWind,
+  customSway: CUSTOM_EFFECT_DEFAULTS.sway,
+  customSwayAmplitude: CUSTOM_EFFECT_DEFAULTS.amplitude,
+  customSwayFrequency: CUSTOM_EFFECT_DEFAULTS.frequency,
+  customShowParticles: CUSTOM_EFFECT_DEFAULTS.particles,
+  customParticleRise: CUSTOM_EFFECT_DEFAULTS.rise,
+  customParticleDrift: CUSTOM_EFFECT_DEFAULTS.drift,
+  customParticleDirection: CUSTOM_EFFECT_DEFAULTS.direction,
 };
 
 /** The two colours the custom wallpaper is drawn with. */
@@ -650,7 +818,7 @@ export function loadWallpaperSettings(): WallpaperSettings {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_WALLPAPER };
     const parsed = JSON.parse(raw) as Partial<WallpaperSettings>;
-    return {
+    const settings: WallpaperSettings = {
       ...DEFAULT_WALLPAPER,
       ...parsed,
       blur: clamp(Number(parsed.blur ?? 0), 0, 40),
@@ -662,23 +830,22 @@ export function loadWallpaperSettings(): WallpaperSettings {
       useAdminBackground: parsed.useAdminBackground !== false,
       autoAccent: parsed.autoAccent !== false,
       accentColor: typeof parsed.accentColor === 'string' ? parsed.accentColor : '',
-      // Settings written before the custom wallpaper existed hold none of
-      // these; the defaults are what it looked like the day it shipped. The
-      // numbers are clamped here as well as in resolveCustomWallpaper, so what
-      // is written back to storage is always inside the range the sliders offer.
-      customA: typeof parsed.customA === 'string' ? parsed.customA : '',
-      customB: typeof parsed.customB === 'string' ? parsed.customB : '',
-      customDrift: between(parsed.customDrift, 0, 1, CUSTOM_DEFAULTS.drift),
-      customSpeed: between(parsed.customSpeed, 0.2, 2, CUSTOM_DEFAULTS.speed),
-      customDensity: customParticleCount(parsed.customDensity ?? CUSTOM_DEFAULTS.density),
-      customParticleSize: between(parsed.customParticleSize, 0.6, 6, CUSTOM_DEFAULTS.particleSize),
-      customParticleOpacity: between(parsed.customParticleOpacity, 0.05, 1, CUSTOM_DEFAULTS.particleOpacity),
-      customParticleLife: between(parsed.customParticleLife, 1, 12, CUSTOM_DEFAULTS.particleLife),
-      customParticleSpeed: between(parsed.customParticleSpeed, 0, 120, CUSTOM_DEFAULTS.particleSpeed),
-      customParticleTurbulence: between(parsed.customParticleTurbulence, 0, 1, CUSTOM_DEFAULTS.particleTurbulence),
-      customParticleColor: typeof parsed.customParticleColor === 'string' ? parsed.customParticleColor : '',
-      customParticleWind: between(parsed.customParticleWind, 0, 360, CUSTOM_DEFAULTS.particleWind),
+      // Settings written before the current controls existed hold fewer of
+      // these (or the old knobs' names); the defaults are what the wallpaper
+      // looks like on a fresh install. The numbers are clamped here as well as
+      // in resolveCustomEffect, so what is written back is always in range.
+      customSway: parsed.customSway !== false,
+      customSwayAmplitude: between(parsed.customSwayAmplitude, 0, 8, CUSTOM_EFFECT_DEFAULTS.amplitude),
+      customSwayFrequency: between(parsed.customSwayFrequency, 0.02, 0.5, CUSTOM_EFFECT_DEFAULTS.frequency),
+      customShowParticles: parsed.customShowParticles !== false,
+      customParticleRise: between(parsed.customParticleRise, 0, 500, CUSTOM_EFFECT_DEFAULTS.rise),
+      customParticleDrift: between(parsed.customParticleDrift, 0, 400, CUSTOM_EFFECT_DEFAULTS.drift),
+      customParticleDirection: between(parsed.customParticleDirection, 0, 1, CUSTOM_EFFECT_DEFAULTS.direction),
     };
+    // The 1.5.x knobs are gone from the UI and from new saves; an old settings
+    // file is migrated by dropping them, not by carrying them around forever.
+    for (const key of LEGACY_CUSTOM_KEYS) delete settings[key];
+    return settings;
   } catch {
     return { ...DEFAULT_WALLPAPER };
   }

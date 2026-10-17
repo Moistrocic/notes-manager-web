@@ -1,5 +1,5 @@
-import { CUSTOM_DEFAULTS } from './wallpaper';
-import type { CropRect, CustomWallpaperParams, WallpaperKind, WallpaperSettings } from './wallpaper';
+import { resolveCustomEffect } from './wallpaper';
+import type { CropRect, CustomEffectParams, WallpaperKind, WallpaperSettings } from './wallpaper';
 
 /** One file in the server's backgrounds folder. */
 export interface BackgroundFile {
@@ -11,12 +11,11 @@ export interface BackgroundFile {
 /**
  * How the administrator wants their background framed and lit.
  *
- * The custom background's motion and particle numbers are the same fields the
- * personal setting uses; they are optional here because a settings file written
- * before that background existed has none of them (the server fills defaults in
- * before this ever reaches the browser).
+ * The custom background's seven controls are the same fields the personal
+ * setting uses; they are optional here because a settings file written before
+ * them has none (the server fills defaults in before this reaches the browser).
  */
-export interface BackgroundOptions extends Omit<CustomWallpaperParams, 'customA' | 'customB'> {
+export interface BackgroundOptions extends CustomEffectParams {
   crop: CropRect;
   blur: number;
   dim: number;
@@ -60,29 +59,24 @@ export function shownWallpaper(settings: WallpaperSettings, admin: AdminBackgrou
     return { ...settings, kind: 'none', source: 'url', url: '', auroraA: admin.options.auroraA, auroraB: admin.options.auroraB };
   }
   if (admin.kind === 'custom') {
-    // The custom background carries its own motion and particles; the framing
-    // knobs (crop, blur) belong to pictures and videos and mean nothing here.
-    // The palette stays the user's, used only if their copy of the picture
-    // fails to load and the drawn field takes over.
+    // The custom background carries its own sway and particle numbers; the
+    // framing knobs (crop, blur) belong to pictures and videos and mean nothing
+    // here. resolveCustomEffect() fills in whatever the administrator's settings
+    // file predates, so the layer always receives a complete set.
+    const effect = resolveCustomEffect(admin.options);
     return {
       ...settings,
       kind: 'custom',
       source: 'url',
       url: admin.url,
       dim: admin.options.dim,
-      // The two required numbers need a value even when the administrator's
-      // settings file predates them; the optional ones may stay undefined and
-      // resolveCustomWallpaper() fills them in.
-      customDrift: admin.options.customDrift ?? CUSTOM_DEFAULTS.drift,
-      customSpeed: admin.options.customSpeed ?? CUSTOM_DEFAULTS.speed,
-      customDensity: admin.options.customDensity,
-      customParticleSize: admin.options.customParticleSize,
-      customParticleOpacity: admin.options.customParticleOpacity,
-      customParticleLife: admin.options.customParticleLife,
-      customParticleSpeed: admin.options.customParticleSpeed,
-      customParticleTurbulence: admin.options.customParticleTurbulence,
-      customParticleColor: admin.options.customParticleColor,
-      customParticleWind: admin.options.customParticleWind,
+      customSway: effect.sway,
+      customSwayAmplitude: effect.amplitude,
+      customSwayFrequency: effect.frequency,
+      customShowParticles: effect.particles,
+      customParticleRise: effect.rise,
+      customParticleDrift: effect.drift,
+      customParticleDirection: effect.direction,
     };
   }
   if (!admin.kind) return settings;

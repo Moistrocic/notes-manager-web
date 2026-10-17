@@ -61,22 +61,25 @@ export interface BackgroundSettings {
   auroraA: string;
   auroraB: string;
   /**
-   * The custom background's motion and particles. Same names and ranges as the
-   * personal setting in web/src/lib/wallpaper.ts, so both dialogs describe the
-   * background in one vocabulary; mergeSettings() clamps them.
+   * The custom background's seven controls: the sway toggles/numbers and the
+   * Wallpaper Engine drift model (rise, speed, forwardRatio) with the same
+   * names and ranges as the personal setting in web/src/lib/wallpaper.ts, so
+   * both dialogs describe the background in one vocabulary. mergeSettings()
+   * clamps them; older settings.json files lose the 1.5.x fields and get these
+   * defaults.
    */
-  customDrift: number;
-  customSpeed: number;
-  customDensity: number;
-  customParticleSize: number;
-  customParticleOpacity: number;
-  customParticleLife: number;
-  customParticleSpeed: number;
-  customParticleTurbulence: number;
-  /** Empty means the theme's accent, like auroraA/auroraB. */
-  customParticleColor: string;
-  /** Degrees: 90 is up. */
-  customParticleWind: number;
+  customSway: boolean;
+  /** Sway displacement, percent of the viewport's short edge. */
+  customSwayAmplitude: number;
+  /** Sway frequency in Hz. */
+  customSwayFrequency: number;
+  customShowParticles: boolean;
+  /** Scene units per second, the engine's drift.rise. */
+  customParticleRise: number;
+  /** Scene units per second, the engine's drift.speed. */
+  customParticleDrift: number;
+  /** The engine's drift.forwardRatio, 0 - 1. */
+  customParticleDirection: number;
 }
 
 export interface GuestSettings {
@@ -124,18 +127,16 @@ export const DEFAULT_BACKGROUND: BackgroundSettings = {
   auroraA: '',
   auroraB: '',
   // The custom background's defaults: mirror web/src/lib/wallpaper.ts
-  // CUSTOM_DEFAULTS, so a background "set here" and one "set in 外观" start the
-  // same and a fresh install's default looks like the shipped one.
-  customDrift: 0.5,
-  customSpeed: 1,
-  customDensity: 140,
-  customParticleSize: 2.2,
-  customParticleOpacity: 0.55,
-  customParticleLife: 3.5,
-  customParticleSpeed: 40,
-  customParticleTurbulence: 0.35,
-  customParticleColor: '',
-  customParticleWind: 90,
+  // CUSTOM_EFFECT_DEFAULTS (which in turn follow the vendored library's Rossi
+  // preset: rise 240 / speed 200 / forwardRatio 0.7), so a background "set here"
+  // and one "set in 外观" start the same.
+  customSway: true,
+  customSwayAmplitude: 2.5,
+  customSwayFrequency: 0.1,
+  customShowParticles: true,
+  customParticleRise: 240,
+  customParticleDrift: 200,
+  customParticleDirection: 0.7,
 };
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -401,24 +402,21 @@ function mergeSettings(base: AppSettings, patch: Partial<AppSettings> | undefine
     if (b.auroraA !== undefined) current.auroraA = colour(b.auroraA, '');
     if (b.auroraB !== undefined) current.auroraB = colour(b.auroraB, '');
     // The custom background: same ranges the sliders offer, enforced here so a
-    // hand-edited settings.json cannot put the canvas out of range.
-    if (b.customDrift !== undefined) current.customDrift = clampNumber(b.customDrift, 0, 1, current.customDrift);
-    if (b.customSpeed !== undefined) current.customSpeed = clampNumber(b.customSpeed, 0.2, 2, current.customSpeed);
-    if (b.customDensity !== undefined)
-      current.customDensity = Math.round(clampNumber(b.customDensity, 0, 240, current.customDensity));
-    if (b.customParticleSize !== undefined)
-      current.customParticleSize = clampNumber(b.customParticleSize, 0.6, 6, current.customParticleSize);
-    if (b.customParticleOpacity !== undefined)
-      current.customParticleOpacity = clampNumber(b.customParticleOpacity, 0.05, 1, current.customParticleOpacity);
-    if (b.customParticleLife !== undefined)
-      current.customParticleLife = clampNumber(b.customParticleLife, 1, 12, current.customParticleLife);
-    if (b.customParticleSpeed !== undefined)
-      current.customParticleSpeed = clampNumber(b.customParticleSpeed, 0, 120, current.customParticleSpeed);
-    if (b.customParticleTurbulence !== undefined)
-      current.customParticleTurbulence = clampNumber(b.customParticleTurbulence, 0, 1, current.customParticleTurbulence);
-    if (b.customParticleColor !== undefined) current.customParticleColor = colour(b.customParticleColor, '');
-    if (b.customParticleWind !== undefined)
-      current.customParticleWind = clampNumber(b.customParticleWind, 0, 360, current.customParticleWind);
+    // hand-edited settings.json cannot put the animation out of range. The
+    // 1.5.x fields (customDrift, customDensity, ...) are not read at all: an old
+    // settings.json simply keeps the new defaults for them.
+    if (typeof b.customSway === 'boolean') current.customSway = b.customSway;
+    if (b.customSwayAmplitude !== undefined)
+      current.customSwayAmplitude = clampNumber(b.customSwayAmplitude, 0, 8, current.customSwayAmplitude);
+    if (b.customSwayFrequency !== undefined)
+      current.customSwayFrequency = clampNumber(b.customSwayFrequency, 0.02, 0.5, current.customSwayFrequency);
+    if (typeof b.customShowParticles === 'boolean') current.customShowParticles = b.customShowParticles;
+    if (b.customParticleRise !== undefined)
+      current.customParticleRise = clampNumber(b.customParticleRise, 0, 500, current.customParticleRise);
+    if (b.customParticleDrift !== undefined)
+      current.customParticleDrift = clampNumber(b.customParticleDrift, 0, 400, current.customParticleDrift);
+    if (b.customParticleDirection !== undefined)
+      current.customParticleDirection = clampNumber(b.customParticleDirection, 0, 1, current.customParticleDirection);
   }
   return out;
 }

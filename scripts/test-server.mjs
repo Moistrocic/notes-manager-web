@@ -390,9 +390,34 @@ console.log('custom background');
       const readBack = await (await fetch(origin + '/api/background')).json();
       check('and read back as the configured background', [readBack.kind, readBack.file], ['custom', '我的背景.webp']);
       check(
-        'with the motion defaults the layer draws',
-        [readBack.options.customDrift, readBack.options.customSpeed, readBack.options.customParticleWind],
-        [0.5, 1, 90],
+        'with the effect defaults the layer draws',
+        [
+          readBack.options.customSway,
+          readBack.options.customSwayAmplitude,
+          readBack.options.customSwayFrequency,
+          readBack.options.customShowParticles,
+          readBack.options.customParticleRise,
+          readBack.options.customParticleDrift,
+          readBack.options.customParticleDirection,
+        ],
+        [true, 2.5, 0.1, true, 240, 200, 0.7],
+      );
+      // A 1.5.x client still sends the old knobs. They are ignored rather than
+      // refused: an upgrade must not fail a save, and the new defaults stand.
+      const oldClient = await putSettings({
+        ...settings.effective().background,
+        kind: 'custom',
+        file: '我的背景.webp',
+        customDrift: 0.9,
+        customDensity: 12,
+        customParticleWind: 180,
+      });
+      check('an old client\'s knobs are accepted', oldClient.status, 200);
+      const afterOld = settings.effective().background;
+      check(
+        'and ignored in favour of the seven controls',
+        [afterOld.customSwayAmplitude, afterOld.customParticleRise],
+        [2.5, 240],
       );
       const missing = await putSettings({ ...settings.effective().background, kind: 'custom', file: 'gone.png' });
       check('a file that is not there is refused', [missing.status, missing.payload.error.code], [400, 'background_missing']);
@@ -404,9 +429,23 @@ console.log('custom background');
       check('as no background at all', (await (await fetch(origin + '/api/background')).json()).configured, false);
 
       // A hand-edited settings file cannot put the canvas out of range.
-      settings.update({ background: { ...settings.effective().background, kind: 'custom', file: '我的背景.webp', customDrift: 9, customParticleWind: 400, customDensity: 999 } });
+      settings.update({
+        background: {
+          ...settings.effective().background,
+          kind: 'custom',
+          file: '我的背景.webp',
+          customSwayAmplitude: 99,
+          customSwayFrequency: 0,
+          customParticleRise: 9999,
+          customParticleDirection: 9,
+        },
+      });
       const clamped = settings.effective().background;
-      check('wild custom numbers are clamped on the way in', [clamped.customDrift, clamped.customParticleWind, clamped.customDensity], [1, 360, 240]);
+      check(
+        'wild custom numbers are clamped on the way in',
+        [clamped.customSwayAmplitude, clamped.customSwayFrequency, clamped.customParticleRise, clamped.customParticleDirection],
+        [8, 0.02, 500, 1],
+      );
       // (The upload's 20 MB ceiling is a raw-body parser limit and the browser
       // shrinks before sending, so no test here sends a file that big.)
     } finally {

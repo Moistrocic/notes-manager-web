@@ -20,7 +20,7 @@ import { cn } from '../lib/cn';
 import { formatBytes } from '../lib/format';
 import { sceneStillUrl } from '../lib/scene/render-still';
 import type { BackgroundSettings, AppSettingsPayload } from '../lib/types';
-import { CUSTOM_DEFAULTS, shrinkWallpaperImage } from '../lib/wallpaper';
+import { CUSTOM_EFFECT_DEFAULTS, shrinkWallpaperImage } from '../lib/wallpaper';
 import { useAppStore } from '../store/useAppStore';
 import { CustomWallpaper, CustomWallpaperControls } from './CustomWallpaper';
 import { StatusDetail, StatusPill } from './StatusPill';
@@ -36,7 +36,7 @@ const BACKGROUND_KINDS: { value: BackgroundSettings['kind']; label: string; hint
   { value: 'image', label: '图片', hint: 'JPG / PNG / WebP / GIF' },
   { value: 'video', label: '视频', hint: 'MP4 / WebM' },
   { value: 'scene', label: '场景壁纸', hint: 'Wallpaper Engine 的 .pkg，可实时渲染' },
-  { value: 'custom', label: '自定义壁纸', hint: '图片 + 缓慢晃动 + 粒子，图片先缩图再上传' },
+  { value: 'custom', label: '自定义壁纸', hint: '图片 + 晃动 + 粒子，图片先缩图再上传' },
 ];
 
 const KIND_LABELS: Record<string, string> = {
@@ -68,16 +68,13 @@ const DEFAULT_BACKGROUND: BackgroundSettings = {
   dynamic: false,
   auroraA: '',
   auroraB: '',
-  customDrift: CUSTOM_DEFAULTS.drift,
-  customSpeed: CUSTOM_DEFAULTS.speed,
-  customDensity: CUSTOM_DEFAULTS.density,
-  customParticleSize: CUSTOM_DEFAULTS.particleSize,
-  customParticleOpacity: CUSTOM_DEFAULTS.particleOpacity,
-  customParticleLife: CUSTOM_DEFAULTS.particleLife,
-  customParticleSpeed: CUSTOM_DEFAULTS.particleSpeed,
-  customParticleTurbulence: CUSTOM_DEFAULTS.particleTurbulence,
-  customParticleColor: CUSTOM_DEFAULTS.particleColor,
-  customParticleWind: CUSTOM_DEFAULTS.particleWind,
+  customSway: CUSTOM_EFFECT_DEFAULTS.sway,
+  customSwayAmplitude: CUSTOM_EFFECT_DEFAULTS.amplitude,
+  customSwayFrequency: CUSTOM_EFFECT_DEFAULTS.frequency,
+  customShowParticles: CUSTOM_EFFECT_DEFAULTS.particles,
+  customParticleRise: CUSTOM_EFFECT_DEFAULTS.rise,
+  customParticleDrift: CUSTOM_EFFECT_DEFAULTS.drift,
+  customParticleDirection: CUSTOM_EFFECT_DEFAULTS.direction,
 };
 
 /** A file name inside a sentence, so the paths read as paths. */
@@ -446,8 +443,8 @@ export function SettingsDialog() {
             ) : null}
 
             {/* The custom background: a picture the administrator uploads (the
-                browser shrinks it first), plus the same motion and particle
-                controls the appearance dialog offers. */}
+                browser shrinks it first), plus the same seven controls the
+                appearance dialog offers. */}
             {background.kind === 'custom' ? (
               <div className="space-y-3">
                 <div className="flex flex-wrap items-center gap-2">

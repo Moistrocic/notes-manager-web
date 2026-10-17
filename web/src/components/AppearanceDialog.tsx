@@ -23,7 +23,7 @@ import {
   acceptFor,
   clearWallpaperFile,
   shrinkWallpaperImage,
-  type CustomWallpaperParams,
+  type CustomEffectParams,
   type WallpaperKind,
   type WallpaperSource,
 } from '../lib/wallpaper';
@@ -40,15 +40,16 @@ import { Button, Field, Input, Modal, Switch } from './ui/primitives';
  * the same path as a picture, so it lives under 本地图片 rather than taking a
  * slot that would have to be explained.
  *
- * The custom wallpaper is the opposite trade: no file at all, drawn by the app
- * from a palette and three numbers, so it is the one kind that costs nothing to
- * store and looks the same on every device it is set on.
+ * The custom wallpaper is the opposite trade: one uploaded picture - shrunk in
+ * the browser before it is stored - plus seven numbers that make it sway and
+ * drift like a scene wallpaper. It costs a few hundred kilobytes instead of the
+ * forty megabytes a scene does.
  */
 const KINDS: { value: WallpaperKind; label: string; icon: typeof ImageIcon; hint: string }[] = [
   { value: 'none', label: '极光', icon: X, hint: '主题自带的动态背景，可调色' },
   { value: 'image', label: '本地图片', icon: ImageIcon, hint: 'JPG / PNG / WebP，也支持 MP4 / WebM' },
   { value: 'scene', label: '场景壁纸', icon: MonitorPlay, hint: 'Wallpaper Engine 的 .pkg，不保证都能加载' },
-  { value: 'custom', label: '自定义壁纸', icon: Sparkles, hint: '导入图片 + 缓慢晃动 + 粒子，图片先缩图再存' },
+  { value: 'custom', label: '自定义壁纸', icon: Sparkles, hint: '上传图片 + 晃动 + 粒子，图片先缩图再存' },
 ];
 
 const SOURCES: { value: WallpaperSource; label: string }[] = [
@@ -440,8 +441,9 @@ export function AppearanceDialog() {
             </div>
           ) : null}
 
-          {/* The custom wallpaper: an imported picture that drifts with particles
-              over it, and - with no picture - the two-colour field. */}
+          {/* The custom wallpaper: one uploaded picture that sways, with particles
+              drifting over it. Without a picture the neutral theme placeholder is
+              all there is - this kind exists to show a picture, not a palette. */}
           {!locked && wallpaper.kind === 'custom' ? (
             <div className="mt-3 space-y-3 border-t border-[var(--line)] pt-3">
               <div
@@ -468,21 +470,21 @@ export function AppearanceDialog() {
                 </Button>
                 {wallpaperUrl ? (
                   <Button variant="ghost" size="sm" onClick={clearCustomPicture}>
-                    清除图片（回到纯色场）
+                    清除图片
                   </Button>
                 ) : (
-                  <span className="text-[11px] text-[var(--faint)]">没有图片时，下面的纯色场就是壁纸</span>
+                  <span className="text-[11px] text-[var(--faint)]">还没有图片，当前显示的是主题渐变占位</span>
                 )}
               </div>
               <p className="text-[11px] leading-relaxed text-[var(--faint)]">
                 图片在浏览器里先缩小（长边 ≤2560、WebP 0.82）再存入本地 IndexedDB，不上传服务器，
-                一张 10 MB 的照片通常只剩几百 KB。晃动是 GPU 合成的位移，粒子由应用实时绘制。
+                一张 10 MB 的照片通常只剩几百 KB。晃动与粒子参数对齐 wallpaper-scene-layers 的
+                drift / oscillateposition 语义。
               </p>
 
               <CustomWallpaperControls
                 value={wallpaper}
-                onChange={(patch: CustomWallpaperParams) => setWallpaper(patch)}
-                palette
+                onChange={(patch: CustomEffectParams) => setWallpaper(patch)}
               />
             </div>
           ) : null}

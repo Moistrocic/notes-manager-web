@@ -2553,6 +2553,14 @@ console.log('\nthe panel\'s controls (jsdom)');
 
   // Prefix matching: what is typed is compared with the start of every folder,
   // and the list is a glance rather than a second dialog.
+  const popover = () => document.querySelector<HTMLElement>('[data-testid="folder-suggestions"]');
+  const hintSlot = () => document.querySelector<HTMLElement>('[data-testid="dialog-folder-hint-slot"]');
+  const folderKey = async (name: string) => {
+    await act(async () => {
+      folderField()?.dispatchEvent(new w.KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true }));
+    });
+    await flush();
+  };
   await typeFolder('pro');
   check('typing a prefix offers the matching folders', suggestions(), ['proj', 'proj/deep']);
   check(
@@ -2560,33 +2568,108 @@ console.log('\nthe panel\'s controls (jsdom)');
     [suggestionList()?.getAttribute('role'), folderField()?.getAttribute('aria-expanded'), folderField()?.getAttribute('aria-controls')],
     ['listbox', 'true', 'prompt-folder-suggestions'],
   );
-  check('and the field says a missing one will be made', folderHint(), '不存在，将新建该文件夹');
+  // The list is a layer on the page, not a child of the dialog: the dialog body
+  // scrolls, and a popover inside it would be clipped at the scroll edge. Being
+  // outside the dialog also means it cannot make the dialog taller.
+  check('the suggestions are a popover on the page', popover()?.parentElement === document.body, true);
+  check('marked as one', popover()?.getAttribute('data-folder-popover'), 'true');
+  check('positioned absolutely', w.getComputedStyle(popover() as HTMLElement).position, 'absolute');
+  check('outside the scrolling areas', popover()?.closest('.scroll-area') ?? null, null);
+  check('and outside the field it belongs to', folderWrapper()?.contains(popover() as Node) ?? true, false);
+  check(
+    'with a height cap and its own scrolling',
+    (popover()?.className ?? '').includes('max-h-[240px]') && (popover()?.className ?? '').includes('overflow-y-auto'),
+    true,
+  );
+  // The hint line is reserved whether or not it has anything to say, so a hint
+  // appearing as the user types cannot resize the dialog either.
+  check('the hint line is always there', Boolean(hintSlot()), true);
+  check('with a floor under it', (hintSlot()?.className ?? '').includes('min-h-4'), true);
+  check('and a missing folder is still announced', folderHint(), '不存在，将新建该文件夹');
   await typeFolder('proj/de');
   check('a longer prefix narrows the list', suggestions(), ['proj/deep']);
-  // A suggestion is a step on the way to confirm, not the answer: it fills the
-  // field in and leaves the dialog open.
+  // A suggestion is a step on the way to confirm, not the answer: its mousedown
+  // is swallowed to keep the keyboard in the field, and the click fills it in.
   await act(async () => {
-    document
-      .querySelector<HTMLElement>('[data-testid="folder-suggestion-proj/deep"]')
+    popover()
+      ?.querySelector<HTMLElement>('[data-testid="folder-suggestion-proj/deep"]')
+      ?.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  });
+  await act(async () => {
+    popover()
+      ?.querySelector<HTMLElement>('[data-testid="folder-suggestion-proj/deep"]')
       ?.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
   });
   await flush();
   check('clicking a suggestion fills the field', folderField()?.value, 'proj/deep');
-  check('and leaves the dialog open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+  check('and takes the list away', Boolean(popover()), false);
+  check('with the dialog still open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
   check('an existing folder is accepted as it is', [folderHint(), confirm()?.disabled], [null, false]);
 
-  // Empty and focused offers the first folders; empty and away offers none.
-  await typeFolder('');
+  // The keyboard walks the list: Down opens on the first row, Up from it wraps to
+  // the last, and Enter takes the row without confirming the dialog.
+  await typeFolder('pro');
+  await folderKey('ArrowDown');
+  check(
+    'the first Down highlights the first match',
+    popover()?.querySelector('[data-folder-highlighted="true"]')?.getAttribute('data-testid'),
+    'folder-suggestion-proj',
+  );
+  check(
+    'which says it is selected',
+    popover()?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute('data-testid'),
+    'folder-suggestion-proj',
+  );
+  check('and the field points at it', folderField()?.getAttribute('aria-activedescendant'), 'folder-suggestion-0');
+  await folderKey('ArrowDown');
+  check('a second Down moves down', folderField()?.getAttribute('aria-activedescendant'), 'folder-suggestion-1');
+  await folderKey('ArrowUp');
+  await folderKey('ArrowUp');
+  check(
+    'Up from the first wraps to the last',
+    folderField()?.getAttribute('aria-activedescendant'),
+    'folder-suggestion-1',
+  );
+  await folderKey('Enter');
+  check('Enter fills the field with the highlighted folder', folderField()?.value, 'proj/deep');
+  check('and closes the list', Boolean(popover()), false);
+  check('without confirming the dialog', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+
+  // Escape belongs to the list first: one press closes it, the next the dialog.
+  await typeFolder('pro');
+  check('the list is open before Escape', Boolean(popover()), true);
+  await folderKey('Escape');
+  check('Escape closes the list', Boolean(popover()), false);
+  check('with the dialog still open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+  await act(async () => {
+    w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
+  });
+  await flush();
+  check('and a second Escape closes the dialog', Boolean(document.querySelector('[data-testid="dialog-title"]')), false);
+
+  // The list lingers for a moment after the field loses focus, so a click on a
+  // row can land - and then it goes.
+  await act(async () => {
+    button('新建笔记')?.click();
+  });
+  await flush();
+  await typeFolder('pro');
   await act(async () => {
     folderField()?.focus();
   });
   await flush();
-  check('an empty field that has the keyboard offers the folders', suggestions(), ['proj', 'proj/deep']);
+  check('the list is up while the field has the keyboard', Boolean(popover()), true);
   await act(async () => {
-    folderField()?.blur();
+    folderField()?.dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
   });
-  await flush();
-  check('and away from it there is nothing to suggest', Boolean(suggestionList()), false);
+  check('a focusout does not take it away at once', Boolean(popover()), true);
+  await settled(200);
+  check('and it is gone a moment later', Boolean(popover()), false);
+
+  // Nothing matches, nothing is offered.
+  await typeFolder('zzz');
+  check('a prefix with no match has no list', Boolean(popover()), false);
+  check('nor anything to suggest', suggestions(), []);
 
   // The path is normalised before it is checked: stray slashes and spaces are not
   // a different folder, and a dot segment is refused rather than dropped.
@@ -4677,25 +4760,31 @@ console.log('\nfolder prompts (jsdom)');
     });
     await flush();
     const html = host.innerHTML;
+    // The suggestion list is a portal on the page, not part of the dialog's DOM.
+    const popover = document.querySelector('[data-testid="folder-suggestions"]')?.textContent ?? '';
     await act(async () => {
       r.unmount();
     });
     host.remove();
-    return html;
+    return { html, popover };
   };
 
   // Creating used to invent a name and make the folder in one go, which left a
   // folder called 新文件夹 to be renamed straight afterwards.
-  const root = await renderPrompt({ kind: 'newFolder', parent: '', value: '新文件夹' });
-  check('making a folder asks for its name', root.includes('新建文件夹'), true);
-  check('and says where it will go', root.includes('在根目录下'), true);
-  check('with the name in a field', root.includes('<input'), true);
+  const rootPrompt = await renderPrompt({ kind: 'newFolder', parent: '', value: '新文件夹' });
+  check('making a folder asks for its name', rootPrompt.html.includes('新建文件夹'), true);
+  check('and says where it will go', rootPrompt.html.includes('在根目录下'), true);
+  check('with the name in a field', rootPrompt.html.includes('<input'), true);
 
   const nested = await renderPrompt({ kind: 'newFolder', parent: 'proj', value: '新文件夹' });
-  check('a nested one names its parent', nested.includes('在 proj 下'), true);
+  check('a nested one names its parent', nested.html.includes('在 proj 下'), true);
 
   const move = await renderPrompt({ kind: 'moveNote', id: 'a', value: 'proj' });
-  check('moving picks from the folders', move.includes('移动笔记') && move.includes('proj/deep'), true);
+  check(
+    'moving picks from the folders',
+    move.html.includes('移动笔记') && move.popover.includes('proj/deep'),
+    true,
+  );
 }
 
 /* --- the running version is visible in the page ---------------------------- */
@@ -4877,7 +4966,15 @@ console.log('\ndefault background (jsdom)');
     Boolean(host.querySelector('[data-admin-custom-preview] [data-custom-wallpaper]')),
     true,
   );
-  check('and the shared sliders', host.querySelectorAll('[data-custom-controls] input[type="range"]').length, 9);
+  const { CUSTOM_EFFECT_SLIDERS } = await import('./src/lib/wallpaper');
+  check(
+    'and the shared sliders',
+    Array.from(host.querySelectorAll('[data-custom-controls] input[type="range"]')).map((slider) =>
+      slider.getAttribute('aria-label'),
+    ),
+    CUSTOM_EFFECT_SLIDERS.map((control: { label: string }) => control.label),
+  );
+  check('with the two switches beside them', host.querySelectorAll('[data-custom-controls] [role="switch"]').length, 2);
   check(
     'saying where a hand dropped file goes as well',
     markup.includes('也可以把图片放进 backgrounds/'),
@@ -5103,21 +5200,25 @@ console.log('\nwallpaper loading (jsdom)');
 console.log('\nthe custom wallpaper (jsdom)');
 {
   const {
+    CUSTOM_EFFECT_DEFAULTS,
+    CUSTOM_EFFECT_SLIDERS,
+    CUSTOM_EFFECT_TOGGLES,
     CUSTOM_IMAGE_MAX_EDGE,
     CUSTOM_IMAGE_QUALITY,
-    CUSTOM_MAX_PARTICLES,
-    CUSTOM_WALLPAPER_SLIDERS,
-    CUSTOM_DEFAULTS,
     DEFAULT_WALLPAPER,
-    customBackdrop,
-    customParticleCount,
-    resolveCustomWallpaper,
+    customSwayCurve,
+    resolveCustomEffect,
+    sceneUnitScale,
     shrinkDimensions,
     shrinkWallpaperImage,
   } = await import('./src/lib/wallpaper');
-  const { createCustomParticles, advanceCustomParticles, particleLifeRatio, particleAppearance } = await import(
-    './src/components/CustomWallpaper'
+  // The vendored scene renderer, for the check that the wallpaper's own drift is
+  // the library's drift - not a lookalike written from the same description.
+  const { ParticleSystem, parseParticleDefinition } = await import(
+    './src/lib/wallpaper-scene-layers/packages/we-scene/src/render/particles'
   );
+  const { createCustomParticles, advanceCustomParticles, customSwayKeyframes, particleLifeRatio, particleAppearance } =
+    await import('./src/components/CustomWallpaper');
   const { shownWallpaper } = await import('./src/lib/admin-background');
 
   /* --- one picture, one set of numbers ------------------------------------ */
@@ -5151,73 +5252,91 @@ console.log('\nthe custom wallpaper (jsdom)');
   }
 
   // Missing fields, and numbers from a hand-edited settings file, are answered
-  // in exactly one place.
+  // in exactly one place: the seven controls the UI shows.
   {
-    check('an empty custom wallpaper gets the defaults', resolveCustomWallpaper({}), {
-      colors: { a: 'var(--accent)', b: 'var(--accent-2)' },
-      drift: CUSTOM_DEFAULTS.drift,
-      speed: CUSTOM_DEFAULTS.speed,
-      particles: {
-        count: CUSTOM_DEFAULTS.density,
-        size: CUSTOM_DEFAULTS.particleSize,
-        opacity: CUSTOM_DEFAULTS.particleOpacity,
-        life: CUSTOM_DEFAULTS.particleLife,
-        speed: CUSTOM_DEFAULTS.particleSpeed,
-        turbulence: CUSTOM_DEFAULTS.particleTurbulence,
-        color: '',
-        wind: CUSTOM_DEFAULTS.particleWind,
-      },
+    check('an empty custom effect gets the defaults', resolveCustomEffect({}), {
+      sway: CUSTOM_EFFECT_DEFAULTS.sway,
+      amplitude: CUSTOM_EFFECT_DEFAULTS.amplitude,
+      frequency: CUSTOM_EFFECT_DEFAULTS.frequency,
+      particles: CUSTOM_EFFECT_DEFAULTS.particles,
+      rise: CUSTOM_EFFECT_DEFAULTS.rise,
+      drift: CUSTOM_EFFECT_DEFAULTS.drift,
+      direction: CUSTOM_EFFECT_DEFAULTS.direction,
     });
-    const wild = resolveCustomWallpaper({
-      customDrift: 9,
-      customSpeed: 0,
-      customDensity: 9999,
-      customParticleSize: 100,
-      customParticleOpacity: -1,
-      customParticleLife: 99,
-      customParticleSpeed: -5,
-      customParticleTurbulence: 2,
-      customParticleWind: 400,
-      customParticleColor: '  #ff0000 ',
+    const wild = resolveCustomEffect({
+      customSwayAmplitude: 99,
+      customSwayFrequency: 0,
+      customParticleRise: 9999,
+      customParticleDrift: -1,
+      customParticleDirection: 9,
     });
     check(
-      'numbers out of range are clamped',
-      [wild.drift, wild.speed, wild.particles.count, wild.particles.size, wild.particles.opacity, wild.particles.life, wild.particles.speed, wild.particles.turbulence, wild.particles.wind],
-      [1, 0.2, CUSTOM_MAX_PARTICLES, 6, 0.05, 12, 0, 1, 360],
+      'out-of-range numbers are clamped',
+      [wild.amplitude, wild.frequency, wild.rise, wild.drift, wild.direction],
+      [8, 0.02, 500, 0, 1],
     );
-    check('and a colour is taken as written', wild.particles.color, '#ff0000');
-    const partial = resolveCustomWallpaper({ customDrift: 0.9 });
-    check(
-      'an old settings file keeps what it has and defaults the rest',
-      [partial.drift, partial.particles.count, partial.colors.a],
-      [0.9, CUSTOM_DEFAULTS.density, 'var(--accent)'],
-    );
-    check('the particle cap is the rendered cap', customParticleCount(9999), CUSTOM_MAX_PARTICLES);
+    // A switch has one job: false means off, however the number is set.
+    const off = resolveCustomEffect({ customSway: false, customShowParticles: false });
+    check('the switches are read as switches', [off.sway, off.particles], [false, false]);
+    check('and an old settings file switches both on', [resolveCustomEffect({}).sway, resolveCustomEffect({}).particles], [true, true]);
+    // Scene units become pixels through the library's 3840x2160 cover fit.
+    check('a scene unit is a pixel at the library viewport', sceneUnitScale(3840, 2160), 1);
+    check('and scales with the viewport', Number(sceneUnitScale(1920, 1080).toFixed(3)), 0.5);
+    check('cover fit takes the larger axis', Number(sceneUnitScale(3840, 4320).toFixed(2)), 2);
   }
 
-  // One list of sliders, drawn by both dialogs.
-  check('nine sliders make the wallpaper', CUSTOM_WALLPAPER_SLIDERS.map((slider: { key: string }) => slider.key), [
-    'customDrift',
-    'customSpeed',
-    'customDensity',
-    'customParticleSize',
-    'customParticleOpacity',
-    'customParticleLife',
-    'customParticleSpeed',
-    'customParticleTurbulence',
-    'customParticleWind',
+  // The sway is the library's oscillateposition curve: sin on x, cos on y, and
+  // one period sampled into keyframes the compositor can run.
+  {
+    check('the sway starts at the bottom of its circle', customSwayCurve(0.1, 0), { x: 0, y: 1 });
+    const quarter = customSwayCurve(0.1, 2.5);
+    check('a quarter cycle later it is full right', [Number(quarter.x.toFixed(3)), Number(quarter.y.toFixed(3))], [1, 0]);
+    const effect = resolveCustomEffect({ customSwayAmplitude: 2.5, customSwayFrequency: 0.1 });
+    const frame = customSwayKeyframes(effect, { width: 1000, height: 800 });
+    check('one full cycle is sampled', [frame.x.length, frame.x[0], frame.x[frame.x.length - 1]], [25, 0, 0]);
+    // 2.5% of the short edge is 20 pixels: that is the peak of each axis.
+    check(
+      'the amplitude is a share of the short edge',
+      [Math.max(...frame.x.map(Math.abs)), Math.max(...frame.y.map(Math.abs))],
+      [20, 20],
+    );
+    check('the picture is scaled up to cover the swing', Number(frame.scale.toFixed(2)), 1.06);
+  }
+
+  // One list of sliders and one of switches, drawn by both dialogs.
+  check('five sliders shape the effect', CUSTOM_EFFECT_SLIDERS.map((control: { key: string }) => control.key), [
+    'customSwayAmplitude',
+    'customSwayFrequency',
+    'customParticleRise',
+    'customParticleDrift',
+    'customParticleDirection',
   ]);
   check(
-    'each one is named in words',
-    CUSTOM_WALLPAPER_SLIDERS.map((slider: { label: string }) => slider.label),
-    ['晃动幅度', '晃动速度', '粒子数量', '粒子大小', '粒子不透明度', '粒子寿命', '粒子速度', '湍流强度', '风向'],
+    'each named in the user\'s words',
+    CUSTOM_EFFECT_SLIDERS.map((control: { label: string }) => control.label),
+    ['背景晃动幅度', '背景晃动频率', '粒子上升速度', '粒子漂移速度', '粒子有向概率'],
   );
-  check('the still version is the same picture', customBackdrop({ a: '#111111', b: '#222222' }).includes('radial-gradient'), true);
+  check('and two switches turn the halves on or off', CUSTOM_EFFECT_TOGGLES.map((toggle: { key: string; label: string }) => [toggle.key, toggle.label]), [
+    ['customSway', '背景晃动'],
+    ['customShowParticles', '显示粒子'],
+  ]);
 
   /* --- the particles, with a seeded random --------------------------------- */
   // The simulation is pure with `random` injected: same seed, same picture.
   {
-    const config = { count: 3, size: 2, opacity: 0.5, life: 4, speed: 40, turbulence: 0.3, color: '', wind: 90 };
+    const config = {
+      count: 3,
+      size: 2,
+      opacity: 0.5,
+      life: 4,
+      speed: 200,
+      rise: 240,
+      direction: 0.7,
+      spread: 0.6,
+      turbulence: 0.15,
+      color: '',
+      wind: 0,
+    };
     const fixed = () => 0.5;
     const particles = createCustomParticles(3, config, 800, 600, fixed);
     check('the count asked for is the count made', particles.length, 3);
@@ -5232,8 +5351,10 @@ console.log('\nthe custom wallpaper (jsdom)');
       [4, 2 * (0.55 + Math.pow(0.5, 2) * 1.7), 0.5 * 0.75],
     );
     check('and they start part way through a life', particles[0].age, 4 * 0.5 * 0.9);
-    // Wind of 90 degrees is upward: the particle's vertical speed is negative.
-    check('the wind decides the direction', [Math.abs(particles[0].vx) < 0.001, particles[0].vy < 0], [true, true]);
+    // Upward is negative on a canvas: rise lifts every particle, and a forward
+    // share adds its own speed on top (mid-random means no angle jitter).
+    check('the rise lifts every particle', Number(particles[0].vy.toFixed(3)), -440);
+    check('and a mid-random particle keeps to the main direction', Number(particles[0].vx.toFixed(3)), 0);
     const before = particles.map((particle: { x: number; y: number }) => particle.x + ',' + particle.y);
     advanceCustomParticles(particles, 0.1, 0, config, 800, 600, fixed);
     const after = particles.map((particle: { x: number; y: number }) => particle.x + ',' + particle.y);
@@ -5243,8 +5364,74 @@ console.log('\nthe custom wallpaper (jsdom)');
       particles.map((particle: { age: number }) => Number(particle.age.toFixed(4))),
       // The step is capped at a twentieth of a second, so a tenth advances by
       // half of it - the same cap that keeps a sleeping tab from jumping.
-      particles.map(() => Number((4 * 0.45 + 1 / 20).toFixed(4))),
+      particles.map(() => Number((4 * 0.5 * 0.9 + 1 / 20).toFixed(4))),
     );
+  }
+
+  /* --- and the drift is the library's drift, not a lookalike --------------- */
+  {
+    // The same numbers on both sides, in the same units: scene units per second
+    // (one unit is one pixel at the library's 3840x2160 viewport). The library
+    // runs its own ParticleSystem; ours runs createCustomParticles().
+    const RISE = 240;
+    const SPEED = 200;
+    const DIRECTION = 0.7;
+    const SPREAD = 0.6;
+    const summarise = (vx: number[], up: number[]) => {
+      const count = vx.length;
+      const meanUp = up.reduce((sum, value) => sum + value, 0) / count;
+      const forward = up.filter((value) => value > RISE).length / count;
+      const meanX = vx.reduce((sum, value) => sum + value, 0) / count;
+      const stdX = Math.sqrt(vx.reduce((sum, value) => sum + (value - meanX) * (value - meanX), 0) / count);
+      return { count, meanUp, forward, stdX };
+    };
+
+    const ours = createCustomParticles(600, {
+      count: 600,
+      size: 2,
+      opacity: 0.5,
+      life: 4,
+      speed: SPEED,
+      rise: RISE,
+      direction: DIRECTION,
+      spread: SPREAD,
+      turbulence: 0.15,
+      color: '',
+      wind: 0,
+    }, 3840, 2160);
+    const ourStats = summarise(
+      ours.map((particle: { vx: number }) => particle.vx),
+      ours.map((particle: { vy: number }) => -particle.vy),
+    );
+
+    const system = new ParticleSystem(
+      parseParticleDefinition({
+        maxcount: 400,
+        starttime: 0,
+        emitter: [{ name: 'boxrandom', rate: 400, distancemax: '800 600 0' }],
+        initializer: [
+          { name: 'lifetimerandom', min: 8, max: 9 },
+          { name: 'sizerandom', min: 1, max: 2 },
+        ],
+        operator: [],
+        material: {},
+      }),
+      undefined,
+      { drift: { rise: RISE, speed: SPEED, forwardRatio: DIRECTION, spread: SPREAD } },
+    );
+    // Long enough to fill every slot, short enough that none has died.
+    for (let step = 0; step < 40; step += 1) system.update(1 / 30);
+    const alive = system.slots.filter((slot: { alive: boolean }) => slot.alive);
+    const libraryStats = summarise(
+      alive.map((slot: { velocity: number[] }) => slot.velocity[0]),
+      alive.map((slot: { velocity: number[] }) => slot.velocity[1]),
+    );
+
+    check('the library reference has a full field of particles', libraryStats.count > 100, true);
+    // Tolerances from the implementer's comparison of the two runs.
+    check('the mean upward speed is the library\'s', Math.abs(ourStats.meanUp - libraryStats.meanUp) <= 20, true);
+    check('and the share drifting the main way', Math.abs(ourStats.forward - libraryStats.forward) <= 0.08, true);
+    check('and the sideways spread', Math.abs(ourStats.stdX - libraryStats.stdX) <= 20, true);
   }
   // The fade in and out are the engine's alphafade and sizechange, combined.
   {
@@ -5324,9 +5511,12 @@ console.log('\nthe custom wallpaper (jsdom)');
       });
       await flush();
       check('without a picture there is no image', Boolean(host.querySelector('[data-custom-image]')), false);
+      // The custom wallpaper is a picture now: with nothing imported there is a
+      // theme-gradient placeholder saying so instead of a drawn colour field.
+      check('and a placeholder says a picture is needed', Boolean(host.querySelector('[data-custom-placeholder]')), true);
       check(
-        'and the colour field is drawn as a gradient',
-        (host.querySelector('[data-custom-wallpaper]')?.getAttribute('style') ?? '').includes('radial-gradient'),
+        'drawn from the theme gradient',
+        (host.querySelector('[data-custom-placeholder]')?.getAttribute('style') ?? '').includes('gradient'),
         true,
       );
       check('still without a frame of animation', rafCalls, 0);
@@ -5397,8 +5587,10 @@ console.log('\nthe custom wallpaper (jsdom)');
       })) as unknown as typeof w.matchMedia;
       appStore.setState({
         appearanceOpen: false,
-        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom', customDensity: 5 },
-        wallpaperUrl: null,
+        wallpaper: { ...DEFAULT_WALLPAPER, kind: 'custom' },
+        // A picture is what the sway and the particles move; without one there is
+        // no canvas to animate.
+        wallpaperUrl: 'https://cdn.example.com/custom.webp',
       } as never);
       const host = document.createElement('div');
       document.body.appendChild(host);
@@ -5459,18 +5651,39 @@ console.log('\nthe custom wallpaper (jsdom)');
       available: [],
     });
     const mine = { ...DEFAULT_WALLPAPER, kind: 'image' as const, url: 'https://cdn.example.com/mine.png', blur: 3, dim: 0.2 };
-    const custom = shownWallpaper(mine, admin('custom', { customDrift: 0.8, customDensity: 42, customParticleWind: 180 }) as never);
+    const custom = shownWallpaper(
+      mine,
+      admin('custom', {
+        customSway: false,
+        customSwayAmplitude: 6,
+        customSwayFrequency: 0.3,
+        customShowParticles: true,
+        customParticleRise: 120,
+        customParticleDrift: 310,
+        customParticleDirection: 0.4,
+      }) as never,
+    );
     check(
-      'a custom default background carries its picture and its numbers',
-      [custom.kind, custom.url, custom.customDrift, custom.customDensity, custom.customParticleWind],
-      ['custom', 'https://cdn.example.com/bg.webp', 0.8, 42, 180],
+      'a custom default background carries its picture and its seven controls',
+      [
+        custom.kind,
+        custom.url,
+        custom.customSway,
+        custom.customSwayAmplitude,
+        custom.customSwayFrequency,
+        custom.customShowParticles,
+        custom.customParticleRise,
+        custom.customParticleDrift,
+        custom.customParticleDirection,
+      ],
+      ['custom', 'https://cdn.example.com/bg.webp', false, 6, 0.3, true, 120, 310, 0.4],
     );
     check('and takes the darkness from the administrator', [custom.dim, custom.blur], [0.4, 3]);
     const legacy = shownWallpaper(DEFAULT_WALLPAPER, admin('custom', {}) as never);
     check(
-      'a settings file from before the custom numbers gets the defaults',
-      [legacy.customDrift, legacy.customSpeed, legacy.customDensity],
-      [CUSTOM_DEFAULTS.drift, CUSTOM_DEFAULTS.speed, undefined],
+      'a settings file from before the seven controls gets the defaults',
+      [legacy.customSway, legacy.customSwayAmplitude, legacy.customSwayFrequency, legacy.customParticleRise, legacy.customParticleDirection],
+      [CUSTOM_EFFECT_DEFAULTS.sway, CUSTOM_EFFECT_DEFAULTS.amplitude, CUSTOM_EFFECT_DEFAULTS.frequency, CUSTOM_EFFECT_DEFAULTS.rise, CUSTOM_EFFECT_DEFAULTS.direction],
     );
     // The kinds that were there before are unchanged.
     const picture = shownWallpaper(mine, admin('image', { blur: 9, dim: 0.5 }) as never);
@@ -5505,29 +5718,39 @@ console.log('\nthe custom wallpaper (jsdom)');
     const sliders = Array.from(host.querySelectorAll<HTMLInputElement>('[data-custom-controls] input[type="range"]'));
     check('the fourth wallpaper shows its controls', Boolean(host.querySelector('[data-custom-controls]')), true);
     check(
-      'with nine sliders, named like the shared list',
+      'with the five sliders, named like the shared list',
       sliders.map((slider) => slider.getAttribute('aria-label')),
-      CUSTOM_WALLPAPER_SLIDERS.map((slider: { label: string }) => slider.label),
+      CUSTOM_EFFECT_SLIDERS.map((slider: { label: string }) => slider.label),
+    );
+    // Two on/off switches: whether the picture sways, and whether particles exist.
+    const switches = Array.from(host.querySelectorAll<HTMLElement>('[data-custom-controls] [role="switch"]'));
+    check(
+      'and two switches for the effects',
+      switches.map((item) => item.getAttribute('aria-checked')),
+      ['true', 'true'],
     );
     check(
-      'and the two colours of the colour field',
-      [
-        host.querySelector<HTMLInputElement>('input[aria-label="自定义壁纸主色"]')?.value,
-        host.querySelector<HTMLInputElement>('input[aria-label="自定义壁纸辅色"]')?.value,
-      ],
-      ['#123456', '#654321'],
+      'named in the user\'s words',
+      CUSTOM_EFFECT_TOGGLES.map((toggle: { label: string }) => toggle.label).map((label: string) =>
+        (host.textContent ?? '').includes(label),
+      ),
+      [true, true],
     );
     check('a picture can be imported', Boolean(host.querySelector('[data-custom-import]')), true);
-    check('and the preview is the real wallpaper', Boolean(host.querySelector('[data-custom-preview] [data-custom-wallpaper]')), true);
+    check(
+      'and the preview is the real wallpaper',
+      Boolean(host.querySelector('[data-custom-preview] [data-custom-wallpaper]')),
+      true,
+    );
     // Moving a slider writes the setting it belongs to.
-    const drift = host.querySelector<HTMLInputElement>('input[aria-label="晃动幅度"]') as HTMLInputElement;
+    const rise = host.querySelector<HTMLInputElement>('input[aria-label="粒子上升速度"]') as HTMLInputElement;
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, 'value')?.set;
-      setter?.call(drift, '0.9');
-      drift.dispatchEvent(new w.Event('input', { bubbles: true }));
+      setter?.call(rise, '180');
+      rise.dispatchEvent(new w.Event('input', { bubbles: true }));
     });
     await flush();
-    check('a slider writes its setting', appStore.getState().wallpaper.customDrift, 0.9);
+    check('a slider writes its setting', appStore.getState().wallpaper.customParticleRise, 180);
     check('and the wallpaper stays the custom one', appStore.getState().wallpaper.kind, 'custom');
     await act(async () => {
       root.unmount();
