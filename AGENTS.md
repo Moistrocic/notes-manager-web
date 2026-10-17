@@ -129,11 +129,11 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 - **自定义壁纸「有图片才动」，且不再被 reduced-motion 停掉**：晃动由一个 rAF 循环直接写
   `[data-custom-image-frame]` 的 `transform`（与粒子同一个循环，按库的 `oscillateposition` 精确算），
   粒子画在 `[data-custom-particles]` 上；没有 2D 上下文时晃动照常跑、只是不画粒子。
-  粒子**不是手写噪声**：用库的 `ParticleSystem`（`createLibraryParticles`）跑仿真，`buildVertices`
-  取四边形、实测的 halo 贴图 + `globalCompositeOperation='lighter'` 加色绘制，再挂一个 glow
-  子发射器（放大 ~20 倍、全屏时 alpha 压到 0.02–0.06）；开屏前 `warmUpLibraryParticles` 预热
-  3.2 秒（预设 starttime 是 3s）。断言里先固定 `Math.random`（mulberry32）再取统计量，
-  否则 aliveCount / 尺寸类断言会偶发红。
+  粒子**不是手写噪声**：用库的 `ParticleSystem` 跑仿真（生产路径 `createFlowParticles`），
+  `buildVertices` 取四边形、实测的 halo 贴图 + `globalCompositeOperation='lighter'` 加色绘制，
+  再挂一个 glow 子发射器（放大 ~20 倍、全屏时 alpha 压到 0.02–0.06）；出生位置与速度由
+  `placeSpawnedEmbers` 改写（见「7 个参数」那条）；生产定义是「长寿命」的一套（寿命 9–12s、槽位 300、发射 30/s），开屏先 `warmUpParticleFlow` 预热 12.5 秒，让第一帧就已经铺满整条上升路径。
+  断言里先固定 `Math.random`（mulberry32）再取统计量，否则 aliveCount / 尺寸类断言会偶发红。
   `prefers-reduced-motion` **不整体停用**（场景库也一样会动），显式开关
   （`customSway` / `customShowParticles`）才是唯一的停用方式——断言里「reduced-motion 下 0 次 rAF」
   已翻成「仍然调度、transform 帧间变化」。没有图片时仍渲染 `[data-custom-placeholder]` 主题渐变占位。
@@ -182,11 +182,18 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
   数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
   `customParticleRise`（0–500）/ `customParticleDrift`（0–400）/ `customParticleDirection`（0–1）。
-  映射：晃动 = 库 `oscillateposition`（x=sin、y=cos，由 rAF 循环直接写 transform，图片放大
-  `1 + 2·amplitude% + 0.01` 才不会露出边缘）；粒子 = `ParticleDriftOptions`
-  （rise / speed / forwardRatio，spread 固定 0.6）；场景单位→px 用库的 3840×2160 正交视图
-  cover 换算（`sceneUnitScale`）。**没有图片时是主题渐变占位（`data-custom-placeholder`），
-  不吃 crop/blur，只有 dim 生效**。
+  晃动 = 库 `oscillateposition`（x=sin、y=cos，由 rAF 循环直接写 transform，图片放大
+  `1 + 2·amplitude% + 0.01` 才不会露出边缘）。粒子（批次 P 之后）：**发射器在屏幕外下方**
+  （`spawnEmberPosition`：y 严格小于下边缘、横向铺满；`spawnEmberVelocity`：水平速度大小
+  `[0, drift]` 均匀、符号以 `direction` 概率向右，上升速度 `rise`±15%）；`placeSpawnedEmbers`
+  在每步 `update()` 之后改写新出生粒子的 position/velocity/driftVelocity（库没有 spawn 钩子，
+  这是仅有的接缝），`createFlowParticles` 给库的 drift 只留 `rise` 且 `speed: 0`、无
+  `forwardRatio`，`rise=0` 时湍流权重也归零（否则库的向下扰动会把「静止」粒子抬起来）。
+  对外语义：drift=**最大**横向速度、direction=**向右概率**（UI 标签「粒子方向比例」，显示
+  「向右 70%」「最大 200 单位/秒」）。生产路径是 `createFlowParticles` / `advanceParticleFlow` /
+  `warmUpParticleFlow`；`createLibraryParticles`/`warmUpLibraryParticles` 只剩兼容测试在用。
+  场景单位→px 用库的 3840×2160 正交视图 cover 换算（`sceneUnitScale`）。
+  **没有图片时是主题渐变占位（`data-custom-placeholder`），不吃 crop/blur，只有 dim 生效**。
 - **1.5.x 的旧壁纸参数是「忽略 + 补默认」迁移**：`customA/customB/customDrift/customDensity/
   customParticle*` 等留在 `WallpaperSettings` 上只为让旧 settings.json 与老 fixture 通过类型检查，
   读写都不再用（服务端同样忽略）；不要把它们重新接回 UI 或渲染 —— 旧客户端发这些字段只应
