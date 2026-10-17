@@ -139,6 +139,29 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   `autocomplete/autocorrect/autocapitalize=off`、`spellcheck=false`、三家密码管理器的 opt-out，
   而且 `name` 不能叫 username/password 这类。新增输入框别忘了带上，否则 Bitwarden 会在一个
   只是问「文件夹叫什么」的小框上弹「保存密码」。
+- **Bitwarden 认的不是属性，是输入框的类型**：提示框里的输入统一 `type="search"`（Bitwarden 的
+  content script 收集字段时无条件跳过 search，登录填充也排除它）。`data-bwignore` 只有在扩展设置里
+  打开「页面可控属性」时才生效——**有属性不等于生效**，别把它当成修复；`appearance-none` + 隐藏
+  webkit 搜索装饰只是把外观还原成普通输入框。旧扩展若仍识别，升级扩展或对本站点关闭自动填充。
+- **新建笔记的目录可以还不存在**：确认时先 `createFolder(silent)` 再 `createNote`，目录建失败就
+  不发建笔记请求（`NoteList.tsx` 的 onConfirm）；移动 / 上传仍要求精确匹配已有目录。路径先过
+  `normaliseFolderInput`（`a//b` → `a/b`，`.` / `..` 段直接拒绝并提示），服务端 `createFolder`
+  也会拒绝含 `..` 的路径（400 `invalid_folder`），递归建目录由 driver 保证（本地 `mkdir -p`，
+  OpenList 逐段 `/api/fs/mkdir`）。
+- **排序下拉的两个手势互斥**：单击 = 置顶（`setSort`），长按 300ms 后拖动 = 重排整条顺序
+  （`setSortKeys`）——拖动结束后浏览器补发的那次 click 必须被吞掉（`swallowClick`），否则拖完就
+  顺手置顶了。jsdom 里测拖动要自己派发 pointerdown、真实等 320ms、再 pointermove/pointerup；
+  没有布局时行高按 `SORT_ROW_HEIGHT=28` 折算。
+- **自定义壁纸的默认值与夹取只有一处**：`resolveCustomWallpaper()`（web）与 `mergeSettings`（server）
+  分别补默认、夹范围；旧设置文件缺字段是常态。`crop` / `blur` 对 kind=custom **不生效**，只有
+  `dim`（和一套晃动/粒子参数）。`CustomWallpaper` 在没有 2D 上下文（SSR/jsdom）时只画 CSS 兜底、
+  不起 rAF；循环、resize/visibilitychange/matchMedia 监听与 MutationObserver 都在 cleanup 里收掉，
+  否则切走壁纸后还在画。导入的图片先缩图（长边 ≤2560、WebP 0.82，小图直通）再存/上传。
+- **`POST /api/background` 是管理员专用的裸字节上传**（和笔记/字体上传同一种形状）：octet-stream、
+  文件名在 `X-Background-Filename`（percent-encoded）、上限 20 MB、**扩展名由 magic 嗅探决定**
+  （`.webp`/`.png`/`.jpg`/`.gif`），body 为空 400 `empty_body`、不是图片 400 `invalid_background`、
+  匿名 401、非管理员 403；201 返回 `{file, available}`。`PUT /api/system/settings` 选 kind=custom 时
+  还会校验文件存在（400 `background_missing`）且是图片（`background_kind_mismatch`）。
 - **发布信息在 front matter 里**（`blog` / `blogAt` / `blogTitle` / `blogSummary`）：
   博客只列 `blog` 为真的笔记。**取消发布**只写 `blog: false`——留痕，发布管理里那一行还在、
   状态是未发布；**删除发布信息**才把四个字段一起清掉。`blogTitle` 等于笔记自己的标题时
