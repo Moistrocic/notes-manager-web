@@ -6689,14 +6689,109 @@ console.log('\nthe custom wallpaper (jsdom)');
   const fs = await import('node:fs');
   const pathMod = await import('node:path');
   const { PkgWallpaperError, isScenePkg, pictureFromScenePkg } = await import('./src/lib/scene/pkg-wallpaper');
-  // The repository keeps the standard Wallpaper Engine fixture package; it is
-  // read from disk (data/ is gitignored, so check:repo does not see it).
+  // A package built here, so this runs on a machine without the 45 MB fixture:
+  // data/ is gitignored, and a clean CI checkout has no data/ directory at all.
+  // It is a real scene.pkg - a tiny one - whose bottom layer's texture stores a
+  // PNG, which is exactly the shape the import path is written for.
+  const u32 = (value: number) => {
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setUint32(0, value, true);
+    return bytes;
+  };
+  const ascii = (text: string) => Uint8Array.from(text, (character) => character.charCodeAt(0));
+  const join = (...parts: Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+    let at = 0;
+    for (const part of parts) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  };
+  const png = Uint8Array.from(
+    w.atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+    (character) => character.charCodeAt(0),
+  );
+  // TEXV0005 / TEXI0001 header, then a TEXB0003 block with one verbatim mip.
+  const tex = (payload: Uint8Array, width: number, height: number) =>
+    join(
+      ascii('TEXV0005\0'),
+      ascii('TEXI0001\0'),
+      u32(0),
+      u32(0),
+      u32(width),
+      u32(height),
+      u32(width),
+      u32(height),
+      u32(0x7f7f7f7f),
+      ascii('TEXB0003\0'),
+      u32(1),
+      u32(13), // source format 13: the payload is an encoded PNG file
+      u32(1),
+      u32(width),
+      u32(height),
+      u32(0), // mode 0: stored verbatim
+      u32(0),
+      u32(payload.length),
+      payload,
+    );
+  // PKGV0024: magic, file table, then the payloads at the offsets it lists.
+  const pack = (files: Array<[string, Uint8Array]>) => {
+    const table: Uint8Array[] = [u32(8), ascii('PKGV0024'), u32(files.length)];
+    let offset = 0;
+    for (const [path, bytes] of files) {
+      const name = ascii(path);
+      table.push(u32(name.length), name, u32(offset), u32(bytes.length));
+      offset += bytes.length;
+    }
+    return join(...table, ...files.map(([, bytes]) => bytes));
+  };
+  const built = pack([
+    ['scene.json', ascii(JSON.stringify({ objects: [{ id: 0, name: 'Wallpaper', image: 'models/background.json' }] }))],
+    ['models/background.json', ascii(JSON.stringify({ material: 'materials/background.json' }))],
+    ['materials/background.json', ascii(JSON.stringify({ passes: [{ shader: 'genericimage2', textures: ['mini'] }] }))],
+    ['materials/mini.tex', tex(png, 320, 180)],
+  ]);
+  const builtNotes: string[] = [];
+  const builtPicture = await pictureFromScenePkg(new w.File([built], 'mini.pkg'), (note: string) => builtNotes.push(note));
+  check('a package built here yields its bottom layer picture', builtPicture.source, 'layer');
+  check('at the size its texture header says', [builtPicture.width, builtPicture.height], [320, 180]);
+  check('with the PNG the package stores', builtPicture.bytes, png.length);
+  check('named for the package', builtPicture.fileName, 'mini.png');
+  check('and says which texture it came from', builtPicture.note.includes('materials/mini.tex'), true);
+  check(
+    'with progress for the dialog',
+    builtNotes.some((note) => note.includes('读取场景包')) && builtNotes.some((note) => note.includes('完整的壁纸图')),
+    true,
+  );
+  const builtHead = new Uint8Array(await builtPicture.blob.slice(0, 8).arrayBuffer());
+  check('and the blob is that PNG', Array.from(builtHead), [137, 80, 78, 71, 13, 10, 26, 10]);
+  const refuse = async (file: File) => {
+    try {
+      await pictureFromScenePkg(file);
+      return 'no error';
+    } catch (err) {
+      return err instanceof PkgWallpaperError ? err.message : 'wrong error type: ' + (err as Error).message;
+    }
+  };
+  check('a file that is not a package is named as such', await refuse(new w.File([built], 'picture.png')), '这不是 .pkg 场景包');
+  check('an empty package is refused', await refuse(new w.File([], 'empty.pkg')), '这个场景包是空的');
+  check(
+    'and bytes that are not a package',
+    (await refuse(new w.File([new Uint8Array(12)], 'junk.pkg'))).includes('不是 Wallpaper Engine 的场景包'),
+    true,
+  );
+  check('isScenePkg is just the extension test it uses', [isScenePkg(new w.File([], 'a.PKG')), isScenePkg(new w.File([], 'a.png'))], [true, false]);
+
+  // The 45 MB fixture - a real Wallpaper Engine scene - is a developer machine's
+  // file, so the byte-exact assertions only run where it exists. Its absence is
+  // a skip, not a failure: the package built above covers this path everywhere.
   const candidates = [
     pathMod.join(process.cwd(), '..', 'data', 'backgrounds', 'rossi.pkg'),
     pathMod.join(process.cwd(), 'data', 'backgrounds', 'rossi.pkg'),
   ];
   const pkgPath = candidates.find((candidate) => fs.existsSync(candidate)) ?? '';
-  check('the scene package fixture is there', pkgPath !== '', true);
+  if (!pkgPath) console.log('skipped: data/backgrounds/rossi.pkg is not in this checkout');
   if (pkgPath) {
     const bytes = fs.readFileSync(pkgPath);
     const notes: string[] = [];
@@ -6716,23 +6811,6 @@ console.log('\nthe custom wallpaper (jsdom)');
       notes.some((note) => note.includes('读取场景包')) && notes.some((note) => note.includes('完整的壁纸图')),
       true,
     );
-
-    const refuse = async (file: File) => {
-      try {
-        await pictureFromScenePkg(file);
-        return 'no error';
-      } catch (err) {
-        return err instanceof PkgWallpaperError ? err.message : 'wrong error type: ' + (err as Error).message;
-      }
-    };
-    check('a file that is not a package is named as such', await refuse(new w.File([bytes], 'picture.png')), '这不是 .pkg 场景包');
-    check('an empty package is refused', await refuse(new w.File([], 'empty.pkg')), '这个场景包是空的');
-    check(
-      'and bytes that are not a package',
-      (await refuse(new w.File([new Uint8Array(12)], 'junk.pkg'))).includes('不是 Wallpaper Engine 的场景包'),
-      true,
-    );
-    check('isScenePkg is just the extension test it uses', [isScenePkg(new w.File([], 'a.PKG')), isScenePkg(new w.File([], 'a.png'))], [true, false]);
   }
 }
 /* --- the boot screen and the error boundaries ----------------------------- */
