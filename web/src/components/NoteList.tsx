@@ -791,6 +791,15 @@ function initialFolder(state: NonNullable<PromptState>): string {
   return '';
 }
 
+/** Gap between the folder field and its suggestion list. */
+const POPOVER_GAP = 4;
+/** The list never comes closer than this to a viewport edge. */
+const POPOVER_MARGIN = 8;
+/** The list's height cap, in pixels; kept in step with the max-h class below. */
+const POPOVER_MAX_HEIGHT = 240;
+/** A row-height fallback for before the browser has laid the list out (jsdom). */
+const POPOVER_ROW_HEIGHT = 34;
+
 /**
  * The inline prompts for naming, moving and uploading.
  *
@@ -811,24 +820,42 @@ export function PromptDialog({
 }) {
   const [value, setValue] = useState('');
   const [folder, setFolder] = useState('');
-  /** Whether the folder field has the keyboard, which shows its suggestions. */
-  const [folderFocused, setFolderFocused] = useState(false);
+  /**
+   * Whether the user has actually asked for the folder list.
+   *
+   * Opening the dialog, tabbing into the field and the field already holding a
+   * folder (the usual case: the copy is pre-filled from the tree) are all good
+   * reasons for the field to be focused - but they are not a request to see the
+   * list, so it stays away until a press on the field arms it.
+   */
+  const [armed, setArmed] = useState(false);
   /** Which suggestion the keyboard is on, or -1 for none. */
   const [highlighted, setHighlighted] = useState(-1);
   /** Set once a suggestion is taken: the list stays out of the way until the
-   * field is typed in again. */
+   * field is pressed again. */
   const [suggestionsHidden, setSuggestionsHidden] = useState(false);
-  /** Where the popover sits, in page coordinates. */
-  const [popoverAt, setPopoverAt] = useState<{ left: number; top: number; width: number } | null>(null);
+  /** Where the popover sits, in page coordinates, and which side of the field. */
+  const [popoverAt, setPopoverAt] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    placement: 'top' | 'bottom';
+  } | null>(null);
   /** The input's box, which the popover is anchored to. */
   const folderAnchor = useRef<HTMLDivElement | null>(null);
+  /** The popover itself, whose height decides whether it has to flip upwards. */
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  /** How many rows the next estimate should assume, read inside the frame loop. */
+  const matchCountRef = useRef(0);
   /** The pending blur that would close the list, so it can be called off. */
   const blurTimer = useRef<number | null>(null);
 
   useEffect(() => {
     setValue(state && 'value' in state ? state.value : '');
     setFolder(state ? initialFolder(state) : '');
-    setFolderFocused(false);
+    // Every dialog opening starts unarmed: a pre-filled folder must not open the
+    // list by itself, however the dialog got here.
+    setArmed(false);
     setHighlighted(-1);
     setSuggestionsHidden(false);
     setPopoverAt(null);
@@ -881,46 +908,116 @@ export function PromptDialog({
   const prefixMatches = options
     .filter((candidate) => candidate.toLowerCase().startsWith(suggestionPrefix))
     .slice(0, 8);
-  const showSuggestions =
-    Boolean(info?.picker) &&
-    !suggestionsHidden &&
-    prefixMatches.length > 0 &&
-    (folderFocused || folder.trim() !== '');
+  const showSuggestions = Boolean(info?.picker) && armed && !suggestionsHidden && prefixMatches.length > 0;
   /** The suggestion the keyboard is on, or -1 when it is on none. */
   const activeIndex = highlighted >= 0 && highlighted < prefixMatches.length ? highlighted : -1;
+  matchCountRef.current = prefixMatches.length;
 
   // The list is a layer of its own rather than a child of the field. The dialog
   // body scrolls, so an absolutely positioned child of it would be clipped at
   // the scroll edge - and because it is out of the body's flow (and out of the
   // body), opening it cannot change the dialog's height either. It is measured
-  // from the input's box and pinned in page coordinates, which is why it also
-  // follows the page when the dialog is scrolled.
+  // from the input's box and pinned in page coordinates.
+  //
+  // The measuring is a frame loop, not a one-off: the dialog slides and scales
+  // in when it opens, its body scrolls under the field, and a window resize or
+  // zoom moves everything. One position taken on the frame the press happened
+  // is a position against a box that is still moving - which is what made the
+  // list land beside the field instead of under it. Two frames before the first
+  // placement let the entrance animation settle; after that every frame checks
+  // again, and state only changes when the box actually moved.
   useEffect(() => {
     if (!showSuggestions) {
       setPopoverAt(null);
       return undefined;
     }
+    let frame = 0;
+    let cancelled = false;
     const place = () => {
       const rect = folderAnchor.current?.getBoundingClientRect();
-      if (!rect) return;
-      setPopoverAt({
-        left: rect.left + window.scrollX,
-        top: rect.bottom + 4 + window.scrollY,
-        width: rect.width,
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth || 0;
+      const viewportHeight = document.documentElement.clientHeight || window.innerHeight || 0;
+      if (!rect || viewportWidth === 0 || viewportHeight === 0) return;
+      const width = Math.max(
+        120,
+        Math.min(rect.width || 240, viewportWidth - POPOVER_MARGIN * 2),
+      );
+      // The rendered height is the truth; before the first render there is a
+      // row-count estimate so the flip decision is already right.
+      const measured = popoverRef.current?.getBoundingClientRect().height ?? 0;
+      const estimated = Math.min(POPOVER_MAX_HEIGHT, matchCountRef.current * POPOVER_ROW_HEIGHT + 12);
+      const height = Math.min(POPOVER_MAX_HEIGHT, measured > 0 ? measured : estimated);
+      const roomBelow = viewportHeight - rect.bottom - POPOVER_GAP - POPOVER_MARGIN;
+      const roomAbove = rect.top - POPOVER_GAP - POPOVER_MARGIN;
+      // Below is the natural side. Flip only when the list does not fit there
+      // and there is genuinely more room above it.
+      const placement: 'top' | 'bottom' = roomBelow < height && roomAbove > roomBelow ? 'top' : 'bottom';
+      const top = placement === 'top' ? rect.top - POPOVER_GAP - height : rect.bottom + POPOVER_GAP;
+      const left = clamp(
+        rect.left,
+        POPOVER_MARGIN,
+        Math.max(POPOVER_MARGIN, viewportWidth - width - POPOVER_MARGIN),
+      );
+      const next = {
+        left: left + window.scrollX,
+        top: top + window.scrollY,
+        width,
+        placement,
+      };
+      setPopoverAt((current) => {
+        if (
+          current &&
+          current.left === next.left &&
+          current.top === next.top &&
+          current.width === next.width &&
+          current.placement === next.placement
+        ) {
+          return current;
+        }
+        return next;
       });
     };
-    place();
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
+    frame = window.requestAnimationFrame(() => {
+      if (cancelled) return;
+      place();
+      const tick = () => {
+        if (cancelled) return;
+        place();
+        frame = window.requestAnimationFrame(tick);
+      };
+      frame = window.requestAnimationFrame(tick);
+    });
     return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
+      cancelled = true;
+      window.cancelAnimationFrame(frame);
     };
-  }, [showSuggestions, folder, prefixMatches.length]);
+  }, [showSuggestions]);
+
+  // A press anywhere outside the field and its list puts the list away. The
+  // blur path below covers the keyboard leaving; this is the mouse telling the
+  // same story without waiting for the 150ms grace period.
+  useEffect(() => {
+    if (!showSuggestions) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (folderAnchor.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      if (blurTimer.current !== null) {
+        window.clearTimeout(blurTimer.current);
+        blurTimer.current = null;
+      }
+      setArmed(false);
+      setSuggestionsHidden(true);
+      setHighlighted(-1);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => document.removeEventListener('pointerdown', onPointerDown, true);
+  }, [showSuggestions]);
 
   /** Takes a suggestion: the field is filled and the list steps out of the way. */
   const chooseFolder = (path: string) => {
     setFolder(path);
+    setArmed(false);
     setSuggestionsHidden(true);
     setHighlighted(-1);
   };
@@ -931,18 +1028,28 @@ export function PromptDialog({
     if (blurTimer.current !== null) window.clearTimeout(blurTimer.current);
     blurTimer.current = window.setTimeout(() => {
       blurTimer.current = null;
-      setFolderFocused(false);
+      setArmed(false);
       setSuggestionsHidden(true);
+      setHighlighted(-1);
     }, 150);
   };
 
-  const keepFolderFocus = () => {
+  /**
+   * Opens the list because the field was pressed.
+   *
+   * This is the only path that arms it: focus, a pre-filled folder and typing
+   * all leave it alone, so a dialog that opens on a folder (the usual case)
+   * stays quiet until the user asks. Pressing the field again after the list
+   * closed brings it back.
+   */
+  const armSuggestions = () => {
     if (blurTimer.current !== null) {
       window.clearTimeout(blurTimer.current);
       blurTimer.current = null;
     }
-    setFolderFocused(true);
+    setArmed(true);
     setSuggestionsHidden(false);
+    setHighlighted(-1);
   };
 
   if (!state || !info) return null;
@@ -1010,7 +1117,13 @@ export function PromptDialog({
                 aria-autocomplete="list"
                 aria-activedescendant={activeIndex >= 0 ? 'folder-suggestion-' + activeIndex : undefined}
                 placeholder="根目录"
-                onFocus={keepFolderFocus}
+                // A press, not focus: Tab, autoFocus and a pre-filled value must
+                // not open the list. All three press events are handled because
+                // the list is opened by whatever the browser reports first, and
+                // the arm is idempotent.
+                onPointerDown={armSuggestions}
+                onMouseDown={armSuggestions}
+                onClick={armSuggestions}
                 onBlur={closeSuggestionsSoon}
                 onChange={(e) => {
                   setFolder(e.target.value);
@@ -1020,9 +1133,11 @@ export function PromptDialog({
                 onKeyDown={(e) => {
                   if (e.key === 'Escape' && showSuggestions) {
                     // Escape belongs to the list first: it closes the list, not
-                    // the dialog the list is in.
+                    // the dialog the list is in. It also disarms, so the next
+                    // keystroke does not bring the list back.
                     e.preventDefault();
                     e.stopPropagation();
+                    setArmed(false);
                     setSuggestionsHidden(true);
                     setHighlighted(-1);
                     return;
@@ -1056,9 +1171,11 @@ export function PromptDialog({
               {showSuggestions && popoverAt && typeof document !== 'undefined'
                 ? createPortal(
                     <div
+                      ref={popoverRef}
                       id="prompt-folder-suggestions"
                       data-testid="folder-suggestions"
                       data-folder-popover="true"
+                      data-folder-placement={popoverAt.placement}
                       role="listbox"
                       aria-label="匹配的文件夹"
                       style={{

@@ -475,6 +475,23 @@ select optgroup {
 .cm-tooltip { background: var(--elevated) !important; border: 1px solid var(--line) !important; border-radius: 10px; }
 .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--accent) !important; color: white !important; }
 
+/* Link-path completion: the label is the folder/file name, the detail says
+   what it is (note title, picture, folder size). One line each, so a deep
+   folder does not push the list down the editor. */
+.cm-tooltip-autocomplete ul li { padding: 2px 4px; }
+.cm-tooltip-autocomplete .cm-completionLabel { font-family: var(--font-mono); font-size: 13px; }
+.cm-tooltip-autocomplete .cm-completionDetail {
+  margin-left: auto;
+  padding-left: 14px;
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+.cm-tooltip-autocomplete ul li[aria-selected] .cm-completionDetail {
+  color: color-mix(in srgb, white 78%, transparent);
+}
+.cm-tooltip-autocomplete .cm-completionIcon { color: var(--faint); opacity: 1; }
+
 /* Syntax colours for the rendered preview are generated at start-up from
    lib/code-theme.ts, which is also what the editor's HighlightStyle is built
    from - the two panes cannot disagree. See <style id="code-theme">. */

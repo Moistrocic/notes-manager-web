@@ -652,6 +652,8 @@ export function Editor() {
                   >
                     <CodeEditor
                       value={activeNote.content}
+                      // Link paths resolve against the note's own folder.
+                      notePath={activeNote.path}
                       // Same rule as the title: keystrokes reach the store, never the
                       // server. The body is written when the editor loses focus or on
                       // Ctrl/⌘+S, so a reply cannot land on top of unsaved typing.

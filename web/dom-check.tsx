@@ -2526,7 +2526,9 @@ console.log('\nthe panel\'s controls (jsdom)');
     ['combobox', 'list'],
   );
   check('an existing folder needs no comment', folderHint(), null);
-  check('and its own prefix is already suggested', suggestions().includes('proj'), true);
+  // The reported bug: the dialog started with its destination dropdown open,
+  // because the field came pre-filled. A pre-filled field is not a request.
+  check('the list does not open by itself', Boolean(suggestionList()), false);
   check('and a way to confirm it', Boolean(confirm()), true);
 
   // A small dialog that appears out of nowhere asking for a name looks like a
@@ -2566,8 +2568,11 @@ console.log('\nthe panel\'s controls (jsdom)');
     ['dialog-field', 'dialog-folder'],
   );
 
-  // Prefix matching: what is typed is compared with the start of every folder,
-  // and the list is a glance rather than a second dialog.
+  // The list is asked for, not automatic: opening the dialog (with its folder
+  // already filled in), focusing the field and typing are all silent. That is
+  // the reported bug - the dropdown opened by itself and could land beside the
+  // field. It opens on a press, and the field's box is the screen it is placed
+  // against; jsdom has no layout, so that box is stubbed here.
   const popover = () => document.querySelector<HTMLElement>('[data-testid="folder-suggestions"]');
   const hintSlot = () => document.querySelector<HTMLElement>('[data-testid="dialog-folder-hint-slot"]');
   const folderKey = async (name: string) => {
@@ -2576,8 +2581,47 @@ console.log('\nthe panel\'s controls (jsdom)');
     });
     await flush();
   };
+  /** The only gesture that opens the list: a press on the field itself. */
+  const pressFolder = async () => {
+    await act(async () => {
+      folderField()?.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    });
+    await flush();
+  };
+  const wrapper = folderWrapper() as HTMLElement;
+  let inputBox = { left: 120, top: 200, right: 420, bottom: 240, width: 300, height: 40 };
+  const boxOf = () => ({
+    x: inputBox.left,
+    y: inputBox.top,
+    left: inputBox.left,
+    top: inputBox.top,
+    right: inputBox.right,
+    bottom: inputBox.bottom,
+    width: inputBox.width,
+    height: inputBox.height,
+    toJSON: () => ({}),
+  });
+  Object.defineProperty(wrapper, 'getBoundingClientRect', { configurable: true, value: boxOf });
+  const popoverBox = () => ({
+    left: parseFloat(popover()?.style.left ?? ''),
+    top: parseFloat(popover()?.style.top ?? ''),
+    width: parseFloat(popover()?.style.width ?? ''),
+  });
+
+  // Focus, and typing, are not requests.
+  await act(async () => {
+    folderField()?.focus();
+  });
+  await flush();
+  check('focusing the folder field shows no list by itself', Boolean(popover()), false);
+  check('and the field says the list is closed', folderField()?.getAttribute('aria-expanded'), 'false');
   await typeFolder('pro');
-  check('typing a prefix offers the matching folders', suggestions(), ['proj', 'proj/deep']);
+  check('typing alone shows no list either', Boolean(popover()), false);
+  check('nor is anything rendered behind the scenes', suggestions(), []);
+
+  await pressFolder();
+  check('pressing the field opens the list', Boolean(popover()), true);
+  check('with every matching folder', suggestions(), ['proj', 'proj/deep']);
   check(
     'in a listbox the field controls',
     [suggestionList()?.getAttribute('role'), folderField()?.getAttribute('aria-expanded'), folderField()?.getAttribute('aria-controls')],
@@ -2596,6 +2640,41 @@ console.log('\nthe panel\'s controls (jsdom)');
     (popover()?.className ?? '').includes('max-h-[240px]') && (popover()?.className ?? '').includes('overflow-y-auto'),
     true,
   );
+  // Placement comes from the field's box, not from where the pointer happened
+  // to be: below it with the usual gap, as wide as the field.
+  check(
+    'placed just under the field, as wide as it',
+    [popoverBox().left, popoverBox().top, popoverBox().width],
+    [inputBox.left, inputBox.bottom + 4, inputBox.width],
+  );
+  check('and says which side it is on', popover()?.getAttribute('data-folder-placement'), 'bottom');
+  // The box is measured every frame: the dialog slides in, its body scrolls and
+  // the window can resize, so a position taken once would be wrong a moment
+  // later - which is what put the list beside the field.
+  inputBox = { ...inputBox, left: 60, top: 300, right: 360, bottom: 340 };
+  await flush();
+  check('a moved field takes the list with it', [popoverBox().left, popoverBox().top], [60, 344]);
+  // No room below: it flips above the field rather than running off the screen.
+  inputBox = { ...inputBox, top: 700, bottom: 740 };
+  await flush();
+  check(
+    'no room below flips the list above the field',
+    [popover()?.getAttribute('data-folder-placement'), popoverBox().top < inputBox.top],
+    ['top', true],
+  );
+  // Sideways it stays inside the viewport with a small margin.
+  inputBox = { ...inputBox, left: 990, right: 1290, top: 200, bottom: 240 };
+  await flush();
+  check(
+    'near the right edge the list is pulled back inside',
+    [popoverBox().left, popoverBox().left + popoverBox().width],
+    [w.innerWidth - inputBox.width - 8, w.innerWidth - 8],
+  );
+  inputBox = { ...inputBox, left: -20, right: 280 };
+  await flush();
+  check('and near the left edge it stops at the margin', popoverBox().left, 8);
+  inputBox = { left: 120, top: 200, right: 420, bottom: 240, width: 300, height: 40 };
+  await flush();
   // The hint line is reserved whether or not it has anything to say, so a hint
   // appearing as the user types cannot resize the dialog either.
   check('the hint line is always there', Boolean(hintSlot()), true);
@@ -2621,8 +2700,10 @@ console.log('\nthe panel\'s controls (jsdom)');
   check('with the dialog still open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
   check('an existing folder is accepted as it is', [folderHint(), confirm()?.disabled], [null, false]);
 
-  // The keyboard walks the list: Down opens on the first row, Up from it wraps to
-  // the last, and Enter takes the row without confirming the dialog.
+  // The keyboard walks the list: Down highlights the first row, Up from it wraps
+  // to the last, and Enter takes the row without confirming the dialog. The list
+  // was closed by the click above, so the field is pressed again first.
+  await pressFolder();
   await typeFolder('pro');
   await folderKey('ArrowDown');
   check(
@@ -2651,11 +2732,15 @@ console.log('\nthe panel\'s controls (jsdom)');
   check('without confirming the dialog', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
 
   // Escape belongs to the list first: one press closes it, the next the dialog.
+  // Typing afterwards does not bring it back - only another press does.
+  await pressFolder();
   await typeFolder('pro');
   check('the list is open before Escape', Boolean(popover()), true);
   await folderKey('Escape');
   check('Escape closes the list', Boolean(popover()), false);
   check('with the dialog still open', document.querySelector('[data-testid="dialog-title"]')?.textContent, '新建笔记');
+  await typeFolder('proj');
+  check('typing after Escape does not bring the list back', Boolean(popover()), false);
   await act(async () => {
     w.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape' }));
   });
@@ -2668,12 +2753,9 @@ console.log('\nthe panel\'s controls (jsdom)');
     button('新建笔记')?.click();
   });
   await flush();
+  await pressFolder();
   await typeFolder('pro');
-  await act(async () => {
-    folderField()?.focus();
-  });
-  await flush();
-  check('the list is up while the field has the keyboard', Boolean(popover()), true);
+  check('the list is up while the field is pressed', Boolean(popover()), true);
   await act(async () => {
     folderField()?.dispatchEvent(new w.FocusEvent('focusout', { bubbles: true }));
   });
@@ -2681,7 +2763,18 @@ console.log('\nthe panel\'s controls (jsdom)');
   await settled(200);
   check('and it is gone a moment later', Boolean(popover()), false);
 
-  // Nothing matches, nothing is offered.
+  // Pressing anywhere outside the field and its list closes it at once; the
+  // dialog keeps the keyboard, the list does not hang over it.
+  await pressFolder();
+  check('the list is open before an outside press', Boolean(popover()), true);
+  await act(async () => {
+    document.body.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true }));
+  });
+  await flush();
+  check('pressing outside puts it away', Boolean(popover()), false);
+
+  // Nothing matches, nothing is offered - even with the list asked for.
+  await pressFolder();
   await typeFolder('zzz');
   check('a prefix with no match has no list', Boolean(popover()), false);
   check('nor anything to suggest', suggestions(), []);
@@ -2782,8 +2875,9 @@ console.log('\nthe panel\'s controls (jsdom)');
   });
   await flush();
   check('moving a folder asks where to', document.querySelector('[data-testid="dialog-title"]')?.textContent, '移动文件夹');
+  await pressFolder();
   await typeFolder('pro');
-  check('and suggests no place inside itself', [Boolean(suggestionList()), suggestions()], [false, []]);
+  check('and offers no place inside itself', [Boolean(suggestionList()), suggestions()], [false, []]);
   await typeFolder('proj');
   check('typing itself is refused', folderHint(), '不能移动到这个文件夹');
   await typeFolder('proj/deep');
@@ -3878,6 +3972,219 @@ console.log('\nimages inside a note (jsdom)');
   check('a block full of addresses draws twelve at most', many.querySelectorAll('.code-image-preview img').length, 12);
 }
 
+/* --- link paths, and completion for them ---------------------------------- */
+console.log('\nlink paths and link completion');
+{
+  const { findLinkTarget, isInAppLink, resolveLinkPath } = await import('./src/lib/link-paths');
+  const { linkTargetAt, suggestLinkCandidates } = await import('./src/lib/link-completions');
+
+  // The rules people expect from a file manager. The note is two folders deep,
+  // so every form has a different answer and the wrong answer is visible.
+  const NOTE = '/proj/deep/note.md';
+  check('a rooted link is a path from the notes root', resolveLinkPath('/a.md', NOTE), 'a.md');
+  check('a ./ link is from the note folder', resolveLinkPath('./b.md', NOTE), 'proj/deep/b.md');
+  check('a ../ climbs out of the note folder', resolveLinkPath('../c.md', NOTE), 'proj/c.md');
+  check('two ../ climb twice', resolveLinkPath('../../d.md', NOTE), 'd.md');
+  check('climbing above the root stops there', resolveLinkPath('../../../e.md', NOTE), 'e.md');
+  check('a bare name is the note folder too', resolveLinkPath('b.md', NOTE), 'proj/deep/b.md');
+  check('a bare relative path as well', resolveLinkPath('sub/e.md', NOTE), 'proj/deep/sub/e.md');
+  check('an http link has no path', resolveLinkPath('https://example.com/a.md', NOTE), null);
+  check('nor does mailto', resolveLinkPath('mailto:a@b.c', NOTE), null);
+  check('nor a protocol-relative one', resolveLinkPath('//cdn.example.com/a.md', NOTE), null);
+  check('notes: is the store shortcut, not a path', resolveLinkPath('notes:abc123', NOTE), null);
+  check('an anchor alone is not a path', resolveLinkPath('#section', NOTE), null);
+  check('an empty href has no path', resolveLinkPath('   ', NOTE), null);
+  check('a fragment is not part of the file', resolveLinkPath('./b.md#part', NOTE), 'proj/deep/b.md');
+  check('a query is not either', resolveLinkPath('./b.md?v=2', NOTE), 'proj/deep/b.md');
+  check(
+    'an encoded Chinese name is decoded once',
+    resolveLinkPath('./%E9%A3%8E%E6%99%AF.md', NOTE),
+    'proj/deep/风景.md',
+  );
+  check('an encoded space survives too', resolveLinkPath('./my%20photo.png', NOTE), 'proj/deep/my photo.png');
+  check('a percent that is not an escape is kept', resolveLinkPath('./a%ZZb.md', NOTE), 'proj/deep/a%ZZb.md');
+  check('doubled separators fold away', resolveLinkPath('/a//b///c.md', NOTE), 'a/b/c.md');
+  check('backslashes are separators', resolveLinkPath('.\\b.md', NOTE), 'proj/deep/b.md');
+  check('a note at the root reads from the root', resolveLinkPath('b.md', '/note.md'), 'b.md');
+  check('and cannot climb above it', resolveLinkPath('../b.md', '/note.md'), 'b.md');
+  check('with no note open everything is from the root', resolveLinkPath('./b.md', null), 'b.md');
+
+  // What stays in the app. A link to a site must keep opening in a tab, even
+  // when it is written without a scheme.
+  check('./ stays in the app', isInAppLink('./a.md'), true);
+  check('../ too', isInAppLink('../a.md'), true);
+  check('a rooted path too', isInAppLink('/a.md'), true);
+  check('a bare name too', isInAppLink('readme'), true);
+  check('a relative path too', isInAppLink('sub/doc'), true);
+  check('a bare .md too', isInAppLink('a.md'), true);
+  check('a picture beside the note too', isInAppLink('photo.png'), true);
+  check('https is the web', isInAppLink('https://example.com/a.md'), false);
+  check('so is mailto', isInAppLink('mailto:a@b.c'), false);
+  check('so is a protocol-relative address', isInAppLink('//cdn.example.com/a.md'), false);
+  check('a bare domain is the web', isInAppLink('example.com'), false);
+  check('and so is a bare domain with a path', isInAppLink('example.com/x'), false);
+  check('an in-page anchor is not a note', isInAppLink('#section'), false);
+  check('notes: is the store shortcut', isInAppLink('notes:abc'), true);
+
+  // Which entry a resolved path names.
+  const tree = [
+    summaryNote('n-a', '同目录 A', 'proj/deep'),
+    summaryNote('n-e', '子目录 E', 'proj/deep/sub'),
+    summaryNote('n-root-a', '根目录 A', ''),
+    summaryNote('n-case', 'Case', 'proj/deep'),
+    { ...summaryNote('f-photo', 'photo.png', 'proj/deep'), kind: 'image' as const, path: '/proj/deep/photo.png' },
+  ].map((entry) => {
+    if (entry.id === 'n-a') return { ...entry, path: '/proj/deep/a.md' };
+    if (entry.id === 'n-e') return { ...entry, path: '/proj/deep/sub/e.md' };
+    if (entry.id === 'n-root-a') return { ...entry, path: '/a.md' };
+    if (entry.id === 'n-case') return { ...entry, path: '/proj/deep/Case.md' };
+    return entry;
+  });
+  check('an exact path finds its note', findLinkTarget('proj/deep/a.md', tree)?.id, 'n-a');
+  check('a path with no extension finds the .md', findLinkTarget('proj/deep/a', tree)?.id, 'n-a');
+  check('case does not hide a file', findLinkTarget('PROJ/DEEP/CASE.MD', tree)?.id, 'n-case');
+  check('a picture is an entry too', findLinkTarget('proj/deep/photo.png', tree)?.id, 'f-photo');
+  check('a path that names nothing finds nothing', findLinkTarget('proj/deep/nope.md', tree), null);
+  check('and a folder is not an entry', findLinkTarget('proj/deep', tree), null);
+
+  // Where the caret is in a markdown link destination.
+  check('a half-written link is a destination', linkTargetAt('[a](pro', 7), { from: 4, to: 7, typed: 'pro' });
+  check('a half-written picture is one too', linkTargetAt('![x](./', 7), { from: 5, to: 7, typed: './' });
+  check('a closed link is not', linkTargetAt('[a](./b.md) ', 12), null);
+  check('ordinary prose is not', linkTargetAt('plain text', 10), null);
+  check('a fenced code block is not', linkTargetAt('\u0060\u0060\u0060\n[a](./x\n\u0060\u0060\u0060', 10), null);
+  check('inline code is not', linkTargetAt('\u0060[a](./x\u0060', 8), null);
+  check('a link broken over two lines is not', linkTargetAt('[a](\n./x', 8), null);
+  check('the caret before the link is not', linkTargetAt('x [a](pro)', 2), null);
+
+  // The list that may be offered for what has been typed so far.
+  const notes = [
+    { ...summaryNote('c-a', '同目录 A', 'proj/deep'), path: '/proj/deep/a.md' },
+    { ...summaryNote('c-b', '同类 B', 'proj/deep'), path: '/proj/deep/b.md' },
+    { ...summaryNote('c-e', '子目录 E', 'proj/deep/sub'), path: '/proj/deep/sub/e.md' },
+    { ...summaryNote('c-sibling', '兄弟', 'proj'), path: '/proj/root-sibling.md' },
+    { ...summaryNote('c-root', '根', ''), path: '/root.md' },
+    { ...summaryNote('c-cn', '中文', 'proj/deep'), path: '/proj/deep/中文 文件.md' },
+    { ...summaryNote('c-photo', 'photo.png', 'proj/deep'), kind: 'image' as const, path: '/proj/deep/photo.png' },
+  ];
+  const folders = [
+    { path: 'proj/deep/sub', name: 'sub', count: 1, depth: 2 },
+    { path: 'proj/deep/empty', name: 'empty', count: 0, depth: 2 },
+    { path: 'proj/other', name: 'other', count: 2, depth: 1 },
+    { path: 'proj', name: 'proj', count: 1, depth: 1 },
+  ];
+  const suggest = (typed: string, notePath: string | null = NOTE, limit?: number) =>
+    suggestLinkCandidates({ typed, notePath, notes, folders, limit });
+
+  check(
+    'an empty field lists the note folder, folders first',
+    suggest('').map((candidate) => candidate.label),
+    ['empty/', 'sub/', '中文 文件.md', 'a.md', 'b.md', 'photo.png'],
+  );
+  check('a bare insert keeps the bare style', suggest('')[2].insert, '中文%20文件.md');
+  check('./ keeps its ./ style', suggest('./').map((candidate) => candidate.insert).slice(0, 2), ['./empty/', './sub/']);
+  check(
+    'a rooted list comes from the root and keeps the slash',
+    [suggest('/').map((candidate) => candidate.label), suggest('/').map((candidate) => candidate.insert)],
+    [['proj/', 'root.md'], ['/proj/', '/root.md']],
+  );
+  check(
+    '../ climbs one level and keeps the climb',
+    [suggest('../').map((candidate) => candidate.label), suggest('../').map((candidate) => candidate.insert)],
+    [['other/', 'root-sibling.md'], ['../other/', '../root-sibling.md']],
+  );
+  check('a typed folder lists what is inside it', suggest('sub/').map((candidate) => candidate.insert), ['sub/e.md']);
+  check('prefix matching ignores case', suggest('SU').map((candidate) => candidate.label), ['sub/']);
+  check('a path prefix finds a file', suggest('sub/e').map((candidate) => candidate.insert), ['sub/e.md']);
+  check('external addresses are not completed', suggest('https://example.com/x'), []);
+  check('and neither is a bare domain', suggest('example.com/x'), []);
+  check('nothing is offered for a folder that is not there', suggest('nope/'), []);
+  check('never more rows than the limit', suggest('', NOTE, 2).map((candidate) => candidate.label), ['empty/', 'sub/']);
+  check(
+    'a folder row says how much is in it',
+    [suggest('')[0].detail, suggest('')[1].detail],
+    ['空文件夹', '1 篇笔记'],
+  );
+
+  // ------------------------------------------------------------------ editor
+  // The completion extension itself, in a real CodeEditor. jsdom cannot type
+  // into a contenteditable reliably, so the popup is opened with CodeMirror's
+  // own startCompletion() command - the same path the typing keymap takes.
+  const { CodeEditor } = await import('./src/components/CodeEditor');
+  const { startCompletion } = await import('@codemirror/autocomplete');
+  const hold = appStore.getState();
+  appStore.setState({ notes, folders } as never);
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(
+      React.createElement(CodeEditor, {
+        value: '',
+        onChange: () => undefined,
+        dark: true,
+        notePath: NOTE,
+      }),
+    );
+  });
+  await flush();
+  const view = EditorView.findFromDOM(host.querySelector('.cm-editor') as HTMLElement);
+  check('the editor is mounted', Boolean(view), true);
+  const tooltip = () => document.querySelector('.cm-tooltip-autocomplete');
+  const place = (text: string, cursor: number) => {
+    if (!view) return;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text }, selection: { anchor: cursor } });
+  };
+  /**
+   * Opens the popup the way CodeMirror itself does.
+   *
+   * startCompletion() is the command the typing keymap runs; it deliberately
+   * waits a moment (activateOnTypingDelay) before starting its sources, so this
+   * waits past that debounce instead of asserting straight away.
+   */
+  const openCompletion = async () => {
+    if (view) startCompletion(view);
+    await settled(140);
+    await flush();
+  };
+  try {
+    place('[a](./', 6);
+    await openCompletion();
+    check('a link destination opens the completion popup', Boolean(tooltip()), true);
+    const options = Array.from(document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel')).map((node) =>
+      (node.textContent ?? '').trim(),
+    );
+    check(
+      'offering the note folder files and folders',
+      ['sub/', 'a.md', 'photo.png'].every((label) => options.includes(label)),
+      true,
+    );
+    // Accepting a candidate replaces the typed prefix, and only that: the path
+    // goes in, the closing paren stays the writer's job.
+    const item = Array.from(document.querySelectorAll<HTMLElement>('.cm-tooltip-autocomplete li')).find((row) =>
+      (row.textContent ?? '').includes('a.md'),
+    );
+    await act(async () => {
+      item?.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    check('picking a candidate inserts its path', view?.state.doc.toString(), '[a](./a.md');
+    check('and places the caret at the end', view?.state.selection.main.head, view?.state.doc.length);
+    check('without adding the closing paren', view?.state.doc.toString().endsWith(')'), false);
+
+    // Ordinary prose is not a destination: nothing is offered.
+    place('plain text', 5);
+    await openCompletion();
+    check('ordinary prose offers no paths', Boolean(tooltip()), false);
+  } finally {
+    await act(async () => {
+      root.unmount();
+    });
+    host.remove();
+    appStore.setState(hold);
+  }
+}
+
 /* --- deep links under /manager -------------------------------------------- */
 console.log('\ndeep links (jsdom)');
 {
@@ -4774,14 +5081,26 @@ console.log('\nfolder prompts (jsdom)');
       );
     });
     await flush();
-    const html = host.innerHTML;
-    // The suggestion list is a portal on the page, not part of the dialog's DOM.
-    const popover = document.querySelector('[data-testid="folder-suggestions"]')?.textContent ?? '';
-    await act(async () => {
-      r.unmount();
-    });
-    host.remove();
-    return { html, popover };
+    return {
+      html: host.innerHTML,
+      // The suggestion list is a portal on the page, not part of the dialog's DOM.
+      popover: () => document.querySelector('[data-testid="folder-suggestions"]')?.textContent ?? '',
+      /** Opens the list the way a user does: a press on the folder field. */
+      async pressFolder() {
+        await act(async () => {
+          document
+            .querySelector<HTMLInputElement>('[data-testid="dialog-folder-input"]')
+            ?.dispatchEvent(new w.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+        });
+        await flush();
+      },
+      async unmount() {
+        await act(async () => {
+          r.unmount();
+        });
+        host.remove();
+      },
+    };
   };
 
   // Creating used to invent a name and make the folder in one go, which left a
@@ -4790,16 +5109,19 @@ console.log('\nfolder prompts (jsdom)');
   check('making a folder asks for its name', rootPrompt.html.includes('新建文件夹'), true);
   check('and says where it will go', rootPrompt.html.includes('在根目录下'), true);
   check('with the name in a field', rootPrompt.html.includes('<input'), true);
+  await rootPrompt.unmount();
 
   const nested = await renderPrompt({ kind: 'newFolder', parent: 'proj', value: '新文件夹' });
   check('a nested one names its parent', nested.html.includes('在 proj 下'), true);
+  await nested.unmount();
 
   const move = await renderPrompt({ kind: 'moveNote', id: 'a', value: 'proj' });
-  check(
-    'moving picks from the folders',
-    move.html.includes('移动笔记') && move.popover.includes('proj/deep'),
-    true,
-  );
+  check('moving asks where to', move.html.includes('移动笔记'), true);
+  // A prefilled destination does not open the list; a press does.
+  check('without offering the list by itself', move.popover(), '');
+  await move.pressFolder();
+  check('and a press offers the folders', move.popover().includes('proj/deep'), true);
+  await move.unmount();
 }
 
 /* --- the running version is visible in the page ---------------------------- */

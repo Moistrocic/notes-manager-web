@@ -5,6 +5,7 @@ import { Marked } from 'marked';
 import type { RendererExtension, TokenizerExtension, Tokens } from 'marked';
 
 import { fileUrl } from './api';
+import { isInAppLink } from './link-paths';
 
 /**
  * How a formula is typeset.
@@ -324,15 +325,16 @@ export function decorateMarkdown(root: HTMLElement): void {
 }
 
 /**
- * True for links that point at another note rather than at the web.
- * Covers `notes:<id>`, relative markdown paths and bare `*.md` targets.
+ * True for links that point into the notes tree rather than at the web.
+ *
+ * The rules live in link-paths.ts (`isInAppLink`) so the renderer and the
+ * click handler cannot disagree about which links stay in the app: paths that
+ * start with `/`, `./` or `../`, anything ending in .md/.markdown, and a
+ * bare relative name all stay in; a URL with a scheme - and a bare domain like
+ * `example.com/x`, which is a link to a site however it is written - does not.
  */
 export function isInternalLink(href: string): boolean {
-  if (!href || href.startsWith('#') || href.startsWith('//')) return false;
-  if (href.startsWith('notes:')) return true;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false; // http(s), mailto, ...
-  const clean = href.split('#')[0]?.split('?')[0] ?? '';
-  return /\.(md|markdown)$/i.test(clean) || clean.startsWith('./') || clean.startsWith('../') || !clean.includes('/');
+  return isInAppLink(href);
 }
 
 /** Plain text preview used for cards and the command palette. */

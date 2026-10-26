@@ -1,6 +1,7 @@
 import { useStore } from 'zustand';
 import { createStore } from 'zustand/vanilla';
-import { api, backgroundFileUrl, noteDownloadUrl } from '../lib/api';
+import { api, backgroundFileUrl, fileUrl, noteDownloadUrl } from '../lib/api';
+import { findLinkTarget, resolveLinkPath } from '../lib/link-paths';
 import { stripMarkdown } from '../lib/markdown';
 import { inManager, pushLocation, readLocation, replaceLocation } from '../lib/url';
 import { applyFonts } from '../lib/fonts';
@@ -892,35 +893,75 @@ export const appStore = createStore<AppState>((set, get) => ({
 
   openInternalLink: async (href) => {
     const state = get();
-    const raw = href.startsWith('notes:') ? href.slice('notes:'.length) : href;
-    let target = raw;
+    const raw = (href ?? '').trim();
+    if (!raw) return;
+    // The fragment is the target note's business, the path is the file's.
+    const fragmentIndex = raw.indexOf('#');
+    const fragment = fragmentIndex >= 0 ? raw.slice(fragmentIndex + 1) : '';
+    let anchor = fragment;
     try {
-      target = decodeURIComponent(raw);
+      anchor = decodeURIComponent(fragment);
     } catch {
-      /* keep the raw value */
+      /* keep it as written */
     }
-    target = target.split('#')[0]?.split('?')[0] ?? target;
-    target = target.replace(/^\.\//, '').replace(/^\//, '');
 
-    const notes = state.notes;
-    const byId = notes.find((n) => n.id === target);
-    const byPath = notes.find((n) => {
-      const p = n.path.replace(/^\//, '').replace(/^\.[/\\]?/, '');
-      return p === target || p.toLowerCase() === target.toLowerCase();
-    });
-    const byName = notes.find((n) => n.path.split('/').pop()?.toLowerCase() === target.toLowerCase());
-    const byTitle = notes.find((n) => n.title.toLowerCase() === target.replace(/\.(md|markdown)$/i, '').toLowerCase());
+    /** Opens an entry the link resolved to: a note here, a file in a tab. */
+    const openTarget = async (target: NoteSummary) => {
+      if (target.kind !== 'note') {
+        // A picture or other attachment is not editable text: open it through
+        // the same storage door the preview uses, in its own tab.
+        try {
+          window.open(fileUrl(target.path), '_blank', 'noopener,noreferrer');
+        } catch {
+          /* a blocked pop-up leaves the bytes at the URL; nothing else to do */
+        }
+        return;
+      }
+      await get().selectNote(target.id, anchor ? { anchor } : undefined);
+    };
 
-    const found = byId ?? byPath ?? byName ?? byTitle;
-    if (!found) {
+    // notes:<id> is the shorthand written before paths were resolved; keep it.
+    if (raw.startsWith('notes:')) {
+      const id = (raw.slice('notes:'.length).split('#')[0] ?? '').split('?')[0] ?? '';
+      const target = state.notes.find((entry) => entry.id === id);
+      if (!target) {
+        state.pushToast({
+          title: '找不到链接指向的笔记',
+          message: `${raw} —— 这条链接按 id 记录，可能已经删掉`,
+          tone: 'error',
+        });
+        return;
+      }
+      await openTarget(target);
+      return;
+    }
+
+    // Paths are read the way the writer meant them: / from the notes root,
+    // ./ ../ and a bare name from the note's own folder. There is no fallback
+    // search of the whole tree any more - that is what made relative links
+    // open the wrong note when two folders held the same file name.
+    const resolved = resolveLinkPath(raw, state.activeNote?.path ?? null);
+    if (resolved === null) {
       state.pushToast({
-        title: '找不到链接指向的笔记',
-        message: `${href} —— 该笔记可能还没同步到当前目录`,
+        title: '链接不支持在应用内打开',
+        message: `${raw} —— 外部链接请直接在浏览器里访问`,
         tone: 'error',
       });
       return;
     }
-    await get().selectNote(found.id);
+    const target = findLinkTarget(resolved, state.notes);
+    if (!target) {
+      const folder = state.folders.find((entry) => entry.path === resolved);
+      state.pushToast({
+        title: '找不到链接指向的笔记',
+        message: folder
+          ? `${raw} → ${resolved}/ —— 这是一个文件夹，链接需要指向文件`
+          : `${raw} → ${resolved || '/'}（该路径不在笔记树里，可能已被移动或删除）`,
+        tone: 'error',
+      });
+      return;
+    }
+    await openTarget(target);
   },
 
   closeNote: () => {

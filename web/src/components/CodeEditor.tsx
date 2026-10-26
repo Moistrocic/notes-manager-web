@@ -1,4 +1,10 @@
 import {
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from '@codemirror/autocomplete';
+import {
   defaultKeymap,
   history,
   historyKeymap,
@@ -33,6 +39,12 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { CODE_FONT_SIZE, codeTagStyles } from '../lib/code-theme';
+import {
+  linkTargetAt,
+  suggestLinkCandidates,
+  type LinkCompletionContext,
+} from '../lib/link-completions';
+import { useAppStore } from '../store/useAppStore';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from './ContextMenu';
 
 /**
@@ -252,6 +264,8 @@ function editorMenuItems(api: EditorApi, readOnly: boolean): ContextMenuItem[] {
 
 interface CodeEditorProps {
   value: string;
+  /** The storage path of the open note, for resolving link paths. */
+  notePath?: string;
   onChange: (value: string) => void;
   onSave?: () => void;
   /**
@@ -266,7 +280,37 @@ interface CodeEditorProps {
   readOnly?: boolean;
 }
 
-export function CodeEditor({ value, onChange, onSave, onBlur, dark, placeholderText, apiRef, readOnly }: CodeEditorProps) {
+/**
+ * Completion for the path inside `[text](…)` and `![alt](…)`.
+ *
+ * The tree is read through a ref at the moment the popup is asked for rather
+ * than captured when the editor is built: the extension list is created once,
+ * and a note created or moved afterwards must still be offered.
+ */
+function linkCompletionSource(context: { current: LinkCompletionContext }) {
+  return (completion: CompletionContext): CompletionResult | null => {
+    const target = linkTargetAt(completion.state.doc.toString(), completion.pos);
+    if (!target) return null;
+    const options: Completion[] = suggestLinkCandidates({
+      typed: target.typed,
+      notePath: context.current.notePath,
+      notes: context.current.notes,
+      folders: context.current.folders,
+    }).map((candidate) => ({
+      label: candidate.label,
+      detail: candidate.detail,
+      type: candidate.kind === 'folder' ? 'folder' : candidate.kind === 'note' ? 'text' : 'file',
+      apply: candidate.insert,
+    }));
+    if (options.length === 0) return null;
+    // The list is already filtered against what was typed - which can include
+    // a folder path the label alone does not - so CodeMirror must not filter
+    // it a second time against the label.
+    return { from: target.from, options, filter: false };
+  };
+}
+
+export function CodeEditor({ value, notePath, onChange, onSave, onBlur, dark, placeholderText, apiRef, readOnly }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
@@ -286,6 +330,14 @@ export function CodeEditor({ value, onChange, onSave, onBlur, dark, placeholderT
   // it builds a command for is a command on this view.
   const { menu, openMenu, closeMenu } = useContextMenu();
 
+  // What link completion may offer. The editor is built once, so the source
+  // cannot close over these values; it reads this ref when the popup is asked
+  // for, which is also why notes arriving later need no rebuild.
+  const notes = useAppStore((s) => s.notes);
+  const folders = useAppStore((s) => s.folders);
+  const completionContext = useRef<LinkCompletionContext>({ notePath: notePath ?? '', notes, folders });
+  completionContext.current = { notePath: notePath ?? '', notes, folders };
+
   useEffect(() => {
     if (!hostRef.current) return undefined;
 
@@ -298,6 +350,13 @@ export function CodeEditor({ value, onChange, onSave, onBlur, dark, placeholderT
         history(),
         drawSelection(),
         EditorView.lineWrapping,
+        // Link paths complete while typing inside [text](…) / ![alt](…); the
+        // popup only appears when the caret is actually in a destination.
+        autocompletion({
+          override: [linkCompletionSource(completionContext)],
+          activateOnTyping: true,
+          closeOnBlur: true,
+        }),
         // `codeLanguages` gives fenced blocks the grammar of their language, so
         // ```ts``` is highlighted like TypeScript instead of plain text. The
         // grammars are imported lazily, so only the ones in use are loaded.

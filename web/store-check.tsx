@@ -48,6 +48,8 @@ let brokenList: null | 'empty_object' | 'nulls' | 'broken_entries' | 'empty_body
 /* window stub, so the deep link code has somewhere to read the address from   */
 /* -------------------------------------------------------------------------- */
 const historyLog: string[] = [];
+/** Tabs the store asked the browser to open (a file link opens one). */
+const openedWindows: string[] = [];
 const fakeLocation = { pathname: '/', hash: '' };
 function applyUrl(url: string) {
   const [pathname, hash = ''] = url.split('#');
@@ -65,6 +67,10 @@ function applyUrl(url: string) {
       historyLog.push(`replace ${url}`);
       applyUrl(url);
     },
+  },
+  open: (url: string, target: string) => {
+    openedWindows.push(`${url}|${target}`);
+    return null;
   },
   addEventListener: () => undefined,
   removeEventListener: () => undefined,
@@ -543,6 +549,100 @@ console.log('deep links');
   await store.getState().refreshNotes({ silent: true });
   await store.getState().selectNote('e6');
   check('the path a note is opened by carries the panel prefix', fakeLocation.pathname.startsWith('/manager/'), true);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Links inside a note                                                        */
+/* -------------------------------------------------------------------------- */
+console.log('');
+console.log('links inside a note');
+
+// 26. A link is read the way it was written: / is the notes root, ./ ../ and a
+// bare name are the note's own folder. The tree holds a second a.md at the root
+// on purpose - the old lookup searched the whole tree by file name and could
+// open that one instead of the sibling next to the note, which is the bug this
+// replaced.
+{
+  const LINK_NOTE = '/proj/deep/note.md';
+
+  /** Seeds the tree, opens note.md and follows one href, recording the outcome. */
+  const follow = async (href: string) => {
+    notes.clear();
+    const main = { ...makeNote('main', 'links\n'), folder: 'proj/deep', path: LINK_NOTE };
+    const sibling = { ...makeNote('sibling', 'sibling\n'), folder: 'proj/deep', path: '/proj/deep/a.md' };
+    const below = { ...makeNote('below', 'below\n'), folder: 'proj/deep/sub', path: '/proj/deep/sub/a.md' };
+    const rootTwin = { ...makeNote('root-twin', 'root twin\n'), folder: '', path: '/a.md' };
+    const rootNote = { ...makeNote('root', 'root\n'), folder: '', path: '/root.md' };
+    const picture = {
+      ...makeNote('photo', ''),
+      kind: 'image' as const,
+      title: 'photo.png',
+      folder: 'proj/deep',
+      path: '/proj/deep/photo.png',
+    };
+    for (const entry of [main, sibling, below, rootTwin, rootNote, picture]) notes.set(entry.id, entry);
+    store.setState({
+      user: { sid: 's', id: 'u', username: 'u', displayName: 'u', role: 'admin', provider: 'local', createdAt: 0, expiresAt: 0 },
+      capabilities: { driver: 'openlist', root: '/public/Notes', writable: true, permissions: null },
+      notes: [sibling, below, rootTwin, rootNote, picture],
+      folders: [
+        { path: 'proj', name: 'proj', count: 1, depth: 0 },
+        { path: 'proj/deep', name: 'deep', count: 1, depth: 1 },
+        { path: 'proj/deep/sub', name: 'sub', count: 0, depth: 2 },
+      ],
+      activeId: main.id,
+      activeNote: main,
+      pendingAnchor: null,
+      toasts: [],
+    } as never);
+    historyLog.length = 0;
+    openedWindows.length = 0;
+    await store.getState().openInternalLink(href);
+    return {
+      activeId: store.getState().activeId,
+      anchor: store.getState().pendingAnchor,
+      toast: store.getState().toasts[0],
+      url: historyLog[historyLog.length - 1] ?? null,
+    };
+  };
+
+  const nested = await follow('./sub/a.md');
+  check('a relative link opens the note under the folder it names', nested.activeId, 'below');
+  check('the address follows it', nested.url, 'push /manager/public/Notes/proj/deep/sub/a.md');
+
+  const bare = await follow('a.md');
+  check('a bare name is read from the note folder', bare.activeId, 'sibling');
+  check('not from a same-named note at the root', bare.activeId === 'root-twin', false);
+
+  const rooted = await follow('/root.md');
+  check('a rooted link opens the note at the root', rooted.activeId, 'root');
+
+  const guessed = await follow('./a');
+  check('a path without its extension still finds the .md', guessed.activeId, 'sibling');
+
+  const anchored = await follow('/root.md#根笔记');
+  check('a fragment does not stop the link', anchored.activeId, 'root');
+  check('and is handed to the opened note', anchored.anchor, '根笔记');
+
+  const byId = await follow('notes:below');
+  check('notes:<id> still opens by id', byId.activeId, 'below');
+
+  const missing = await follow('./nope.md');
+  check('a link that resolves nowhere stays where it is', missing.activeId, 'main');
+  check('and its toast names the path it resolved to', (missing.toast?.message ?? '').includes('proj/deep/nope.md'), true);
+
+  const unknownId = await follow('notes:never');
+  check('an unknown id is reported too', unknownId.toast?.title, '找不到链接指向的笔记');
+
+  const external = await follow('https://example.com/a.md');
+  check('an external link is not opened in the panel', external.activeId, 'main');
+  check('and says why', external.toast?.title, '链接不支持在应用内打开');
+
+  const file = await follow('./photo.png');
+  check('a link to a file opens the file in a tab', openedWindows, [
+    '/api/notes/file?path=' + encodeURIComponent('/proj/deep/photo.png') + '|_blank',
+  ]);
+  check('and not as text in the editor', file.activeId, 'main');
 }
 
 /* -------------------------------------------------------------------------- */
