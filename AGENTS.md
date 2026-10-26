@@ -38,6 +38,8 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
 | 前端全局状态（只有一个 store） | `web/src/store/useAppStore.ts` |
 | 目录树 / 左侧面板 | `web/src/components/NoteTree.tsx` / `NoteList.tsx` |
 | 编辑器与预览 | `web/src/components/{Editor,CodeEditor,Preview}.tsx` + `web/src/lib/markdown.ts` |
+| 笔记里的链接路径（`/`、`./`、`../`、裸名）与「是不是应用内链接」 | `web/src/lib/link-paths.ts`（`resolveLinkPath` / `isInAppLink` / `findLinkTarget`）；渲染入口是 `markdown.ts` 的 `decorateMarkdown`，点击入口是 store 的 `openInternalLink`；图片路径仍走 `markdown.ts` 的 `resolveImagePath` |
+| 编辑器里的链接路径补全 | `web/src/lib/link-completions.ts`（`linkTargetAt` / `suggestLinkCandidates`）+ `CodeEditor.tsx` 的 `@codemirror/autocomplete`；候选的 `insert` 保持用户写法 |
 | 公式（KaTeX）与 markdown 渲染规则 | `web/src/lib/markdown.ts`：五条 tokenizer/renderer 扩展（`$$…$$` 块级与单行、`$…$`、`\[…\]`、`\(…\)`）、`PURIFY_CONFIG`（html + mathMl + svg profile）、只放行 `.katex` 里 `style` 的 hook |
 | 排序优先级（四个键的先后） | store 的 `sortKeys` / `normaliseSortKeys` / `setSortKeys` / `moveSortKey` + `NoteTree.tsx` 的 `compareNotes`（树与列表共用）；localStorage `notes-manager-sort-keys`，旧键 `notes-manager-sort` 同步写 |
 | 大纲折叠 | `web/src/lib/outline.ts` 的 `buildOutlineTree` / `collapsibleHeadingIndexes` / `visibleOutlineRows` + `OutlinePanel.tsx`（默认收起、全部展开/收起；导航仍用扁平 index） |
@@ -174,11 +176,32 @@ HTTP 端到端是 [scripts/test-server.mjs](scripts/test-server.mjs)。
   （`setSortKeys`）——拖动结束后浏览器补发的那次 click 必须被吞掉（`swallowClick`），否则拖完就
   顺手置顶了。jsdom 里测拖动要自己派发 pointerdown、真实等 320ms、再 pointermove/pointerup；
   没有布局时行高按 `SORT_ROW_HEIGHT=28` 折算。
-- **目录建议是 portal 到 body 的浮层，不是对话框里的绝对定位**：Modal 的内容区是
-  `overflow-y-auto`，字段内的 absolute 浮层会在滚动边缘被裁掉；浮层挂在 body 上还带来一个好处——
-  它不参与对话框布局，出现/消失**不会改变对话框高度**（hint 那行因此常驻 `min-h-4` 占位）。
-  断言要用 `document` 查（不在对话框子树里找），并注意 field 的 onMouseDown preventDefault
-  （键盘留在输入框）、focusout 后延迟 ~150ms 才收起、Esc 先关列表再关对话框。
+- **目录建议只按「点击输入框」打开，且位置每帧重测**：`PromptDialog` 里唯一的开关是输入框上的
+  `onPointerDown/onMouseDown/onClick`（幂等 arm）；对话框打开、目标目录预填、仅聚焦、Tab 进入、
+  仅打字都**不显示**（用户报的就是「一打开就弹、还错位」）。显示后是一个 rAF 循环每帧按
+  `getBoundingClientRect` 重测（对话框入场动画、对话框内滚动、窗口缩放都靠它），
+  `data-folder-placement="top|bottom"` 记翻上/翻下：下方放不下（max-h 240 + 4px gap）才翻到上方，
+  左右 clamp 在视口内 8px。它仍是 portal 到 body 的浮层（Modal 内容区 `overflow-y-auto` 会裁切
+  绝对定位的子元素，且浮层不能改变对话框高度——hint 行常驻 `min-h-4`）。断言要用 `document` 查，
+  并注意：建议行的 onMouseDown preventDefault（键盘留在输入框）、focusout 后 ~150ms 才收起、
+  Esc 先关列表再关对话框且之后打字不会复活列表、点在浮层与输入框以外的地方（document 捕获
+  pointerdown）立即关闭。
+- **笔记里的链接路径只有一套规则**：`link-paths.ts` 的 `resolveLinkPath` 决定 `[]()` 指向哪：
+  `/` 是笔记根，`./`、`../` 与裸名（`b.md`、`sub/e.md`）都相对**当前笔记所在目录**，
+  `..` 越过根就停住；先去掉 `#fragment`/`?query`，百分号解码一次（中文/空格名）。
+  `isInAppLink` 决定渲染时留不留在应用内（`notes:`、`.md`/`.markdown` 结尾、`/ ./ ../` 与
+  相对路径为 true；带 scheme、`//`、以及看起来像域名的裸链接 `example.com/x` 为 false；
+  `.md` 结尾优先于域名形态）。store 的 `openInternalLink` 只做解析后的精确匹配
+  （`findLinkTarget`：精确 → 大小写不敏感 → 补 `.md`），**不要再加回全树 byName/byTitle 兜底**——
+  那正是相对链接打开错误文件的根因；找不到时 toast 必须带解析后的路径。命中 `kind!=note` 的文件
+  用 `fileUrl(path)` 新标签打开；fragment 作为 `anchor` 传给 `selectNote`；`notes:<id>` 保留。
+- **补全的 `insert` 必须保持用户写法**：`link-completions.ts` 的 `suggestLinkCandidates` 用
+  「用户已输入的前缀 + 候选名」拼 `insert`（`/`、`./`、`../`、裸名原样），否则选择后写进去的
+  路径会和点击时的解析规则对不上；空格等会截断 markdown 目标的字符编码为 `%20` 等。
+  `CodeEditor` 的 completion source 通过 ref 读 store 的 notes/folders（编辑器只建一次，
+  别把树闭包进 extension）。`@codemirror/autocomplete` 是 **web 的 direct dependency**
+  （`^6.20.3`，lock 里原本就有这个传递依赖）：删掉 `web/package.json` 里那条会让 `npm ci`
+  少装它，补全直接失效。
 - **自定义壁纸有 9 个控件（6 滑块 + 2 开关 + 1 取色）**：`resolveCustomEffect()`（web）与
   `mergeSettings`（server）是唯一补默认/夹范围的地方；开关是 `customSway` / `customShowParticles`，
   数字是 `customSwayAmplitude`（0–8% 短边）/ `customSwayFrequency`（0.02–0.5 Hz）/
